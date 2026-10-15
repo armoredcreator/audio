@@ -5,6 +5,8 @@ import logging
 import os
 import shutil
 import subprocess
+import uuid
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -113,13 +115,14 @@ class UnifiedStudio:
         shutil.copy2(source, output)
 
     def process(self, item):
-        original = Path(item.original_path)
+        original = Path(item.original_path).resolve()
         if not original.is_file():
             raise FileNotFoundError(original)
+        original_hash = hashlib.sha256(original.read_bytes()).hexdigest()
 
-        output = self.storage.result(item.content_id, item.affiliate_url, item.affiliate_name, source_id=item.source_id)
-        if output.exists():
-            output.unlink()
+        destination = Path(self.storage.result(item.content_id, item.affiliate_url, item.affiliate_name, source_id=item.source_id)).resolve()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        output = destination.with_name(f".{destination.stem}.tmp-{uuid.uuid4().hex}{destination.suffix or '.mp4'}")
 
         # The immutable ORIGINAL is the canonical Studio input. Do not create
         # a byte-identical WORKING copy merely to satisfy the old contract.
@@ -133,7 +136,13 @@ class UnifiedStudio:
         # pretending that arbitrary bytes are a real video.
         if os.getenv("ARMORED_STUDIO_FORCE_COPY") == "1":
             self._test_copy(source, output)
-            return output, {"mode": "test-copy", "plan": None}
+            if not output.is_file() or output.stat().st_size <= 0:
+                raise RuntimeError("Studio produziu uma saída de teste inválida")
+            if hashlib.sha256(original.read_bytes()).hexdigest() != original_hash:
+                output.unlink(missing_ok=True)
+                raise RuntimeError("O original foi alterado durante o processamento")
+            output.replace(destination)
+            return destination, {"mode": "test-copy", "plan": None}
 
         if os.getenv("ARMORED_CONSOLE_VERBOSE", "0") == "1":
             analysis = self.analysis.analyze(source)
@@ -163,8 +172,10 @@ class UnifiedStudio:
         audio_info = analysis.audio
         audio_mode = str(audio_info.get("mode") or AudioMode.MUSIC_ONLY)
         duration = max(0.1, float(analysis.video.get("duracao") or audio_info.get("duration_seconds") or 0.1))
-        audio_original = source.with_name(f"{item.telegram_message_id}_audio_original.wav")
-        audio_rvc = source.with_name(f"{item.telegram_message_id}_audio_rvc.wav")
+        work_dir = self.root / "storage" / "studio_work" / str(item.source_id) / str(item.content_id)
+        work_dir.mkdir(parents=True, exist_ok=True)
+        audio_original = work_dir / "audio_original.wav"
+        audio_rvc = work_dir / "audio_rvc.wav"
 
         try:
             language = str(audio_info.get("language") or "unknown").lower()
@@ -275,5 +286,7 @@ class UnifiedStudio:
 
         if not output.is_file() or output.stat().st_size <= 0:
             raise RuntimeError("Studio produziu uma saída inválida")
-
-        return output, analysis
+        if hashlib.sha256(original.read_bytes()).hexdigest() != original_hash:
+            raise RuntimeError("O original foi alterado durante o processamento")
+        output.replace(destination)
+        return destination, analysis
