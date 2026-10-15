@@ -1,0 +1,24 @@
+[
+  {
+    "source_id": "1",
+    "item_id": "291",
+    "video_path": "C:/ArmoredAudioLab/samples/Videos GRUPO_FONTE_1/291/291_finallinkoriginal.mp4",
+    "audio_class": "MUSIC_ONLY",
+    "language": null,
+    "speech_detected": false,
+    "music_detected": true,
+    "confidence": 0.98,
+    "rationale": "Example only: replace with a reviewed local label."
+  },
+  {
+    "source_id": "2",
+    "item_id": "1046",
+    "video_path": "C:/ArmoredAudioLab/samples/Videos GRUPO_FONTE_2/1046/1046_finallinkoriginal.mp4",
+    "audio_class": "PT_BR_NARRATION_WITH_MUSIC",
+    "language": "pt-br",
+    "speech_detected": true,
+    "music_detected": true,
+    "confidence": 0.95,
+    "rationale": "Example only: replace with a reviewed local label."
+  }
+]
