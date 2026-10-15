@@ -27,6 +27,7 @@ O caminho é sempre registrado no SQLite junto de `source_id` e `item_id`. Não 
 | `PT_BR_NARRATION` | Sim | WAV extraído | RVC na narração PT-BR |
 | `PT_BR_NARRATION_WITH_MUSIC` | Sim | separar e manter o stem vocal no WAV | RVC somente na voz separada |
 | `MUSIC_ONLY` | Não | WAV de referência | silenciar áudio original e aplicar o efeito sonoro existente |
+| `NOISE` | Não | WAV de referência | silenciar áudio original e aplicar o efeito sonoro existente |
 | `NO_AUDIO` | Não | WAV silencioso determinístico | aplicar efeito sonoro sem RVC |
 | `NO_USABLE_NARRATION` | Não | WAV de referência, se houver | silenciar áudio original e aplicar efeito sonoro |
 | `FOREIGN_SPEECH` | Não | WAV de referência | não enviar para RVC PT-BR; silenciar e aplicar efeito conforme regra do projeto |
