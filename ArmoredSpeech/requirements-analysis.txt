@@ -1,5 +1,5 @@
-# Optional classifier dependencies; install only inside the ArmoredAudioLab venv.
-# First model use downloads checkpoints into the configured local cache.
+# Optional classifier dependencies; install only inside ArmoredSpeech/runtime/venv.
+# First model use may download checkpoints into local model/cache directories.
 numpy>=1.26,<3
 torch>=2.2,<3
 transformers>=4.40,<5
