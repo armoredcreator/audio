@@ -53,9 +53,11 @@ Validar no laboratório o contrato entre o resultado de áudio do ArmoredSpeech 
 ### D. Critério para teste de vídeo real
 Não executar ainda. Só liberar após: imports/dependências auditados, suíte automatizada verde, workspace isolado comprovado, integridade do original verificada e autorização explícita do usuário. Nenhuma publicação real faz parte desta validação.
 
-## Bloqueios atuais
+## Resultado da auditoria da base oficial
 
-A leitura remota confirmou o adaptador `ArmoredStudio/service.py`, mas ainda não foi obtido um inventário completo dos arquivos da pasta Studio e de suas dependências nesta sessão. Portanto não declarar que Studio foi migrado ou que Speech → Studio já está conectado. O próximo passo seguro é importar o diretório completo da revisão escolhida, então revisar cada dependência e criar o adaptador/testes contra os tipos reais — sem improvisar um contrato incompatível.
+O inventário completo da pasta oficial foi obtido e os bloqueios foram registrados em [`ARMOREDSTUDIO_BASE_AUDIT.md`](./ARMOREDSTUDIO_BASE_AUDIT.md). Os principais impedimentos confirmados são: Speech não é consumido pelo Studio (o Studio reclassifica o áudio), o resultado existente é apagado antes da nova renderização, os WAVs temporários são criados ao lado do vídeo de entrada e a integridade do original não é recalculada antes/depois. A ponte Speech atual também não valida suficientemente o artefato WAV.
+
+A base foi auditada estaticamente; nenhum teste foi executado e nenhum vídeo foi processado nesta auditoria. Portanto, o Studio ainda não foi migrado nem a integração foi certificada. A implementação deve corrigir esses bloqueios na branch de laboratório e só então executar a suíte automatizada.
 
 ## Critério de conclusão
 
