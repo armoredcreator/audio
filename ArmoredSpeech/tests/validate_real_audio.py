@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from ArmoredSpeech.audio_intelligence import AudioIntelligence, AudioMode
+
 CASES = [
     ("291_6VKD4FrQVJ.mp4", AudioMode.NOISE),
     ("1046_20uhmSz3VE.mp4", AudioMode.SPEECH),
@@ -25,6 +26,30 @@ EXPECTED_SHA256 = {
 }
 
 
+def resolve_video(filename: str) -> Path:
+    """Find a corpus video at project root or under storage without guessing duplicates."""
+    explicit_root = os.getenv("ARMORED_AUDIO_VALIDATION_VIDEO_ROOT")
+    roots = [Path(explicit_root)] if explicit_root else [ROOT, ROOT / "storage"]
+    matches: list[Path] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        candidate = root / filename
+        if candidate.is_file():
+            matches.append(candidate.resolve())
+        elif root == ROOT / "storage":
+            matches.extend(path.resolve() for path in root.rglob(filename) if path.is_file())
+    unique = list(dict.fromkeys(matches))
+    if len(unique) != 1:
+        found = ", ".join(str(path) for path in unique) or "nenhum arquivo"
+        raise FileNotFoundError(
+            f"Esperado exatamente um {filename}; encontrados {len(unique)}: {found}. "
+            "Coloque o corpus na raiz/storage ou defina "
+            "ARMORED_AUDIO_VALIDATION_VIDEO_ROOT."
+        )
+    return unique[0]
+
+
 def digest(path: Path) -> str:
     hasher = hashlib.sha256()
     with path.open("rb") as stream:
@@ -37,12 +62,12 @@ def main() -> None:
     os.environ.setdefault("ARMORED_AUDIO_CONTENT_NOISE_THRESHOLD", "0.05")
     analyzer = AudioIntelligence()
     failures: list[str] = []
-    initial_hashes: dict[str, str] = {}
+    initial_hashes: dict[Path, str] = {}
 
     for filename, expected_mode in CASES:
-        path = ROOT / filename
+        path = resolve_video(filename)
         actual_hash = digest(path)
-        initial_hashes[filename] = actual_hash
+        initial_hashes[path] = actual_hash
         if actual_hash != EXPECTED_SHA256[filename]:
             failures.append(f"{filename}: uploaded SHA-256 does not match original")
             print(f"FAIL {filename}: hash mismatch {actual_hash}", flush=True)
@@ -66,8 +91,8 @@ def main() -> None:
                 failures.append(f"{filename}: non-narration media classified as speech")
 
     changed = [
-        filename for filename, before in initial_hashes.items()
-        if digest(ROOT / filename) != before
+        str(path) for path, before in initial_hashes.items()
+        if not path.is_file() or digest(path) != before
     ]
     if changed:
         failures.append("original files changed: " + ", ".join(changed))
