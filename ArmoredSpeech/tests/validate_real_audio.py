@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
 from pathlib import Path
 
-from ArmoredSpeech.audio_intelligence import AudioIntelligence, AudioMode
-
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from ArmoredSpeech.audio_intelligence import AudioIntelligence, AudioMode
 CASES = [
     ("291_6VKD4FrQVJ.mp4", AudioMode.NOISE),
     ("1046_20uhmSz3VE.mp4", AudioMode.SPEECH),
