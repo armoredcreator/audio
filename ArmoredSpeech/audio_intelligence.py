@@ -13,6 +13,7 @@ import numpy as np
 class AudioMode:
     NO_AUDIO = "NO_AUDIO"
     MUSIC_ONLY = "MUSIC_ONLY"
+    NOISE = "NOISE"
     SPEECH = "SPEECH"
     SPEECH_PLUS_MUSIC = "SPEECH_PLUS_MUSIC"
     FOREIGN_SPEECH = "FOREIGN_SPEECH"
@@ -32,6 +33,7 @@ class AudioIntelligenceResult:
     speech_probability: float | None = None
     music_probability: float | None = None
     speech_activity_ratio: float | None = None
+    noise_probability: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -54,6 +56,10 @@ class AudioIntelligenceResult:
             "speech_activity_ratio": (
                 round(float(self.speech_activity_ratio), 3)
                 if self.speech_activity_ratio is not None else None
+            ),
+            "noise_probability": (
+                round(float(self.noise_probability), 3)
+                if self.noise_probability is not None else None
             ),
         }
 
@@ -221,12 +227,26 @@ class AudioIntelligence:
             )
             return None
 
-    def _detect_music_probability(self, samples: np.ndarray) -> float | None:
-        """Return an independent AudioSet probability for music/instruments."""
+    @staticmethod
+    def _multilabel_probabilities(logits: np.ndarray) -> np.ndarray:
+        """Convert independent multi-label logits to scores with sigmoid."""
+        values = np.asarray(logits, dtype=np.float32)
+        return 1.0 / (1.0 + np.exp(-np.clip(values, -60.0, 60.0)))
+
+    def _detect_audio_content_probabilities(
+        self, samples: np.ndarray
+    ) -> tuple[float | None, float | None, float | None]:
+        """Return independent AudioSet speech, music, and noise scores.
+
+        AST/AudioSet is a multi-label classifier. Its labels are not mutually
+        exclusive, so softmax is incorrect here: it forces all classes to
+        compete and can hide music or speech when both are present. Sigmoid
+        scores each label independently.
+        """
         import logging
 
         if samples.size < self.SAMPLE_RATE:
-            return None
+            return None, None, None
         try:
             import torch
 
@@ -239,11 +259,13 @@ class AudioIntelligence:
             )
             with torch.inference_mode():
                 output = self._content_model(**inputs)
-                probabilities = torch.softmax(output.logits[0], dim=-1).detach().cpu().numpy()
+                logits = output.logits[0].detach().cpu().numpy()
+                probabilities = self._multilabel_probabilities(logits)
 
             id_to_label = getattr(self._content_model.config, "id2label", {}) or {}
             labels = [
-                str(id_to_label.get(index, id_to_label.get(str(index), ""))).strip().lower()
+                str(id_to_label.get(index, id_to_label.get(str(index), "")))
+                .strip().lower()
                 for index in range(len(probabilities))
             ]
             music_terms = (
@@ -253,21 +275,53 @@ class AudioIntelligence:
                 "harmonica", "accordion", "harp", "banjo", "mandolin",
                 "sitar", "ukulele", "xylophone", "marimba", "organ",
                 "percussion", "bassoon", "oboe", "clarinet", "trombone",
-                "bagpipes", "didgeridoo", "cymbal",
+                "bagpipes", "didgeridoo", "cymbal", "jingle", "tinkle",
+            )
+            speech_terms = (
+                "speech", "conversation", "narration", "monologue",
+                "speaking", "talking", "whisper", "shout", "yell",
+                "screaming", "babbling",
+            )
+            noise_terms = (
+                "white noise", "pink noise", "brown noise", "background noise",
+                "environmental noise", "microphone noise", "wind noise",
+                "static", "rustle", "rustling leaves",
             )
             music_indices = [
                 i for i, label in enumerate(labels)
                 if any(term in label for term in music_terms)
             ]
+            speech_indices = [
+                i for i, label in enumerate(labels)
+                if any(term in label for term in speech_terms)
+            ]
+            noise_indices = [
+                i for i, label in enumerate(labels)
+                if any(term in label for term in noise_terms)
+            ]
             if not music_indices:
                 raise RuntimeError("modelo de áudio não expõe classes de música")
-            return min(1.0, max(0.0, float(np.sum(probabilities[music_indices]))))
+            if not speech_indices:
+                raise RuntimeError("modelo de áudio não expõe classes de fala")
+
+            # Max preserves the strongest relevant label without pretending
+            # that correlated AudioSet labels are independent probabilities.
+            music_probability = float(np.max(probabilities[music_indices]))
+            speech_probability = float(np.max(probabilities[speech_indices]))
+            noise_probability = (
+                float(np.max(probabilities[noise_indices])) if noise_indices else 0.0
+            )
+            return (
+                min(1.0, max(0.0, speech_probability)),
+                min(1.0, max(0.0, music_probability)),
+                min(1.0, max(0.0, noise_probability)),
+            )
         except Exception as exc:
             logging.getLogger(__name__).warning(
-                "[AUDIO INTELLIGENCE] classificador independente de música indisponível; "
-                "áudio ficará bloqueado para RVC: %s", exc,
+                "[AUDIO INTELLIGENCE] classificador independente de fala/música "
+                "indisponível; áudio ficará bloqueado para RVC: %s", exc,
             )
-            return None
+            return None, None, None
 
     def _decode(self, source: Path) -> tuple[np.ndarray, float]:
         command = [
@@ -546,9 +600,16 @@ class AudioIntelligence:
             return spectral
 
         speech_activity_ratio = self._detect_speech_activity(samples)
-        music_probability = self._detect_music_probability(samples)
-        method = "silero-vad+audioset-music+whisper-language-v1"
-        if speech_activity_ratio is None or music_probability is None:
+        speech_probability, music_probability, noise_probability = (
+            self._detect_audio_content_probabilities(samples)
+        )
+        method = "silero-vad+audioset-multilabel+whisper-language-v2"
+        if (
+            speech_activity_ratio is None
+            or speech_probability is None
+            or music_probability is None
+            or noise_probability is None
+        ):
             return AudioIntelligenceResult(
                 mode=AudioMode.SPEECH_UNVERIFIED,
                 confidence=0.0,
@@ -558,37 +619,53 @@ class AudioIntelligence:
                 method="audio-content-unavailable",
                 language="unknown",
                 language_confidence=0.0,
-                speech_probability=None,
+                speech_probability=speech_probability,
                 music_probability=music_probability,
                 speech_activity_ratio=speech_activity_ratio,
+                noise_probability=noise_probability,
             )
 
         speech_threshold = float(
             os.getenv("ARMORED_AUDIO_VAD_MIN_ACTIVITY_RATIO", "0.08")
         )
+        speech_model_threshold = float(
+            os.getenv("ARMORED_AUDIO_CONTENT_SPEECH_THRESHOLD", "0.35")
+        )
         music_threshold = float(
             os.getenv("ARMORED_AUDIO_CONTENT_MUSIC_THRESHOLD", "0.25")
         )
-        speech_present = speech_activity_ratio >= speech_threshold
+        noise_threshold = float(
+            os.getenv("ARMORED_AUDIO_CONTENT_NOISE_THRESHOLD", "0.05")
+        )
+        # VAD can miss short or music-masked foreign speech. The independent
+        # AudioSet speech label can also establish speech presence; language ID
+        # must then verify PT-BR vs foreign speech before any RVC decision.
+        speech_present = (
+            speech_activity_ratio >= speech_threshold
+            or speech_probability >= speech_model_threshold
+        )
         music_present = music_probability >= music_threshold
 
-        # Do not ask Whisper to infer a language for audio independently
-        # classified as music or as inconclusive: language-ID models can
-        # hallucinate languages on instrumental tracks.
         if not speech_present:
-            mode = AudioMode.MUSIC_ONLY if music_present else AudioMode.SPEECH_UNVERIFIED
+            if music_present:
+                mode = AudioMode.MUSIC_ONLY
+            elif noise_probability >= noise_threshold:
+                mode = AudioMode.NOISE
+            else:
+                mode = AudioMode.SPEECH_UNVERIFIED
             return AudioIntelligenceResult(
                 mode=mode,
-                confidence=max(speech_activity_ratio, music_probability),
+                confidence=max(speech_activity_ratio, speech_probability, music_probability),
                 duration_seconds=duration,
                 speech_ratio=spectral.speech_ratio,
                 music_ratio=spectral.music_ratio,
                 method=method,
                 language="unknown",
                 language_confidence=0.0,
-                speech_probability=None,
+                speech_probability=speech_probability,
                 music_probability=music_probability,
                 speech_activity_ratio=speech_activity_ratio,
+                noise_probability=noise_probability,
             )
 
         language, language_confidence = self._detect_language(samples)
@@ -613,14 +690,15 @@ class AudioIntelligence:
 
         return AudioIntelligenceResult(
             mode=mode,
-            confidence=max(speech_activity_ratio, music_probability),
+            confidence=max(speech_activity_ratio, speech_probability, music_probability),
             duration_seconds=duration,
             speech_ratio=spectral.speech_ratio,
             music_ratio=spectral.music_ratio,
             method=method,
             language=language,
             language_confidence=language_confidence,
-            speech_probability=None,
+            speech_probability=speech_probability,
             music_probability=music_probability,
             speech_activity_ratio=speech_activity_ratio,
+            noise_probability=noise_probability,
         )

@@ -1,4 +1,4 @@
-from armoredspeech.contracts import AudioClass, SpeechDecision
+from ArmoredSpeech.contracts import AudioClass, SpeechDecision
 
 
 def decision(audio_class, language, speech, music=None):
@@ -13,6 +13,7 @@ def test_only_portuguese_narration_is_rvc_eligible():
 def test_music_silence_noise_and_foreign_speech_are_not_rvc_eligible():
     for audio_class, language, speech in [
         (AudioClass.MUSIC_ONLY, None, False),
+        (AudioClass.NOISE, None, False),
         (AudioClass.NO_AUDIO, None, False),
         (AudioClass.NO_USABLE_NARRATION, None, False),
         (AudioClass.FOREIGN_SPEECH, "en", True),

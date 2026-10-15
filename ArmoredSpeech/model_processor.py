@@ -32,6 +32,7 @@ class ModelProcessor:
         mode_map = {
             AudioMode.NO_AUDIO: AudioClass.NO_AUDIO,
             AudioMode.MUSIC_ONLY: AudioClass.MUSIC_ONLY,
+            AudioMode.NOISE: AudioClass.NOISE,
             AudioMode.SPEECH: AudioClass.PT_BR_NARRATION,
             AudioMode.SPEECH_PLUS_MUSIC: AudioClass.PT_BR_NARRATION_WITH_MUSIC,
             AudioMode.FOREIGN_SPEECH: AudioClass.FOREIGN_SPEECH,
@@ -40,14 +41,24 @@ class ModelProcessor:
         speech_activity = result.speech_activity_ratio
         min_activity = float(os.getenv("ARMORED_AUDIO_VAD_MIN_ACTIVITY_RATIO", "0.08"))
 
+        speech_model_threshold = float(
+            os.getenv("ARMORED_AUDIO_CONTENT_SPEECH_THRESHOLD", "0.35")
+        )
+        speech_evidence = (
+            speech_activity is not None and speech_activity >= min_activity
+        ) or (
+            result.speech_probability is not None
+            and result.speech_probability >= speech_model_threshold
+        )
+
         if audio_class is None:
-            # No voice activity plus no reliable music label is consistent with
-            # noise/non-usable audio. If voice activity exists but language/content
-            # evidence is inconclusive, keep UNKNOWN and block the item for review.
-            if speech_activity is not None and speech_activity < min_activity:
-                audio_class = AudioClass.NO_USABLE_NARRATION
-            else:
-                audio_class = AudioClass.UNKNOWN
+            # Only call the audio NO_USABLE_NARRATION when both VAD and the
+            # independent speech-content score indicate no usable speech.
+            # Speech evidence without a verified language stays UNKNOWN.
+            audio_class = (
+                AudioClass.UNKNOWN if speech_evidence
+                else AudioClass.NO_USABLE_NARRATION
+            )
 
         language = (result.language or "unknown").lower()
         if language == "pt":
@@ -65,7 +76,7 @@ class ModelProcessor:
             AudioClass.PT_BR_NARRATION,
             AudioClass.PT_BR_NARRATION_WITH_MUSIC,
             AudioClass.FOREIGN_SPEECH,
-        } or (speech_activity is not None and speech_activity >= min_activity)
+        } or speech_evidence
 
         decision = SpeechDecision(
             audio_class=audio_class,

@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "armoredspeech-lab"
+version = "0.1.0"
+description = "Isolated ArmoredSpeech audio processing prototype"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.setuptools]
+packages = ["ArmoredSpeech"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["ArmoredSpeech/tests"]

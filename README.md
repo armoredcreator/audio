@@ -1,52 +1,23 @@
 # ArmoredCreator Audio Lab
 
-Laboratório isolado para validar separação de áudio e desenvolver o contrato experimental do ArmoredSpeech.
+Laboratório isolado para validar separação de áudio e desenvolver o protótipo ArmoredSpeech.
 
-> Este repositório não integra nem altera o ArmoredCreator de produção. Os originais são somente leitura; nenhum vídeo de teste deve ser enviado ao Git.
+- Implementação e documentação específicas da ferramenta: [ArmoredSpeech/](ArmoredSpeech/README.md).
+- Esta branch de organização parte do experimento isolado; não integra nem altera o ArmoredCreator de produção.
+- Vídeos, ambientes virtuais, bancos de dados locais e resultados gerados não devem ser enviados ao Git.
 
-## Evidência do experimento local
+## Estado
 
-O usuário executou em `C:\Users\Administrador\Downloads\ArmoredAudioLab` o modelo `UVR-MDX-NET-Voc_FT.onnx` em CPU em cinco vídeos. O código de saída foi zero e os SHA-256 dos MP4s permaneceram iguais. Na avaliação auditiva relatada pelo usuário:
-- `1046`: narração preservada;
-- `12025_7ptrS9Gsg2`: música separada, narração restante;
-- `291`, `12008` e `178482`: resultado ouvido como mudo/correto para os casos de teste relatados.
+A separação UVR/MDX-Net foi testada pelo usuário em cinco exemplos locais. Isso não aprova o classificador automático nem a integração em produção.
 
-Isto é evidência de que o separador funcionou nesses exemplos específicos. **Não comprova ainda a classificação automática nem aprova integração em produção.**
+Antes de portar ArmoredSpeech para o repositório principal, ainda é necessário validar classificação automática, retomada após falhas, custo do lote, persistência no SQLite real e contrato com ArmoredStudio.
 
-## ArmoredSpeech — contrato e lote
+## Organização
 
-Fluxo histórico planejado:
+O código, scripts, dependências, exemplos, testes e documentação próprios da ferramenta ficam dentro de ArmoredSpeech/. A configuração do CI permanece em .github/workflows/, como convenção do GitHub.
 
-`ArmoredSync` completo → `ArmoredVision` completo → `ArmoredStock` completo → **ArmoredSpeech completo** → ArmoredIA → ArmoredStudio → ArmoredHub.
+Sequência histórica prevista:
 
-O protótipo:
-- mantém o WAV junto ao MP4, com o mesmo nome-base e extensão `.wav`;
-- mantém a identidade `source_id + item_id` no SQLite;
-- registra classe de áudio, idioma, elegibilidade para RVC, estado, hashes e erros;
-- processa por fonte/item em ordem estável;
-- nunca altera nem exclui o MP4 original;
-- deixa música/sem áudio/ruído/fala estrangeira inelegíveis para RVC PT-BR;
-- preserva o WAV até o Studio confirmar que terminou de utilizá-lo.
+ArmoredSync completo → ArmoredVision completo → ArmoredStock completo → ArmoredSpeech completo → ArmoredIA → ArmoredStudio → ArmoredHub.
 
-Veja [o contrato detalhado](docs/ARMORED_SPEECH_CONTRACT.md).
-
-### Limite importante desta versão
-
-O runner usa um manifesto JSON de decisões revisadas para testar o contrato e o fluxo de arquivos. Ele **não é ainda um classificador automático** de fala PT-BR, música, ruído e silêncio. Classificação automática e integração com o SQLite/schema de produção são etapas explícitas antes de portar o código.
-
-## Ambiente de teste
-
-- Windows e Python 3.11 em ambiente virtual dedicado.
-- CPU por padrão, sem depender de GPU.
-- Nunca executar RVC, renderização ou publicação durante o teste isolado.
-- Registrar tempo, uso aproximado de RAM, versão/modelo e avaliação auditiva.
-- Falhas ou classificação desconhecida não liberam áudio para RVC.
-
-## Arquivos principais
-
-- `armoredspeech/`: classificador CPU, contratos, runner por fonte, registro SQLite e providers.
-- `scripts/separate_one.py`: separação isolada de um clipe com hashes antes/depois.
-- `scripts/run_armoredspeech.py`: execução em lote; classificador automático por padrão ou `--decisions` para manifesto revisado.
-- `docs/ARMORED_SPEECH_CONTRACT.md`: contrato de handoff para o Studio.
-- `docs/TEST_PLAN.md`: plano de benchmark/escuta.
-- `docs/DECISION.md`: estado de aprovação.
+Nada nesta branch ativa processamento ou publicação em produção.

@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from armoredspeech.batch import SpeechItem, run_bulk
+from ArmoredSpeech.batch import SpeechItem, run_bulk
 
 
 def main() -> int:
@@ -36,18 +36,19 @@ def main() -> int:
     ]
 
     if args.decisions:
-        from armoredspeech.manifest_processor import ManifestProcessor
+        from ArmoredSpeech.manifest_processor import ManifestProcessor
         processor = ManifestProcessor(
             args.decisions, model=args.model, timeout_seconds=args.timeout
         )
         print("Modo: manifesto revisado (não é classificação automática)")
     else:
         try:
-            from armoredspeech.model_processor import ModelProcessor
+            from ArmoredSpeech.model_processor import ModelProcessor
         except ImportError as exc:
             parser.error(
-                "Dependências do classificador ausentes. Instale requirements-analysis.txt "
-                f"no venv do laboratório. Detalhe: {exc}"
+                "Dependências do classificador ausentes. Instale "
+                "ArmoredSpeech/requirements-analysis.txt no venv do laboratório. "
+                f"Detalhe: {exc}"
             )
         processor = ModelProcessor(
             separation_model=args.model, timeout_seconds=args.timeout
