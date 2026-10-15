@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 import os
 import shutil
 
 from armored_core.models import Item
-from armored_core.services import StudioResult
 from armored_core.storage import Storage
+
+
+@dataclass(frozen=True)
+class StudioResult:
+    working_path: Path | None
+    result_path: Path
 
 from .unified import UnifiedStudio
 
