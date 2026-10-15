@@ -23,6 +23,5 @@ jobs:
           python-version: "3.11"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e . pytest numpy opencv-python-headless
-      - run: python ArmoredStudio/assets/fetch_official_assets.py
       - run: python -m compileall -q ArmoredSpeech ArmoredStudio armored_core
       - run: python -m pytest -q
