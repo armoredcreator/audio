@@ -44,9 +44,9 @@ O runner usa um manifesto JSON de decisões revisadas para testar o contrato e o
 
 ## Arquivos principais
 
-- `armoredspeech/`: contratos, runner por fonte, registro SQLite e provider experimental.
+- `armoredspeech/`: classificador CPU, contratos, runner por fonte, registro SQLite e providers.
 - `scripts/separate_one.py`: separação isolada de um clipe com hashes antes/depois.
-- `scripts/run_armoredspeech.py`: execução em lote usando itens e decisões JSON.
+- `scripts/run_armoredspeech.py`: execução em lote; classificador automático por padrão ou `--decisions` para manifesto revisado.
 - `docs/ARMORED_SPEECH_CONTRACT.md`: contrato de handoff para o Studio.
 - `docs/TEST_PLAN.md`: plano de benchmark/escuta.
 - `docs/DECISION.md`: estado de aprovação.
