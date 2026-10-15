@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import hashlib
-import shutil
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, Sequence
 
 from .contracts import AudioClass, SpeechDecision, SpeechStatus
-from .registry import record_result
+from .registry import SCHEMA, record_result
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,7 +18,7 @@ class SpeechItem:
 
 
 class SpeechProcessor(Protocol):
-    """Provider seam for the real audio analyzer/separator implementation."""
+    """Provider seam for the audio analyzer/separator implementation."""
 
     def analyze(self, video_path: Path) -> SpeechDecision: ...
     def prepare_wav(self, video_path: Path, wav_path: Path, decision: SpeechDecision) -> None: ...
@@ -45,17 +44,16 @@ def run_bulk(
     database: Path,
     processor: SpeechProcessor,
 ) -> dict[str, int]:
-    """Process a complete source at a time, in stable source/item order.
+    """Process source-by-source, recording every item outcome in SQLite.
 
-    This function never edits, renames, moves, or deletes the original MP4.
-    An UNKNOWN/failed classification is blocked from RVC.
+    READY means prepared for Studio, not approved for RVC. RVC eligibility is
+    represented separately by the rvc_eligible column. Original MP4s are read-only.
     """
-    counts = {"ready": 0, "blocked": 0, "failed": 0}
+    counts = {"prepared": 0, "rvc_eligible": 0, "blocked": 0, "failed": 0}
     ordered = sorted(items, key=lambda item: (item.source_id, item.item_id))
-    with sqlite3.connect(database) as raw_connection:
-        connection = raw_connection
+    database.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(database) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
-        from .registry import SCHEMA
         connection.execute(SCHEMA)
         connection.commit()
         for item in ordered:
@@ -82,8 +80,8 @@ def run_bulk(
             try:
                 decision = processor.analyze(video)
                 decision.validate()
-                # If classification is unknown or inconsistent, do not create an
-                # artifact that downstream code could mistake for approved speech.
+                # Unknown labels cannot produce an artifact that downstream code
+                # might mistake for approved narration.
                 if decision.audio_class is AudioClass.UNKNOWN:
                     record_result(
                         connection, source_id=item.source_id, item_id=item.item_id,
@@ -100,15 +98,22 @@ def run_bulk(
                 after = sha256(video)
                 if before != after:
                     raise RuntimeError("ORIGINAL_HASH_CHANGED")
-                status = SpeechStatus.READY if decision.rvc_eligible else SpeechStatus.BLOCKED
+
+                # Music-only/no-audio/no-usable/foreign speech still need a
+                # persisted decision and prepared sidecar for Studio; they are
+                # READY for Studio but explicitly not eligible for RVC.
                 record_result(
                     connection, source_id=item.source_id, item_id=item.item_id,
-                    video_path=video, wav_path=wav, decision=decision, status=status,
-                    original_sha256_before=before, original_sha256_after=after,
-                    error=None if decision.rvc_eligible else "NOT_RVC_ELIGIBLE",
+                    video_path=video, wav_path=wav, decision=decision,
+                    status=SpeechStatus.READY, original_sha256_before=before,
+                    original_sha256_after=after,
                 )
-                counts["ready" if decision.rvc_eligible else "blocked"] += 1
-            except Exception as exc:  # record per-item failure and continue the bulk
+                counts["prepared"] += 1
+                if decision.rvc_eligible:
+                    counts["rvc_eligible"] += 1
+                else:
+                    counts["blocked"] += 1
+            except Exception as exc:
                 after = sha256(video) if video.exists() else None
                 failed = SpeechDecision(
                     audio_class=AudioClass.UNKNOWN,
