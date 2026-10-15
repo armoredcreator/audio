@@ -221,6 +221,12 @@ class AudioIntelligence:
             )
             return None
 
+    @staticmethod
+    def _multilabel_probabilities(logits: np.ndarray) -> np.ndarray:
+        """Convert independent multi-label logits to scores with sigmoid."""
+        values = np.asarray(logits, dtype=np.float32)
+        return 1.0 / (1.0 + np.exp(-np.clip(values, -60.0, 60.0)))
+
     def _detect_audio_content_probabilities(
         self, samples: np.ndarray
     ) -> tuple[float | None, float | None]:
@@ -247,9 +253,8 @@ class AudioIntelligence:
             )
             with torch.inference_mode():
                 output = self._content_model(**inputs)
-                probabilities = (
-                    torch.sigmoid(output.logits[0]).detach().cpu().numpy()
-                )
+                logits = output.logits[0].detach().cpu().numpy()
+                probabilities = self._multilabel_probabilities(logits)
 
             id_to_label = getattr(self._content_model.config, "id2label", {}) or {}
             labels = [
