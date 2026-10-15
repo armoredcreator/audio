@@ -37,8 +37,9 @@ def main() -> int:
                                   timeout_seconds=args.timeout)
     counts = run_bulk(items, database=args.database, processor=processor)
     print("ArmoredSpeech — resumo do lote")
-    print(f"Prontos para RVC: {counts['ready']}")
-    print(f"Bloqueados para RVC: {counts['blocked']}")
+    print(f"Áudios preparados para o Studio: {counts['prepared']}")
+    print(f"Elegíveis para RVC: {counts['rvc_eligible']}")
+    print(f"Preparados, mas bloqueados para RVC: {counts['blocked']}")
     print(f"Falhas: {counts['failed']}")
     return 0 if counts["failed"] == 0 else 1
 
