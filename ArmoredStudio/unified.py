@@ -163,7 +163,7 @@ class UnifiedStudio:
             return destination, {"mode": "test-copy", "plan": None}
 
         if os.getenv("ARMORED_CONSOLE_VERBOSE", "0") == "1":
-            analysis = self.analysis.analyze(source, audio_override=self._speech_audio_override(speech_payload) if speech_payload else None)
+            analysis = self.analysis.analyze(source, audio_override=self._speech_audio_override(speech_payload, rvc_eligible=speech_handoff.rvc_eligible) if speech_handoff is not None else None)
         else:
             with open(os.devnull, "w", encoding="utf-8") as quiet:
                 with contextlib.redirect_stdout(quiet), contextlib.redirect_stderr(quiet):
@@ -230,6 +230,7 @@ class UnifiedStudio:
                 and language == "pt"
                 and language_confidence >= language_minimum
                 and music_ratio < maximum_music_ratio
+                and (speech_handoff.rvc_eligible if speech_handoff is not None else True)
             )
 
             if not rvc_allowed:
@@ -311,8 +312,10 @@ class UnifiedStudio:
         return destination, analysis
 
     @staticmethod
-    def _speech_audio_override(payload: dict[str, Any]) -> dict[str, Any]:
-        """Map the neutral Speech class to Studio routing without reclassifying audio."""
+    def _speech_audio_override(
+        payload: dict[str, Any], *, rvc_eligible: bool
+    ) -> dict[str, Any]:
+        """Map the neutral Speech class without reclassification or weakening its RVC gate."""
         audio_class = payload.get("audio_class")
         language = str(payload.get("language") or "unknown").strip().lower()
         confidence = float(payload.get("confidence") or 0.0)
@@ -328,10 +331,15 @@ class UnifiedStudio:
         if audio_class not in mapping:
             raise RuntimeError("Classe Speech desconhecida; áudio bloqueado")
         mode, music_ratio = mapping[audio_class]
+        # Speech's generic classifier confidence is not a language-confidence
+        # score. Only its separately validated eligibility bit may open RVC.
+        if audio_class == "PT_BR_NARRATION":
+            music_ratio = 0.0 if rvc_eligible else 1.0
         return {
             "mode": mode,
             "language": language,
-            "language_confidence": confidence,
+            "language_confidence": 1.0 if rvc_eligible else 0.0,
+            "speech_rvc_eligible": bool(rvc_eligible),
             "music_ratio": music_ratio,
             "duration_seconds": 0.0,
             "speech_ratio": 1.0 if audio_class in {"PT_BR_NARRATION", "PT_BR_NARRATION_WITH_MUSIC", "FOREIGN_SPEECH"} else 0.0,
