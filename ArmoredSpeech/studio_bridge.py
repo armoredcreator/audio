@@ -133,7 +133,7 @@ def export_audio_directive(
 
     original_path = Path(row["video_path"])
     if not row["wav_path"]:
-        raise DecisionNotReady("Approved audio artifact path is missing")
+        raise DecisionNotReady("Approved WAV artifact path is missing")
     audio_artifact_path = Path(row["wav_path"])
     if require_files:
         if not original_path.is_file():
