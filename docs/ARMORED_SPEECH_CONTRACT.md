@@ -56,4 +56,4 @@ Studio deve consultar esse registro e consumir o WAV pelo caminho; não precisa 
 
 ## Estado real desta branch
 
-O runner, o registro SQLite e o contrato de dados são experimentais. O script atual usa um manifesto JSON com rótulos revisados para testar o fluxo; **isso não é classificador automático**. O separador UVR/MDX-Net foi validado auditivamente pelo usuário em cinco clipes, mas o classificador automático PT-BR/música/ruído ainda precisa de implementação e benchmark reproduzível antes de declarar o ArmoredSpeech completo ou portar o código para produção.
+O runner, o registro SQLite e o contrato de dados são experimentais. O classificador automático usa Whisper para idioma, Silero VAD para atividade de fala e AudioSet/AST para evidência de música; existe também um modo opcional de manifesto revisado. A classificação ainda precisa de benchmark e avaliação auditiva reproduzíveis em exemplos rotulados antes de declarar o ArmoredSpeech pronto ou portar o código para produção. A tabela SQLite desta branch é experimental e não é o schema real do ArmoredCreator.
