@@ -2,7 +2,7 @@
 
 ## Posição no fluxo histórico
 
-`ArmoredSync` completo → `ArmoredVision` completo → `ArmoredStock` completo → **ArmoredSpeech completo** → ArmoredIA → ArmoredStudio → ArmoredHub.
+`ArmoredSync` completo → `ArmoredVision` completo → `ArmoredStock` completo → `ArmoredIA` → **ArmoredSpeech completo** → ArmoredStudio → ArmoredHub.
 
 ArmoredSpeech é um lote histórico por fonte. Não faz processamento item a item intercalado com IA/Studio/Hub e não publica nada no Telegram. Esta branch é um protótipo isolado; ainda não integra o repositório de produção.
 
