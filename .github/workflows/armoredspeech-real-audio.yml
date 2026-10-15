@@ -1,0 +1,36 @@
+name: ArmoredSpeech real-audio diagnostics
+
+on:
+  push:
+    branches:
+      - refactor/ArmoredSpeech-directory-20261015
+    paths:
+      - "ArmoredSpeech/tests/diagnose_real_audio.py"
+      - ".github/workflows/armoredspeech-real-audio.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Install CPU analysis dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install transformers safetensors numpy
+      - name: Inspect original video hashes and AudioSet labels
+        env:
+          HF_HOME: ${{ runner.temp }}/hf-cache
+        run: python ArmoredSpeech/tests/diagnose_real_audio.py
