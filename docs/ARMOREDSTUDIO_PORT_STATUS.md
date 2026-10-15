@@ -1,25 +1,30 @@
 # ArmoredStudio lab port status
 
-Target: `test/armoredstudio-speech-integration-20261015`. Official source `armoredcreator/armoredcreator:main` remains read-only. No tests were run and no video was rendered.
+**Target branch:** `test/armoredstudio-speech-integration-20261015`  
+**Official source:** `armoredcreator/armoredcreator:main` (read-only).  
+**Execution policy:** no real video rendered; synthetic tests only.
 
 ## Completed in the lab
 - Static audit: [ARMOREDSTUDIO_BASE_AUDIT.md](./ARMOREDSTUDIO_BASE_AUDIT.md)
 - Integration plan: [ARMOREDSTUDIO_SPEECH_INTEGRATION.md](./ARMOREDSTUDIO_SPEECH_INTEGRATION.md)
-- Added `ArmoredSpeech/studio_adapter.py` with fail-closed validation for contract version, item identity, workspace containment, WAV readability, SHA-256 of the current original, and conservative RVC eligibility.
-- Added `ArmoredSpeech/tests/test_studio_adapter.py` using synthetic disposable files.
-- Ported to lab: `ArmoredStudio/service.py`, `unified.py`, `analysis/audio_intelligence.py`, `analysis/video.py`, `analysis/banner.py`, `analysis/veo_detector.py`, `analysis/gemini_detector.py`, `analysis/export_planner.py`, `analysis/export_plan_validator.py`, `analysis/logger.py`, `processing/finalizer.py`, `processing/tool_paths.py`, and `ArmoredStudio/__init__.py`.
+- Ported the official Studio Python modules, including the four modules that had previously been missing: `analysis/blackbar.py`, `analysis/banner_analyzer.py`, `analysis/export_executor.py`, and `processing/rvc.py`.
+- Ported canonical `armored_core/models.py` and `armored_core/storage.py` required for the actual `Item` contract and storage paths. Studio's service boundary returns its own small `StudioResult` value so it does not import the whole Coordinator service stack.
+- Added `ArmoredSpeech/studio_adapter.py`: validates contract version, `source_id + item_id`, workspace containment, readable WAV sidecar matching the original basename, current original SHA-256 versus Speech's before/after hashes, and conservative RVC eligibility.
+- Wired an optional `speech_payload` through `ArmoredStudio/service.py` into `UnifiedStudio.process`. When provided, the Studio validates it, maps Speech's class into Studio routing without rerunning audio classification, and uses the approved Speech WAV as RVC input only for the eligible narration route.
+- Added safer output behavior in `unified.py`: render to a unique temporary sibling, preserve the existing destination until validation, promote with `replace`, hash-check the original before/after, and place disposable WAV intermediates under `storage/studio_work/<source>/<item>` rather than beside the source.
+- Added synthetic adapter and Studio handoff tests. The GitHub Actions workflow now compiles all lab modules and runs the Python test suite when Studio code changes.
+- Added `ArmoredStudio/assets/fetch_official_assets.py`, which downloads assets by their official Git blob IDs and verifies exact Git blob SHA-1 before writing. It requires an explicit read-only `ARMORED_OFFICIAL_REPO_TOKEN`; it does not save the token.
 
-## Blockers — Studio must not be run yet
-1. Not ported: `ArmoredStudio/analysis/blackbar.py`, `analysis/banner_analyzer.py`, `analysis/export_executor.py`, `processing/rvc.py`. The GitHub write operation blocked attempts to port these files.
-2. Official assets not ported/verified: `ArmoredStudio/assets/banner.png` and `ArmoredStudio/assets/efeitosonoro.wav`.
-3. The new Speech handoff validator is not yet wired into Studio; the existing Studio still classifies audio independently. Integration is not complete.
-4. A code patch for atomic output promotion and per-item temporary WAV paths was blocked by the GitHub write operation. The known risks remain in the ported `unified.py`: it deletes a previous result early and writes temporary WAVs beside the source.
-5. Confirm the lab's required `armored_core` models/services and runtime dependencies before import/test.
-6. Tests have not been executed. File commits do not prove imports or tests pass.
+## Still blocked — do not render real media
+1. The official source repo is private. The CI runner for `armoredcreator/audio` cannot download the two binary assets anonymously. The asset downloader was adjusted to require an explicit read-only token, and its step was removed from CI. The exact assets are **not yet present** in the lab branch: `ArmoredStudio/assets/banner.png` and `ArmoredStudio/assets/efeitosonoro.wav`.
+2. The new handoff is an optional parameter to the Studio boundary; the existing Coordinator does not automatically supply a Speech payload. End-to-end orchestration from the real Speech registry to Studio remains to be wired and tested. Do not set `ARMORED_STUDIO_REQUIRE_SPEECH_HANDOFF=1` in any live environment until that caller exists.
+3. Runtime integration tests are synthetic and use the explicit copy-only test mode. They do not prove real FFmpeg, RVC model/index, visual detector accuracy, watermark removal, or final audio quality.
+4. The branch contains MP4 files in its root from earlier lab history; they were not opened or processed. Their origin and authorization are not established, so they remain unused.
+5. The most recent CI run after the latest workflow changes is pending/in progress at the time of this update; the previous green runs covered the adapter tests before the newest Studio integration tests were added. Do not call the latest test suite green until the final run reports success.
 
 ## Required next steps
-1. Copy the four missing Python files and exact two assets from official `main`; verify asset hashes.
-2. Wire the validated Speech handoff so Studio uses Speech's decision and WAV rather than reclassifying audio.
-3. Fix atomic result replacement, isolated per-item temporary/cache paths, and original SHA-256 checks.
-4. Run tests and report exact results.
-5. Only after the suite passes, request explicit approval for a synthetic render. No real video, Telegram, Shopee, Hub or publication in this phase.
+1. Wait for and inspect the latest CI result, fix any test failures, and record exact pass counts.
+2. Materialize the two exact official binary assets with the authorized read-only route and verify their Git blob IDs.
+3. Wire the actual Speech registry/Coordinator caller to pass the correct READY payload for each item, respecting the real source/item IDs and sidecar paths.
+4. Add a full adapter test around that caller; then validate FFmpeg/RVC dependencies in the lab.
+5. Only after all automated tests pass, request explicit approval for a controlled synthetic render. No real video, Telegram, Shopee, Hub or publication in this phase.
