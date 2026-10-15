@@ -15,6 +15,7 @@ class SpeechItem:
     source_id: str
     item_id: str
     video_path: Path
+    source_order: int = 0
 
 
 class SpeechProcessor(Protocol):
@@ -50,7 +51,7 @@ def run_bulk(
     represented separately by the rvc_eligible column. Original MP4s are read-only.
     """
     counts = {"prepared": 0, "rvc_eligible": 0, "blocked": 0, "failed": 0}
-    ordered = sorted(items, key=lambda item: (item.source_id, item.item_id))
+    ordered = sorted(items, key=lambda item: (item.source_order, item.source_id, item.item_id))
     database.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(database) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
