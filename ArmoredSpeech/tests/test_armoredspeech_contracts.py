@@ -1,4 +1,4 @@
-from armoredspeech.contracts import AudioClass, SpeechDecision
+from ArmoredSpeech.contracts import AudioClass, SpeechDecision
 
 
 def decision(audio_class, language, speech, music=None):

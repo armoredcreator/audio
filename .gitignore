@@ -1,0 +1,15 @@
+# Local Python environment and generated media/state; never commit them.
+.venv/
+videos/
+outputs/
+ArmoredSpeech/samples/*
+!ArmoredSpeech/samples/README.md
+*.sqlite
+*.sqlite3
+*.db
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+build/
+dist/

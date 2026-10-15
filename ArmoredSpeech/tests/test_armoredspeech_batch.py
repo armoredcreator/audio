@@ -2,8 +2,8 @@ import hashlib
 import sqlite3
 from pathlib import Path
 
-from armoredspeech.batch import SpeechItem, run_bulk, wav_path_for
-from armoredspeech.contracts import AudioClass, SpeechDecision
+from ArmoredSpeech.batch import SpeechItem, run_bulk, wav_path_for
+from ArmoredSpeech.contracts import AudioClass, SpeechDecision
 
 
 class FakeProcessor:

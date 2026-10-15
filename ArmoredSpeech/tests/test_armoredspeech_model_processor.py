@@ -1,9 +1,9 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from armoredspeech.audio_intelligence import AudioMode
-from armoredspeech.contracts import AudioClass
-from armoredspeech.model_processor import ModelProcessor
+from ArmoredSpeech.audio_intelligence import AudioMode
+from ArmoredSpeech.contracts import AudioClass
+from ArmoredSpeech.model_processor import ModelProcessor
 
 
 def fake_result(mode, *, language="unknown", speech_activity=0.0, music_probability=0.0):

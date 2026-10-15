@@ -6,42 +6,43 @@ O teste usa CPU por padrão e roda em um ambiente virtual próprio. Não usa o P
 
 No PowerShell:
 
-```powershell
+~~~powershell
 git clone https://github.com/armoredcreator/audio.git ArmoredAudioLab
 Set-Location .\ArmoredAudioLab
-git switch experiment/uvr5-mdxnet-isolated-20261015
+git fetch origin
+git switch refactor/ArmoredSpeech-directory-20261015
 py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements-separation.txt
-```
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe -m pip install pytest numpy
+~~~
 
-Se o comando de ativação for bloqueado pela política do PowerShell, não altere a política global do computador. Use o Python do ambiente diretamente, por exemplo `.\.venv\Scripts\python.exe`.
+Se o comando de ativação for bloqueado pela política do PowerShell, não altere a política global do computador. Use sempre o Python do ambiente diretamente, por exemplo .\.venv\Scripts\python.exe.
 
 A instalação e o primeiro download do modelo podem levar tempo e ocupar espaço. Não prossiga se o disco estiver quase cheio.
 
 ## 2. Verificar o CLI e os modelos disponíveis
 
-```powershell
+~~~powershell
 audio-separator --env_info
 audio-separator --list_models | Select-String -Pattern 'Voc_FT|MDX'
-```
+~~~
 
-Confirme que o modelo indicado existe na lista. Se o nome `UVR-MDX-NET-Voc_FT.onnx` não aparecer, escolha um nome exato mostrado pelo comando e passe-o com `--model`. Não faça um lote para descobrir o modelo.
+Confirme que o modelo indicado existe na lista. Se o nome UVR-MDX-NET-Voc_FT.onnx não aparecer, escolha um nome exato mostrado pelo comando e passe-o com --model. Não faça um lote para descobrir o modelo.
 
 ## 3. Separar um clipe curto
 
 Escolha uma cópia de teste ou um vídeo original como entrada, mas direcione os resultados para uma pasta totalmente separada. Exemplo (ajuste o caminho do vídeo):
 
-```powershell
-.\.venv\Scripts\python.exe .\scripts\separate_one.py "C:\CAMINHO\VIDEO_TESTE.mp4" --output-root "C:\ArmoredAudioLab-outputs"
-```
+~~~powershell
+.\.venv\Scripts\python.exe .\ArmoredSpeech\scripts\separate_one.py "C:\CAMINHO\VIDEO_TESTE.mp4" --output-root "C:\ArmoredAudioLab-outputs"
+~~~
 
 Para escolher um modelo explícito:
 
-```powershell
-.\.venv\Scripts\python.exe .\scripts\separate_one.py "C:\CAMINHO\VIDEO_TESTE.mp4" --output-root "C:\ArmoredAudioLab-outputs" --model "UVR-MDX-NET-Voc_FT.onnx"
-```
+~~~powershell
+.\.venv\Scripts\python.exe .\ArmoredSpeech\scripts\separate_one.py "C:\CAMINHO\VIDEO_TESTE.mp4" --output-root "C:\ArmoredAudioLab-outputs" --model "UVR-MDX-NET-Voc_FT.onnx"
+~~~
 
 O script calcula o SHA-256 da entrada antes e depois, cria uma pasta de execução exclusiva e lista as saídas. Ele não deve ser apontado para uma pasta de saída que contenha ou seja ancestral da entrada.
 
@@ -62,22 +63,21 @@ O modelo i3-2370M e os gráficos Intel HD 3000 não têm aceleração moderna pa
 
 ## 5. Executar o lote experimental ArmoredSpeech
 
-Instale também as dependências opcionais de classificação no mesmo venv isolado:
+Instale as dependências opcionais de classificação no mesmo venv isolado:
 
-```powershell
-python -m pip install -r requirements-analysis.txt
-```
+~~~powershell
+.\.venv\Scripts\python.exe -m pip install -r .\ArmoredSpeech\requirements-analysis.txt
+.\.venv\Scripts\python.exe -m pip install -r .\ArmoredSpeech\requirements-separation.txt
+~~~
 
-Use cópias de teste fora da pasta de produção e ajuste `examples/armoredspeech-items.example.json`. O `source_order` define a ordem histórica das fontes (1, 2, 3); `source_id` guarda a identidade da fonte; `item_id` guarda o ID do item.
+Use cópias de teste fora da pasta de produção e ajuste ArmoredSpeech/examples/armoredspeech-items.example.json. O source_order define a ordem histórica das fontes (1, 2, 3); source_id guarda a identidade da fonte; item_id guarda o ID do item.
 
-```powershell
-.\.venv\Scripts\python.exe .\scripts\run_armoredspeech.py `
-  --items .\examples\armoredspeech-items.example.json `
-  --database "C:\ArmoredAudioLab\state\armoredspeech.sqlite3"
-```
+~~~powershell
+.\.venv\Scripts\python.exe .\ArmoredSpeech\scripts\run_armoredspeech.py --items .\ArmoredSpeech\examples\armoredspeech-items.example.json --database "C:\ArmoredAudioLab\state\armoredspeech.sqlite3"
+~~~
 
-Sem `--decisions`, o runner usa o classificador CPU (Whisper + Silero VAD + AudioSet/AST). O primeiro uso pode baixar modelos e demorar. Se faltar evidência confiável, o item não é aprovado para RVC.
+Sem --decisions, o runner usa o classificador CPU (Whisper + Silero VAD + AudioSet/AST). O primeiro uso pode baixar modelos e demorar. Se faltar evidência confiável, o item não é aprovado para RVC.
 
-Para testar o fluxo com rótulos revisados, use `--decisions .\examples\armoredspeech-decisions.example.json`. Os rótulos do exemplo são ilustrativos e precisam ser conferidos.
+Para testar o fluxo com rótulos revisados, use --decisions .\ArmoredSpeech\examples\armoredspeech-decisions.example.json. Os rótulos do exemplo são ilustrativos e precisam ser conferidos.
 
 **Atenção:** o WAV é escrito ao lado do vídeo de entrada com o mesmo nome-base. Nunca aponte o lote para a pasta de produção nesta fase. Não executar RVC, renderização ou publicação. A integração com o schema SQLite real ainda não foi feita.
