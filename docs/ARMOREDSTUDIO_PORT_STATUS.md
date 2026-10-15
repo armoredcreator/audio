@@ -20,11 +20,10 @@
 2. The new handoff is an optional parameter to the Studio boundary; the existing Coordinator does not automatically supply a Speech payload. End-to-end orchestration from the real Speech registry to Studio remains to be wired and tested. Do not set `ARMORED_STUDIO_REQUIRE_SPEECH_HANDOFF=1` in any live environment until that caller exists.
 3. Runtime integration tests are synthetic and use the explicit copy-only test mode. They do not prove real FFmpeg, RVC model/index, visual detector accuracy, watermark removal, or final audio quality.
 4. The branch contains MP4 files in its root from earlier lab history; they were not opened or processed. Their origin and authorization are not established, so they remain unused.
-5. The most recent CI run after the latest workflow changes is pending/in progress at the time of this update; the previous green runs covered the adapter tests before the newest Studio integration tests were added. Do not call the latest test suite green until the final run reports success.
+5. GitHub Actions run `38815934451` completed successfully for commit `7e482a285bc346c4e85c26442642762f9efd18ab`: `compileall` passed and `pytest` reported **46 passed**. This is synthetic/unit coverage only; it is not evidence of a real FFmpeg/RVC render or full Coordinator-to-Speech orchestration.
 
 ## Required next steps
-1. Wait for and inspect the latest CI result, fix any test failures, and record exact pass counts.
-2. Materialize the two exact official binary assets with the authorized read-only route and verify their Git blob IDs.
-3. Wire the actual Speech registry/Coordinator caller to pass the correct READY payload for each item, respecting the real source/item IDs and sidecar paths.
-4. Add a full adapter test around that caller; then validate FFmpeg/RVC dependencies in the lab.
-5. Only after all automated tests pass, request explicit approval for a controlled synthetic render. No real video, Telegram, Shopee, Hub or publication in this phase.
+1. Materialize the two exact official binary assets with the authorized read-only route and verify their Git blob IDs.
+2. Wire the actual Speech registry/Coordinator caller to pass the correct READY payload for each item, respecting the real source/item IDs and sidecar paths.
+3. Add a full adapter test around that caller; then validate FFmpeg/RVC dependencies in the lab.
+4. Only after all automated tests pass, request explicit approval for a controlled synthetic render. No real video, Telegram, Shopee, Hub or publication in this phase.
