@@ -59,3 +59,25 @@ O script calcula o SHA-256 da entrada antes e depois, cria uma pasta de execuç�
 ## Nota sobre desempenho
 
 O modelo i3-2370M e os gráficos Intel HD 3000 não têm aceleração moderna para estes modelos. O teste pode funcionar em CPU, mas ser lento. Comece com um clipe de poucos segundos e pare se houver pressão excessiva de RAM, travamento ou falta de espaço. Não processar a coleção inteira até conhecer o custo real.
+
+## 5. Executar o lote experimental ArmoredSpeech
+
+Instale também as dependências opcionais de classificação no mesmo venv isolado:
+
+```powershell
+python -m pip install -r requirements-analysis.txt
+```
+
+Use cópias de teste fora da pasta de produção e ajuste `examples/armoredspeech-items.example.json`. O `source_order` define a ordem histórica das fontes (1, 2, 3); `source_id` guarda a identidade da fonte; `item_id` guarda o ID do item.
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_armoredspeech.py `
+  --items .\examples\armoredspeech-items.example.json `
+  --database "C:\ArmoredAudioLab\state\armoredspeech.sqlite3"
+```
+
+Sem `--decisions`, o runner usa o classificador CPU (Whisper + Silero VAD + AudioSet/AST). O primeiro uso pode baixar modelos e demorar. Se faltar evidência confiável, o item não é aprovado para RVC.
+
+Para testar o fluxo com rótulos revisados, use `--decisions .\examples\armoredspeech-decisions.example.json`. Os rótulos do exemplo são ilustrativos e precisam ser conferidos.
+
+**Atenção:** o WAV é escrito ao lado do vídeo de entrada com o mesmo nome-base. Nunca aponte o lote para a pasta de produção nesta fase. Não executar RVC, renderização ou publicação. A integração com o schema SQLite real ainda não foi feita.
