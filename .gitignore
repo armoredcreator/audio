@@ -1,7 +1,12 @@
-# Local Python environment and generated media/state; never commit them.
+# Local Python environments and generated media/state; never commit them.
 .venv/
 videos/
 outputs/
+ArmoredSpeech/runtime/venv/
+ArmoredSpeech/runtime/cache/
+ArmoredSpeech/runtime/models/
+ArmoredSpeech/runtime/tmp/
+ArmoredSpeech/runtime/logs/
 ArmoredSpeech/samples/*
 !ArmoredSpeech/samples/README.md
 *.sqlite
