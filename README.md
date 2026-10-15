@@ -37,7 +37,13 @@ Avaliar se UVR5/MDX-Net consegue produzir uma faixa de narração em português 
 
 Só depois de resultados repetíveis e aprovação explícita o código poderá ser portado para o ArmoredCreator.
 
-## Estrutura planejada
+## Primeiro teste no Windows (CPU)
+
+Consulte [`docs/SETUP_WINDOWS.md`](docs/SETUP_WINDOWS.md) para criar um ambiente virtual isolado e executar um único clipe. Não instale a dependência no Python global nem no ambiente RVC.
+
+O pacote `audio-separator` oferece execução CPU, mas separação não é leve em tempo de processamento: a documentação informa que o custo depende do modelo e do tamanho do áudio; algumas configurações usam vários GB de RAM. Por isso, começamos com um clipe curto e medimos antes de qualquer lote. [Documentação oficial](https://github.com/nomadkaraoke/python-audio-separator)
+
+## Estrutura
 
 - `samples/README.md`: como preparar amostras locais sem commitar vídeos.
 - `experiments/`: relatórios de testes, sem mídia original.
