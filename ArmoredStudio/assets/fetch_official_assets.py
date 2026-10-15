@@ -6,7 +6,9 @@ No credentials are used. Downloads are accepted only when their Git blob SHA-1
 matches the immutable blob IDs from armoredcreator/armoredcreator:main.
 """
 
+import base64
 import hashlib
+import json
 import os
 import tempfile
 import urllib.request
@@ -16,7 +18,7 @@ ASSETS = {
     "banner.png": "a85ca5d090f1a074a22ef272f8ee7d5f683fbee2",
     "efeitosonoro.wav": "ca5f879c6631845e80108195af33c172858d31d2",
 }
-RAW_BASE = "https://raw.githubusercontent.com/armoredcreator/armoredcreator/main/ArmoredStudio/assets"
+BLOB_API = "https://api.github.com/repos/armoredcreator/armoredcreator/git/blobs"
 
 
 def git_blob_sha1(data: bytes) -> str:
@@ -35,11 +37,17 @@ def materialize_assets(destination: Path | None = None) -> list[Path]:
             continue
 
         request = urllib.request.Request(
-            f"{RAW_BASE}/{name}",
-            headers={"User-Agent": "ArmoredCreator-Studio-Lab-Asset-Materializer"},
+            f"{BLOB_API}/{expected_sha}",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "ArmoredCreator-Studio-Lab-Asset-Materializer",
+            },
         )
         with urllib.request.urlopen(request, timeout=30) as response:
-            data = response.read()
+            blob = json.loads(response.read().decode("utf-8"))
+        if blob.get("sha") != expected_sha or blob.get("encoding") != "base64":
+            raise RuntimeError(f"Unexpected GitHub blob response for {name}")
+        data = base64.b64decode(blob["content"], validate=True)
         actual_sha = git_blob_sha1(data)
         if actual_sha != expected_sha:
             raise RuntimeError(
