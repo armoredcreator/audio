@@ -20,10 +20,10 @@
 2. The new handoff is an optional parameter to the Studio boundary; the existing Coordinator does not automatically supply a Speech payload. End-to-end orchestration from the real Speech registry to Studio remains to be wired and tested. Do not set `ARMORED_STUDIO_REQUIRE_SPEECH_HANDOFF=1` in any live environment until that caller exists.
 3. Runtime integration tests are synthetic and use the explicit copy-only test mode. They do not prove real FFmpeg, RVC model/index, visual detector accuracy, watermark removal, or final audio quality.
 4. The branch contains MP4 files in its root from earlier lab history; they were not opened or processed. Their origin and authorization are not established, so they remain unused.
-5. GitHub Actions run `38815934451` completed successfully for commit `7e482a285bc346c4e85c26442642762f9efd18ab`: `compileall` passed and `pytest` reported **46 passed**. This is synthetic/unit coverage only; it is not evidence of a real FFmpeg/RVC render or full Coordinator-to-Speech orchestration.
+5. GitHub Actions run `38816123362` completed successfully for commit `248cafed7377b4885b9959b5d9f52f7ba7e222bf`: `compileall` passed and `pytest` reported **49 passed**. Coverage includes synthetic registry-to-Studio handoff, preservation of an existing output on invalid handoff, explicit RVC eligibility gating, and a test that supplied Speech decisions bypass Studio's second audio classifier. This is synthetic/unit coverage only; it is not evidence of a real FFmpeg/RVC render or production Coordinator orchestration.
 
 ## Required next steps
 1. Materialize the two exact official binary assets with the authorized read-only route and verify their Git blob IDs.
 2. Wire the actual Speech registry/Coordinator caller to pass the correct READY payload for each item, respecting the real source/item IDs and sidecar paths.
-3. Add a full adapter test around that caller; then validate FFmpeg/RVC dependencies in the lab.
+3. Validate FFmpeg/RVC dependencies and visual detector accuracy in the lab.
 4. Only after all automated tests pass, request explicit approval for a controlled synthetic render. No real video, Telegram, Shopee, Hub or publication in this phase.
