@@ -37,14 +37,14 @@ A classificação `FOREIGN_SPEECH` está incluída como proteção inicial. A ro
 
 ## SQLite / contrato com Studio
 
-A tabela experimental `armored_speech_results` guarda:
+A tabela experimental `armored_speech_results` é propriedade exclusiva do ArmoredSpeech. Ela guarda:
 - `source_id`, `item_id`: identidade e origem do item;
 - `video_path`, `wav_path`: caminhos dos arquivos;
 - `audio_class`, `language`, `speech_detected`, `music_detected`, `confidence`;
 - `rvc_eligible`: decisão explícita e fail-closed;
 - `status`, hashes do original antes/depois e erro.
 
-Studio deve consultar esse registro e consumir o WAV pelo caminho; não precisa receber ou mover o arquivo entre módulos. ArmoredSpeech não escolhe destino do Hub: o roteamento continua ligado ao `source_id` e à configuração de destino já existente.
+**ArmoredStudio não deve consultar diretamente essa tabela nem importar módulos internos do Speech.** ArmoredSpeech exporta um payload JSON versionado pelo contrato neutro descrito em `STUDIO_BRIDGE_V1.md`; o consumidor do Studio valida esse payload e mapeia a classe canônica para os próprios modos internos. A entrega do payload e o consumidor no repositório principal ainda precisam ser implementados e testados de ponta a ponta. ArmoredSpeech não escolhe destino do Hub: o roteamento continua ligado ao `source_id` e à configuração de destino já existente.
 
 ## Segurança e limpeza
 
