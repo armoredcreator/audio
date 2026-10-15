@@ -11,6 +11,7 @@ def analyzer_for(
     speech_activity: float,
     speech_probability: float,
     music_probability: float,
+    noise_probability: float = 0.0,
     language: str = "unknown",
     language_confidence: float = 0.0,
 ) -> AudioIntelligence:
@@ -21,7 +22,7 @@ def analyzer_for(
     analyzer._decode = lambda _source: (samples, 2.0)
     analyzer._detect_speech_activity = lambda _samples: speech_activity
     analyzer._detect_audio_content_probabilities = (
-        lambda _samples: (speech_probability, music_probability)
+        lambda _samples: (speech_probability, music_probability, noise_probability)
     )
     analyzer._detect_language = lambda _samples: (language, language_confidence)
     return analyzer
@@ -77,6 +78,16 @@ def test_audio_set_speech_can_recover_short_foreign_speech_missed_by_vad(tmp_pat
     result = analyzer.analyze(tmp_path / "sample.mp4")
     assert result.mode == AudioMode.FOREIGN_SPEECH
     assert result.language == "en"
+
+
+def test_noise_without_voice_or_music_is_classified_as_noise(tmp_path):
+    analyzer = analyzer_for(
+        tmp_path, speech_activity=0.0, speech_probability=0.019,
+        music_probability=0.009, noise_probability=0.076,
+    )
+    result = analyzer.analyze(tmp_path / "sample.mp4")
+    assert result.mode == AudioMode.NOISE
+    assert result.noise_probability == 0.076
 
 
 def test_inconclusive_voice_and_music_evidence_stays_unverified(tmp_path):
