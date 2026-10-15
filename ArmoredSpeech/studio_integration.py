@@ -37,3 +37,38 @@ def process_item_with_speech(
         require_files=True,
     )
     return studio.process(item, speech_payload=directive.to_payload())
+
+
+
+def process_items_with_speech(
+    studio: StudioProcessor,
+    items,
+    *,
+    speech_database: Path,
+):
+    """Preflight a complete approved Speech batch before invoking Studio.
+
+    This is the lab-only phase boundary: every supplied item must have a READY,
+    file-valid Speech directive before the first Studio call is made. It does
+    not discover items, mutate the Speech registry, or infer that an arbitrary
+    subset is the entire historical collection; the caller must supply the
+    complete, approved batch only after Speech reports its phase complete.
+    """
+    prepared = []
+    for item in items:
+        source_id = str(item.source_id)
+        item_id = str(item.telegram_message_id)
+        directive = export_audio_directive(
+            Path(speech_database),
+            source_id=source_id,
+            item_id=item_id,
+            require_files=True,
+        )
+        prepared.append((item, directive.to_payload()))
+
+    # Deliberately separate preflight from execution: a missing/blocked item
+    # must not allow earlier items in the same batch to enter Studio.
+    return [
+        studio.process(item, speech_payload=payload)
+        for item, payload in prepared
+    ]
