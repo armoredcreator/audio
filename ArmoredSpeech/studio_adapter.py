@@ -71,8 +71,8 @@ def validate_handoff(
         raise SpeechHandoffError("Original path does not match Studio item")
     if original.stat().st_size <= 0:
         raise SpeechHandoffError("Original media is empty")
-    if wav_path.stat().st_size <= 44 or wav_path.stem.casefold() != expected_item_id.casefold():
-        raise SpeechHandoffError("WAV is empty or basename does not match item_id")
+    if wav_path.stat().st_size <= 44 or wav_path.stem.casefold() != original.stem.casefold():
+        raise SpeechHandoffError("WAV must be a nonempty sidecar matching the original basename")
 
     try:
         with wave.open(str(wav_path), "rb") as audio:
