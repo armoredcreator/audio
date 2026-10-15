@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from ArmoredSpeech.studio_bridge import (
     DecisionNotFound,
     DecisionNotReady,
     IncompatibleDecision,
-    read_studio_directive,
+    export_audio_directive,
 )
 
 
@@ -42,65 +43,90 @@ def _registry(tmp_path: Path, *, audio_class="PT_BR_NARRATION", language="pt",
           speech_detected, rvc_eligible, status))
     con.commit()
     con.close()
-    return db, original
+    return db, original, wav_path
 
 
-def test_ready_pt_br_narration_can_be_rvc_eligible(tmp_path):
-    db, original = _registry(tmp_path)
-    directive = read_studio_directive(db, source_id="s1", item_id="i1")
+def test_ready_pt_br_narration_exports_neutral_json_contract(tmp_path):
+    db, original, wav_path = _registry(tmp_path)
+    directive = export_audio_directive(db, source_id="s1", item_id="i1")
     assert directive.original_path == original
-    assert directive.studio_audio_mode == "SPEECH"
+    assert directive.audio_artifact_path == wav_path
+    assert directive.audio_class == "PT_BR_NARRATION"
     assert directive.rvc_eligible is True
     assert original.read_bytes() == b"immutable-original"
 
+    payload = directive.to_payload()
+    assert payload["contract_version"] == 1
+    assert payload["source_id"] == "s1"
+    assert payload["item_id"] == "i1"
+    assert payload["audio_class"] == "PT_BR_NARRATION"
+    assert payload["audio_artifact_path"] == str(wav_path)
+    assert "studio_audio_mode" not in payload
+    assert "StudioAudioMode" not in json.dumps(payload)
+    json.dumps(payload)  # payload is JSON serializable
+
 
 def test_mixed_audio_is_blocked_until_separation_is_validated(tmp_path):
-    db, _ = _registry(tmp_path, audio_class="PT_BR_NARRATION_WITH_MUSIC")
-    directive = read_studio_directive(db, source_id="s1", item_id="i1")
-    assert directive.studio_audio_mode == "SPEECH_PLUS_MUSIC"
+    db, _, _ = _registry(tmp_path, audio_class="PT_BR_NARRATION_WITH_MUSIC")
+    directive = export_audio_directive(db, source_id="s1", item_id="i1")
+    assert directive.audio_class == "PT_BR_NARRATION_WITH_MUSIC"
     assert directive.requires_vocal_separation is True
     assert directive.rvc_eligible is False
 
 
-@pytest.mark.parametrize(("audio_class", "expected"), [
-    ("MUSIC_ONLY", "MUSIC_ONLY"),
-    ("NO_AUDIO", "NO_AUDIO"),
-    ("NOISE", "MUSIC_ONLY"),
-    ("NO_USABLE_NARRATION", "MUSIC_ONLY"),
-    ("FOREIGN_SPEECH", "FOREIGN_SPEECH"),
+@pytest.mark.parametrize("audio_class", [
+    "MUSIC_ONLY",
+    "NO_AUDIO",
+    "NOISE",
+    "NO_USABLE_NARRATION",
+    "FOREIGN_SPEECH",
 ])
-def test_non_portuguese_narration_routes_never_use_rvc(tmp_path, audio_class, expected):
-    db, _ = _registry(tmp_path, audio_class=audio_class, language="unknown",
-                      speech_detected=0, rvc_eligible=0)
-    directive = read_studio_directive(db, source_id="s1", item_id="i1")
-    assert directive.studio_audio_mode == expected
+def test_non_portuguese_narration_never_uses_rvc(tmp_path, audio_class):
+    db, _, _ = _registry(tmp_path, audio_class=audio_class, language="unknown",
+                         speech_detected=0, rvc_eligible=0)
+    directive = export_audio_directive(db, source_id="s1", item_id="i1")
+    assert directive.audio_class == audio_class
     assert directive.rvc_eligible is False
 
 
 def test_persisted_rvc_true_does_not_override_non_portuguese_language(tmp_path):
-    db, _ = _registry(tmp_path, language="en")
-    assert read_studio_directive(db, source_id="s1", item_id="i1").rvc_eligible is False
+    db, _, _ = _registry(tmp_path, language="en")
+    assert export_audio_directive(
+        db, source_id="s1", item_id="i1"
+    ).rvc_eligible is False
 
 
 def test_missing_decision_fails_closed(tmp_path):
-    db, _ = _registry(tmp_path)
+    db, _, _ = _registry(tmp_path)
     with pytest.raises(DecisionNotFound):
-        read_studio_directive(db, source_id="missing", item_id="i1")
+        export_audio_directive(db, source_id="missing", item_id="i1")
 
 
 def test_non_ready_decision_fails_closed(tmp_path):
-    db, _ = _registry(tmp_path, status="PROCESSING")
+    db, _, _ = _registry(tmp_path, status="PROCESSING")
     with pytest.raises(DecisionNotReady):
-        read_studio_directive(db, source_id="s1", item_id="i1")
+        export_audio_directive(db, source_id="s1", item_id="i1")
 
 
 def test_missing_wav_fails_closed(tmp_path):
-    db, _ = _registry(tmp_path, wav=False)
+    db, _, _ = _registry(tmp_path, wav=False)
     with pytest.raises(DecisionNotReady, match="WAV"):
-        read_studio_directive(db, source_id="s1", item_id="i1")
+        export_audio_directive(db, source_id="s1", item_id="i1")
 
 
 def test_unknown_class_fails_closed(tmp_path):
-    db, _ = _registry(tmp_path, audio_class="UNRECOGNIZED", rvc_eligible=0)
+    db, _, _ = _registry(tmp_path, audio_class="UNRECOGNIZED", rvc_eligible=0)
     with pytest.raises(IncompatibleDecision):
-        read_studio_directive(db, source_id="s1", item_id="i1")
+        export_audio_directive(db, source_id="s1", item_id="i1")
+
+
+def test_changed_original_hash_fails_closed(tmp_path):
+    db, _, _ = _registry(tmp_path)
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "UPDATE armored_speech_results SET original_sha256_before=?, "
+            "original_sha256_after=? WHERE source_id='s1' AND item_id='i1'",
+            ("before-hash", "after-hash"),
+        )
+    with pytest.raises(DecisionNotReady, match="hash changed"):
+        export_audio_directive(db, source_id="s1", item_id="i1")
