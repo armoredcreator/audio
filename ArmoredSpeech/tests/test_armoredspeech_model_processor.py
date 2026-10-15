@@ -8,7 +8,7 @@ from ArmoredSpeech.model_processor import ModelProcessor
 
 def fake_result(
     mode, *, language="unknown", speech_activity=0.0,
-    speech_probability=None, music_probability=0.0,
+    speech_probability=None, music_probability=0.0, noise_probability=0.0,
 ):
     return SimpleNamespace(
         mode=mode, language=language, confidence=0.92, duration_seconds=8.0,
@@ -17,10 +17,12 @@ def fake_result(
         speech_activity_ratio=speech_activity,
         speech_probability=speech_probability,
         music_probability=music_probability,
+        noise_probability=noise_probability,
         as_dict=lambda: {"mode": mode, "language": language,
                          "speech_activity_ratio": speech_activity,
                          "speech_probability": speech_probability,
-                         "music_probability": music_probability},
+                         "music_probability": music_probability,
+                         "noise_probability": noise_probability},
     )
 
 
@@ -54,6 +56,17 @@ def test_unusable_noise_without_detected_voice_is_not_rvc_eligible():
     assert result.audio_class is AudioClass.NO_USABLE_NARRATION
     assert not result.rvc_eligible
 
+
+
+def test_noise_is_persistable_but_never_rvc_eligible():
+    processor = ModelProcessor()
+    processor.intelligence.analyze = lambda _path: fake_result(
+        AudioMode.NOISE, speech_activity=0.0, speech_probability=0.019,
+        music_probability=0.009, noise_probability=0.076,
+    )
+    result = processor.analyze(Path("sample.mp4"))
+    assert result.audio_class is AudioClass.NOISE
+    assert not result.rvc_eligible
 
 
 def test_low_vad_but_independent_speech_evidence_stays_unknown_not_no_usable():
