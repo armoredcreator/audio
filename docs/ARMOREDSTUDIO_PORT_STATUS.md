@@ -2,7 +2,19 @@
 
 **Target branch:** `test/armoredstudio-speech-integration-20261015`  
 **Official source:** `armoredcreator/armoredcreator:main` (read-only).  
-**Execution policy:** no real video rendered; synthetic tests only.
+**Execution policy:** no real video rendered yet; synthetic tests only.
+
+## Ordem oficial do pipeline
+
+**ArmoredSync completo → ArmoredVision completo → ArmoredStock completo → ArmoredIA → ArmoredSpeech completo → ArmoredStudio → ArmoredHub.**
+
+Esta branch valida isoladamente a integração Speech → Studio antes de qualquer transferência para o ArmoredCreator. Hub/publicação ficam fora do escopo dos testes atuais.
+
+## Corpus local preparado
+
+O corpus informado pelo usuário está em `C:\Users\Administrador\Downloads\ArmoredAudioLab\videos`. Contém vídeos para Speech e casos visuais de Studio com VEO 1, VEO 2, Gemini e barras pretas de diferentes tamanhos. Os arquivos são locais, não fazem parte do commit e não devem ser enviados ao Git. O teste deve usar workspace/cópias isoladas, manter os originais intactos e gerar um relatório por caso.
+
+Os assets oficiais do Studio e os arquivos/modelo/índice do ambiente RVC serão transferidos pelo usuário separadamente. Até estarem disponíveis e validados no laboratório, o teste real de ponta a ponta permanece bloqueado.
 
 ## Completed in the lab
 - Static audit: [ARMOREDSTUDIO_BASE_AUDIT.md](./ARMOREDSTUDIO_BASE_AUDIT.md)
@@ -15,15 +27,15 @@
 - Added synthetic adapter and Studio handoff tests. The GitHub Actions workflow now compiles all lab modules and runs the Python test suite when Studio code changes.
 - Added `ArmoredStudio/assets/fetch_official_assets.py`, which downloads assets by their official Git blob IDs and verifies exact Git blob SHA-1 before writing. It requires an explicit read-only `ARMORED_OFFICIAL_REPO_TOKEN`; it does not save the token.
 
-## Still blocked — do not render real media
-1. The official source repo is private. The CI runner for `armoredcreator/audio` cannot download the two binary assets anonymously. The asset downloader was adjusted to require an explicit read-only token, and its step was removed from CI. The exact assets are **not yet present** in the lab branch: `ArmoredStudio/assets/banner.png` and `ArmoredStudio/assets/efeitosonoro.wav`.
-2. The new handoff is an optional parameter to the Studio boundary; the existing Coordinator does not automatically supply a Speech payload. End-to-end orchestration from the real Speech registry to Studio remains to be wired and tested. Do not set `ARMORED_STUDIO_REQUIRE_SPEECH_HANDOFF=1` in any live environment until that caller exists.
+## Still blocked — do not declare end-to-end validation complete
+1. The exact official assets are not yet present in the lab: `ArmoredStudio/assets/banner.png` and `ArmoredStudio/assets/efeitosonoro.wav`. The user plans to transfer the assets separately; verify their identity/content before use. The asset downloader is available as an alternative and requires an explicit read-only `ARMORED_OFFICIAL_REPO_TOKEN`.
+2. The new handoff is an optional parameter to the Studio boundary; the actual lab caller/orchestrator does not yet automatically supply a Speech payload for each item. End-to-end orchestration from the Speech registry to Studio remains to be wired and tested. Do not set `ARMORED_STUDIO_REQUIRE_SPEECH_HANDOFF=1` in any live environment until that caller exists.
 3. Runtime integration tests are synthetic and use the explicit copy-only test mode. They do not prove real FFmpeg, RVC model/index, visual detector accuracy, watermark removal, or final audio quality.
-4. The branch contains MP4 files in its root from earlier lab history; they were not opened or processed. Their origin and authorization are not established, so they remain unused.
-5. GitHub Actions run `38816123362` completed successfully for commit `248cafed7377b4885b9959b5d9f52f7ba7e222bf`: `compileall` passed and `pytest` reported **49 passed**. Coverage includes synthetic registry-to-Studio handoff, preservation of an existing output on invalid handoff, explicit RVC eligibility gating, and a test that supplied Speech decisions bypass Studio's second audio classifier. This is synthetic/unit coverage only; it is not evidence of a real FFmpeg/RVC render or production Coordinator orchestration.
+4. GitHub Actions run `38816123362` completed successfully for commit `248cafed7377b4885b9959b5d9f52f7ba7e222bf`: `compileall` passed and `pytest` reported **49 passed**. Coverage includes synthetic registry-to-Studio handoff, preservation of an existing output on invalid handoff, explicit RVC eligibility gating, and a test that supplied Speech decisions bypass Studio's second audio classifier. This is synthetic/unit coverage only; it is not evidence of a real FFmpeg/RVC render or production Coordinator orchestration.
 
 ## Required next steps
-1. Materialize the two exact official binary assets with the authorized read-only route and verify their Git blob IDs.
-2. Wire the actual Speech registry/Coordinator caller to pass the correct READY payload for each item, respecting the real source/item IDs and sidecar paths.
-3. Validate FFmpeg/RVC dependencies and visual detector accuracy in the lab.
-4. Only after all automated tests pass, request explicit approval for a controlled synthetic render. No real video, Telegram, Shopee, Hub or publication in this phase.
+1. The user transfers the official Studio assets and RVC runtime/model/index into the isolated lab; confirm expected paths and hashes without committing private/binary assets.
+2. Wire the lab caller/orchestrator to pass the correct READY payload for each item, respecting the real source/item IDs and sidecar paths.
+3. Run a read-only inventory/preflight on the local corpus, validate FFmpeg/RVC dependencies and detector accuracy, then execute only the approved isolated test plan.
+4. Record pass/fail evidence per video and preserve original hashes. No Telegram, Shopee, Hub or publication in this phase.
+5. Only after all tests pass, request explicit approval before any controlled real render or promotion. The production/reference repositories remain untouched.
