@@ -13,6 +13,7 @@ from typing import Any
 
 from .analysis.video import obter_informacoes_video
 from .analysis.audio_intelligence import AudioIntelligence, AudioMode
+from ArmoredSpeech.studio_adapter import validate_handoff, SpeechHandoffError
 from .analysis.blackbar import analisar_bordas_video
 from .analysis.banner_analyzer import analisar_banner
 from .analysis.banner import analisar_banner as analisar_corte_banner
@@ -43,7 +44,7 @@ class AnalysisEngine:
             os.getenv("ARMORED_FFMPEG", "ffmpeg")
         )
 
-    def analyze(self, source: Path) -> AnalysisResult:
+    def analyze(self, source: Path, audio_override: dict[str, Any] | None = None) -> AnalysisResult:
         video = obter_informacoes_video(source)
         if not video.get("sucesso"):
             raise RuntimeError(video.get("erro", "video-invalido"))
@@ -93,8 +94,11 @@ class AnalysisEngine:
         if not validation.get("valido"):
             raise RuntimeError("Plano de processamento inválido: " + "; ".join(validation.get("erros", [])))
 
-        audio = self.audio_intelligence.analyze(source)
-        return AnalysisResult(video, blackbar, banner, banner_cut, veo, gemini, plan, validation, audio.as_dict())
+        if audio_override is None:
+            audio = self.audio_intelligence.analyze(source).as_dict()
+        else:
+            audio = dict(audio_override)
+        return AnalysisResult(video, blackbar, banner, banner_cut, veo, gemini, plan, validation, audio)
 
 
 class UnifiedStudio:
@@ -114,11 +118,25 @@ class UnifiedStudio:
             raise RuntimeError("Modo de cópia de teste não habilitado")
         shutil.copy2(source, output)
 
-    def process(self, item):
+    def process(self, item, speech_payload: dict[str, Any] | None = None):
         original = Path(item.original_path).resolve()
         if not original.is_file():
             raise FileNotFoundError(original)
         original_hash = hashlib.sha256(original.read_bytes()).hexdigest()
+        speech_handoff = None
+        if speech_payload is None and os.getenv("ARMORED_STUDIO_REQUIRE_SPEECH_HANDOFF") == "1":
+            raise RuntimeError("ArmoredSpeech READY handoff obrigatório; processamento bloqueado")
+        if speech_payload is not None:
+            try:
+                speech_handoff = validate_handoff(
+                    speech_payload,
+                    workspace_root=self.root,
+                    expected_source_id=str(item.source_id),
+                    expected_item_id=str(item.telegram_message_id),
+                    expected_original_path=original,
+                )
+            except SpeechHandoffError as exc:
+                raise RuntimeError(f"ArmoredSpeech handoff inválido: {exc}") from exc
 
         destination = Path(self.storage.result(item.content_id, item.affiliate_url, item.affiliate_name, source_id=item.source_id)).resolve()
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -145,11 +163,11 @@ class UnifiedStudio:
             return destination, {"mode": "test-copy", "plan": None}
 
         if os.getenv("ARMORED_CONSOLE_VERBOSE", "0") == "1":
-            analysis = self.analysis.analyze(source)
+            analysis = self.analysis.analyze(source, audio_override=self._speech_audio_override(speech_payload) if speech_payload else None)
         else:
             with open(os.devnull, "w", encoding="utf-8") as quiet:
                 with contextlib.redirect_stdout(quiet), contextlib.redirect_stderr(quiet):
-                    analysis = self.analysis.analyze(source)
+                    analysis = self.analysis.analyze(source, audio_override=self._speech_audio_override(speech_payload) if speech_payload else None)
 
         # Real Studio resources are explicit/configurable; never use another
         # checkout or machine-specific path.
@@ -236,8 +254,9 @@ class UnifiedStudio:
                 )
             else:
                 extract_args = [
-                    ffmpeg, "-y", "-i", str(source), "-vn",
-                    "-ac", "2", "-ar", "44100",
+                    ffmpeg, "-y", "-i",
+                    str(speech_handoff.wav_path if speech_handoff is not None else source),
+                    "-vn", "-ac", "2", "-ar", "44100",
                 ]
                 # Mixed speech+music gets a speech-focused preconditioning pass
                 # before RVC. It is intentionally not described as perfect source
@@ -290,3 +309,32 @@ class UnifiedStudio:
             raise RuntimeError("O original foi alterado durante o processamento")
         output.replace(destination)
         return destination, analysis
+
+    @staticmethod
+    def _speech_audio_override(payload: dict[str, Any]) -> dict[str, Any]:
+        """Map the neutral Speech class to Studio routing without reclassifying audio."""
+        audio_class = payload.get("audio_class")
+        language = str(payload.get("language") or "unknown").strip().lower()
+        confidence = float(payload.get("confidence") or 0.0)
+        mapping = {
+            "PT_BR_NARRATION": (AudioMode.SPEECH, 0.0),
+            "PT_BR_NARRATION_WITH_MUSIC": (AudioMode.SPEECH_PLUS_MUSIC, 1.0),
+            "MUSIC_ONLY": (AudioMode.MUSIC_ONLY, 1.0),
+            "NO_AUDIO": (AudioMode.NO_AUDIO, 0.0),
+            "NOISE": (AudioMode.MUSIC_ONLY, 1.0),
+            "NO_USABLE_NARRATION": (AudioMode.MUSIC_ONLY, 1.0),
+            "FOREIGN_SPEECH": (AudioMode.FOREIGN_SPEECH, 0.0),
+        }
+        if audio_class not in mapping:
+            raise RuntimeError("Classe Speech desconhecida; áudio bloqueado")
+        mode, music_ratio = mapping[audio_class]
+        return {
+            "mode": mode,
+            "language": language,
+            "language_confidence": confidence,
+            "music_ratio": music_ratio,
+            "duration_seconds": 0.0,
+            "speech_ratio": 1.0 if audio_class in {"PT_BR_NARRATION", "PT_BR_NARRATION_WITH_MUSIC", "FOREIGN_SPEECH"} else 0.0,
+            "confidence": confidence,
+            "method": "armoredspeech-handoff-v1",
+        }
