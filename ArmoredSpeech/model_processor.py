@@ -32,6 +32,7 @@ class ModelProcessor:
         mode_map = {
             AudioMode.NO_AUDIO: AudioClass.NO_AUDIO,
             AudioMode.MUSIC_ONLY: AudioClass.MUSIC_ONLY,
+            AudioMode.NOISE: AudioClass.NOISE,
             AudioMode.SPEECH: AudioClass.PT_BR_NARRATION,
             AudioMode.SPEECH_PLUS_MUSIC: AudioClass.PT_BR_NARRATION_WITH_MUSIC,
             AudioMode.FOREIGN_SPEECH: AudioClass.FOREIGN_SPEECH,
