@@ -29,6 +29,13 @@ def git_blob_sha1(data: bytes) -> str:
 def materialize_assets(destination: Path | None = None) -> list[Path]:
     target = Path(destination) if destination else Path(__file__).resolve().parent
     target.mkdir(parents=True, exist_ok=True)
+    token = os.getenv("ARMORED_OFFICIAL_REPO_TOKEN")
+    if not token:
+        raise RuntimeError(
+            "The official source repository is private. Set ARMORED_OFFICIAL_REPO_TOKEN "
+            "to a read-only token authorized for armoredcreator/armoredcreator; "
+            "the token is read from the environment and is never stored by this script."
+        )
     written: list[Path] = []
     for name, expected_sha in ASSETS.items():
         final_path = target / name
@@ -41,6 +48,7 @@ def materialize_assets(destination: Path | None = None) -> list[Path]:
             headers={
                 "Accept": "application/vnd.github+json",
                 "User-Agent": "ArmoredCreator-Studio-Lab-Asset-Materializer",
+                "Authorization": f"Bearer {token}",
             },
         )
         with urllib.request.urlopen(request, timeout=30) as response:
