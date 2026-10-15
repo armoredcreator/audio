@@ -131,3 +131,32 @@ def test_speech_narration_without_explicit_rvc_eligibility_stays_closed():
     assert route["language_confidence"] == 0.0
     assert route["music_ratio"] == 1.0
     assert route["speech_rvc_eligible"] is False
+
+
+def test_analysis_engine_uses_speech_override_without_second_audio_classification(tmp_path, monkeypatch):
+    import ArmoredStudio.unified as unified
+
+    class NeverClassify:
+        def analyze(self, source):
+            raise AssertionError("Audio Intelligence must not reclassify a supplied Speech decision")
+
+    monkeypatch.setattr(unified, "obter_informacoes_video", lambda source: {"sucesso": True, "duracao": 1.0})
+    monkeypatch.setattr(unified, "analisar_bordas_video", lambda source: {})
+    monkeypatch.setattr(unified, "analisar_banner", lambda source: {"banner_detectado": False})
+    monkeypatch.setattr(unified, "analisar_corte_banner", lambda source: {})
+    monkeypatch.setattr(unified, "detectar_veo", lambda source: {})
+    monkeypatch.setattr(unified, "detectar_gemini", lambda source: {})
+    monkeypatch.setattr(unified, "criar_plano_exportacao", lambda *args: {"ok": True})
+    monkeypatch.setattr(unified, "validar_plano_exportacao", lambda plan: {"valido": True, "erros": []})
+
+    override = {
+        "mode": "SPEECH",
+        "language": "pt-br",
+        "language_confidence": 1.0,
+        "music_ratio": 0.0,
+        "speech_rvc_eligible": True,
+        "method": "armoredspeech-handoff-v1",
+    }
+    engine = unified.AnalysisEngine(audio_intelligence=NeverClassify())
+    result = engine.analyze(tmp_path / "synthetic.mp4", audio_override=override)
+    assert result.audio == override
