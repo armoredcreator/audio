@@ -113,7 +113,21 @@ def test_speech_class_maps_to_conservative_studio_route(audio_class, expected_mo
         "language": "pt-br" if audio_class == "PT_BR_NARRATION" else "unknown",
         "confidence": 0.95,
     }
-    route = UnifiedStudio._speech_audio_override(payload)
+    route = UnifiedStudio._speech_audio_override(payload, rvc_eligible=(audio_class == "PT_BR_NARRATION"))
     assert route["mode"] == expected_mode
     assert route["music_ratio"] == expected_music_ratio
     assert route["method"] == "armoredspeech-handoff-v1"
+
+
+
+def test_speech_narration_without_explicit_rvc_eligibility_stays_closed():
+    payload = {
+        "audio_class": "PT_BR_NARRATION",
+        "language": "pt-br",
+        "confidence": 0.99,
+    }
+    route = UnifiedStudio._speech_audio_override(payload, rvc_eligible=False)
+    assert route["mode"] == "SPEECH"
+    assert route["language_confidence"] == 0.0
+    assert route["music_ratio"] == 1.0
+    assert route["speech_rvc_eligible"] is False
