@@ -1,0 +1,3 @@
+# Instalar somente no ambiente virtual deste repositório de laboratório.
+# A instalação e o download do modelo podem ser grandes; medir CPU/RAM no primeiro clipe.
+audio-separator[cpu]>=0.30,<1
