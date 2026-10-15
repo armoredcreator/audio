@@ -32,6 +32,6 @@ Este relatório registra a saída de \`validate_full_corpus.py\`; não substitui
 - Avisos de TorchScript e filtros mel não foram falhas fatais.
 - Este teste cobre classificação de áudio; não testa separação vocal/instrumental, RVC, legendas, detecção visual de marca d'água ou handoff do Studio.
 
-## Como confirmar
+## Confirmação humana concluída
 
-Responda com os números e correções, por exemplo: \`1 fala PT; 2 só música; 3 fala + música; 4 só fala...\`. Ouça cada arquivo e informe o rótulo real; não precisa reenviar os vídeos.
+Os rótulos da coluna final foram confirmados pelo usuário para os 15 vídeos. Não solicitar nova revisão auditiva desses arquivos. As divergências entre rótulos humanos e classificação automática devem ser investigadas como problema de modelo/critério, sem alterar os rótulos humanos para forçar aprovação.
