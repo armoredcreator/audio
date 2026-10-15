@@ -16,7 +16,7 @@ def _sha(path: Path) -> str:
 def _fixture(tmp_path: Path, **overrides):
     original = tmp_path / "source.mp4"
     original.write_bytes(b"synthetic disposable video bytes")
-    wav_path = tmp_path / "item-1.wav"
+    wav_path = tmp_path / "source.wav"
     with wave.open(str(wav_path), "wb") as audio:
         audio.setnchannels(1)
         audio.setsampwidth(2)
@@ -81,7 +81,7 @@ def test_original_hash_mismatch_fails_closed(tmp_path):
 def test_wav_outside_workspace_fails_closed(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    outside = tmp_path / "item-1.wav"
+    outside = tmp_path / "source.wav"
     with wave.open(str(outside), "wb") as audio:
         audio.setnchannels(1)
         audio.setsampwidth(2)
