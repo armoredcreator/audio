@@ -13,3 +13,8 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+
+# Private/local ArmoredStudio runtime resources; never commit binaries or model weights.
+ArmoredStudio/assets/banner.png
+ArmoredStudio/assets/efeitosonoro.wav
+ArmoredStudio/runtime/rvc/
