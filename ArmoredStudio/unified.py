@@ -167,7 +167,7 @@ class UnifiedStudio:
         else:
             with open(os.devnull, "w", encoding="utf-8") as quiet:
                 with contextlib.redirect_stdout(quiet), contextlib.redirect_stderr(quiet):
-                    analysis = self.analysis.analyze(source, audio_override=self._speech_audio_override(speech_payload) if speech_payload else None)
+                    analysis = self.analysis.analyze(source, audio_override=self._speech_audio_override(speech_payload, rvc_eligible=speech_handoff.rvc_eligible) if speech_handoff is not None else None)
 
         # Real Studio resources are explicit/configurable; never use another
         # checkout or machine-specific path.
