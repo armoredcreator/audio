@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 from pathlib import Path
 
@@ -20,6 +21,30 @@ MODEL_NAME = "MIT/ast-finetuned-audioset-10-10-0.4593"
 RATE = 16000
 
 
+def resolve_video(filename: str) -> Path:
+    """Resolve a single corpus video in the root or private local storage."""
+    explicit_root = os.getenv("ARMORED_AUDIO_VALIDATION_VIDEO_ROOT")
+    roots = [Path(explicit_root)] if explicit_root else [ROOT, ROOT / "storage"]
+    matches: list[Path] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        candidate = root / filename
+        if candidate.is_file():
+            matches.append(candidate.resolve())
+        elif root == ROOT / "storage":
+            matches.extend(path.resolve() for path in root.rglob(filename) if path.is_file())
+    unique = list(dict.fromkeys(matches))
+    if len(unique) != 1:
+        found = ", ".join(str(path) for path in unique) or "nenhum arquivo"
+        raise FileNotFoundError(
+            f"Esperado exatamente um {filename}; encontrados {len(unique)}: {found}. "
+            "Coloque o corpus na raiz/storage ou defina "
+            "ARMORED_AUDIO_VALIDATION_VIDEO_ROOT."
+        )
+    return unique[0]
+
+
 def decode(path: Path) -> np.ndarray:
     proc = subprocess.run(
         ["ffmpeg", "-v", "error", "-i", str(path), "-vn", "-ac", "1",
@@ -37,9 +62,7 @@ def main() -> None:
     id_to_label = model.config.id2label
 
     for filename, expected in FILES:
-        path = ROOT / filename
-        if not path.is_file():
-            raise FileNotFoundError(path)
+        path = resolve_video(filename)
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         samples = decode(path)
         rms = float(np.sqrt(np.mean(samples * samples))) if samples.size else 0.0
