@@ -5,6 +5,7 @@ Laboratório isolado para validar ArmoredSpeech e ArmoredStudio de ponta a ponta
 - Implementação e documentação de Speech: [ArmoredSpeech/](ArmoredSpeech/README.md).
 - Status de portabilidade e integração de Studio: [docs/ARMOREDSTUDIO_PORT_STATUS.md](docs/ARMOREDSTUDIO_PORT_STATUS.md).
 - Esta branch de teste não integra nem altera o ArmoredCreator de produção, `armoredcreator-test` ou `armoredcreator-testbase`.
+- Plano para reduzir duplicações Python com segurança: [docs/DEPENDENCY_SHARING_PLAN.md](docs/DEPENDENCY_SHARING_PLAN.md). A auditoria inicial é somente leitura.
 - Vídeos de teste, ambientes virtuais, bancos de dados locais, credenciais, assets privados e resultados gerados não devem ser enviados ao Git sem uma decisão explícita.
 
 ## Ordem oficial do pipeline
