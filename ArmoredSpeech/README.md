@@ -21,7 +21,7 @@ ArmoredSpeech vem depois de ArmoredIA e antes de ArmoredStudio. Deve concluir a 
 
 ## Corpus local de testes
 
-O corpus local fica em `C:\Users\Administrador\Downloads\ArmoredAudioLab\videos`. Ele reúne casos para Speech e para a análise visual de Studio (VEO 1, VEO 2, Gemini e barras pretas de diferentes tamanhos). Não presumir que o corpus foi enviado ao Git nem que os casos estão aprovados. Usar cópias em workspace isolado, preservar os originais e registrar o resultado de cada teste.
+O corpus local fica em `C:\Users\Administrador\Downloads\ArmoredAudioLab\storage`. Ele reúne casos para Speech e para a análise visual de Studio (VEO 1, VEO 2, Gemini e barras pretas de diferentes tamanhos). Não presumir que o corpus foi enviado ao Git nem que os casos estão aprovados. Usar cópias em workspace isolado, preservar os originais e registrar o resultado de cada teste.
 
 ## Contrato experimental
 
@@ -41,13 +41,13 @@ O manifesto JSON opcional permite testar o contrato usando rótulos revisados; e
 
 ## Ambiente
 
-Use Python 3.11 em um ambiente virtual dedicado. Os comandos de preparação estão em `docs/SETUP_WINDOWS.md`.
+Use somente o ambiente Python compartilhado `.venv` na raiz; ArmoredSpeech não deve criar `ArmoredSpeech/runtime/venv`. Instruções: `docs/SETUP_WINDOWS.md`.
 
-Na raiz do repositório, instale o pacote em modo editável para que imports e testes encontrem a ferramenta:
+Na raiz do repositório:
 
-    python -m pip install -e .
-    python -m pip install -r ArmoredSpeech/requirements-analysis.txt
-    python -m pip install -r ArmoredSpeech/requirements-separation.txt
-    python -m pytest -q
+    .\ArmoredSpeech\setup_runtime.ps1
+    .\.venv\Scripts\python.exe -m pytest -q
+
+A separação vocal opcional pode ser instalada no mesmo ambiente com ` .\ArmoredSpeech\setup_runtime.ps1 -InstallSeparation`.
 
 Não execute RVC, renderização ou publicação no laboratório antes da preparação e autorização específicas para esses testes.

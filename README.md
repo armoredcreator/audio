@@ -6,6 +6,7 @@ Laboratório isolado para validar ArmoredSpeech e ArmoredStudio de ponta a ponta
 - Status de portabilidade e integração de Studio: [docs/ARMOREDSTUDIO_PORT_STATUS.md](docs/ARMOREDSTUDIO_PORT_STATUS.md).
 - Esta branch de teste não integra nem altera o ArmoredCreator de produção, `armoredcreator-test` ou `armoredcreator-testbase`.
 - Plano para reduzir duplicações Python com segurança: [docs/DEPENDENCY_SHARING_PLAN.md](docs/DEPENDENCY_SHARING_PLAN.md). A auditoria inicial é somente leitura.
+- ArmoredSpeech passa a usar o `.venv` da raiz; as dependências exclusivas do RVC continuam em fase de consolidação.
 - Vídeos de teste, ambientes virtuais, bancos de dados locais, credenciais, assets privados e resultados gerados não devem ser enviados ao Git sem uma decisão explícita.
 
 ## Ordem oficial do pipeline
@@ -18,7 +19,7 @@ Sync, Vision e Stock devem concluir suas fases históricas na ordem acima. IA ve
 
 O corpus de teste preparado pelo usuário fica em:
 
-`C:\Users\Administrador\Downloads\ArmoredAudioLab\videos`
+`C:\Users\Administrador\Downloads\ArmoredAudioLab\storage`
 
 Ele contém vídeos destinados tanto aos testes de ArmoredSpeech quanto aos testes visuais de ArmoredStudio: VEO 1, VEO 2, Gemini e barras pretas de diferentes tamanhos. O diretório é local e não deve ser versionado. Os testes devem usar cópias/workspace isolados, preservar os originais e registrar resultados por caso; não presumir que todos os casos já passaram.
 
