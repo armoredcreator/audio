@@ -13,7 +13,7 @@ from typing import Any
 
 from .analysis.video import obter_informacoes_video
 from .analysis.audio_intelligence import AudioIntelligence, AudioMode
-from ArmoredSpeech.studio_adapter import validate_handoff, SpeechHandoffError
+from .speech_handoff import validate_handoff, SpeechHandoffError
 from .analysis.blackbar import analisar_bordas_video
 from .analysis.banner_analyzer import analisar_banner
 from .analysis.banner import analisar_banner as analisar_corte_banner
@@ -21,6 +21,12 @@ from .analysis.veo_detector import detect_fast as detectar_veo
 from .analysis.gemini_detector import detect_fast as detectar_gemini
 from .analysis.export_planner import criar_plano_exportacao
 from .analysis.export_plan_validator import validar_plano_exportacao
+
+
+def _rvc_language_is_supported(value: object) -> bool:
+    """Accept the Portuguese labels emitted by Speech and Audio Intelligence."""
+    normalized = str(value or "").strip().lower().replace("_", "-")
+    return normalized in {"pt", "pt-br"}
 
 
 @dataclass(frozen=True)
@@ -227,7 +233,7 @@ class UnifiedStudio:
 
             rvc_allowed = (
                 audio_mode == AudioMode.SPEECH
-                and language == "pt"
+                and _rvc_language_is_supported(language)
                 and language_confidence >= language_minimum
                 and music_ratio < maximum_music_ratio
                 and (speech_handoff.rvc_eligible if speech_handoff is not None else True)
