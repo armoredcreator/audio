@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ArmoredSpeech.studio_adapter import SpeechHandoffError, validate_handoff
+from ArmoredStudio.speech_handoff import SpeechHandoffError, validate_handoff
 
 
 def _sha(path: Path) -> str:
