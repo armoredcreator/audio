@@ -12,7 +12,7 @@ dependencies = []
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["ArmoredSpeech*", "ArmoredStudio*", "armored_core*"]
-exclude = [".venv*", "venv*", ".git*", "__pycache__*", ".pytest_cache*", "build*", "dist*"]
+exclude = [".venv*", "venv*", ".git*", "__pycache__*", ".pytest_cache*", "build*", "dist*", "storage*", "credentials*", "ArmoredStudio.runtime*", "ArmoredSpeech.runtime*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
