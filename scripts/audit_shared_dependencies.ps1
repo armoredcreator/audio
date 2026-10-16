@@ -3,8 +3,7 @@ param([string]$ReportPath = (Join-Path $env:TEMP "ArmoredAudioLab-dependency-aud
 $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $definitions = @(
-    [pscustomobject]@{ Name = "root"; Relative = ".venv" },
-    [pscustomobject]@{ Name = "speech"; Relative = "ArmoredSpeech\runtime\venv" },
+    [pscustomobject]@{ Name = "shared"; Relative = ".venv" },
     [pscustomobject]@{ Name = "rvc"; Relative = "ArmoredStudio\runtime\rvc\env311" }
 )
 function Normalize-Name([string]$Name) {
