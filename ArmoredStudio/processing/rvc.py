@@ -20,6 +20,7 @@ RVC_ROOT = (
 ).resolve()
 MODELS_DIR = RVC_ROOT / "models"
 RVC_ENV_DIR = RVC_ROOT / "env"
+RVC_ENV311_DIR = RVC_ROOT / "env311"
 
 DEFAULT_VOICE = "melody"
 DEFAULT_OUTPUT = RVC_ROOT / "output" / "audio_rvc.wav"
@@ -27,7 +28,13 @@ DEFAULT_OUTPUT = RVC_ROOT / "output" / "audio_rvc.wav"
 
 def resolver_rvc_python() -> Path:
     """Resolve the local RVC Python for the current operating system."""
+    # Prefer the migrated, validated Python 3.11 runtime without deleting
+    # the pre-existing environment. Fall back to the legacy runtime only if
+    # env311 has not yet been provisioned.
     candidates = (
+        RVC_ENV311_DIR / "Scripts" / "python.exe",
+        RVC_ENV311_DIR / "bin" / "python",
+        RVC_ENV311_DIR / "bin" / "python3",
         RVC_ENV_DIR / "Scripts" / "python.exe",
         RVC_ENV_DIR / "bin" / "python",
         RVC_ENV_DIR / "bin" / "python3",
