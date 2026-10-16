@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [Parameter()]
-    [string]$SourceStudioRoot = "C:\Users\Administrador\Downloads\armoredcreator-rvc\ArmoredStudio"
+    [string]$SourceStudioRoot = "C:\Users\Administrador\Downloads\armoredcreator-rvc\ArmoredStudio",
+    [Parameter()]
+    [switch]$VerifyOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -90,20 +92,24 @@ if ($LASTEXITCODE -ne 0 -or $sourcePackages.Count -eq 0) {
 $sourcePackages | Set-Content -LiteralPath $requirementsPath -Encoding ASCII
 
 try {
-    Write-Output ""
-    Write-Output "=== ATUALIZANDO PIP NO NOVO AMBIENTE ==="
-    & $targetPython -m pip install --upgrade pip
-    if ($LASTEXITCODE -ne 0) { throw "Falha ao atualizar pip no env311." }
+    if ($VerifyOnly) {
+        Write-Output "Modo VERIFY ONLY: nenhuma instalacao ou atualizacao de pacotes sera executada."
+    } else {
+        Write-Output ""
+        Write-Output "=== ATUALIZANDO PIP NO NOVO AMBIENTE ==="
+        & $targetPython -m pip install --upgrade pip
+        if ($LASTEXITCODE -ne 0) { throw "Falha ao atualizar pip no env311." }
 
-    Write-Output ""
-    Write-Output "=== INSTALANDO AS VERSOES DO RVC VALIDADO (CPU) ==="
-    # Reproduce the already-tested environment exactly instead of dependency-resolving it as a fresh installation.
-    # The validated source intentionally has a local fairseq 0.12.3.1 wheel, while
-    # upstream rvc-python metadata requests fairseq 0.12.2. A normal resolver rejects
-    # this known-working source combination, so install the pinned freeze without
-    # re-resolving transitive dependencies; the source freeze contains those packages.
-    & $targetPython -m pip install --no-deps --prefer-binary --extra-index-url "https://download.pytorch.org/whl/cpu" -r $requirementsPath
-    if ($LASTEXITCODE -ne 0) { throw "Falha ao instalar dependencias. O ambiente antigo foi preservado." }
+        Write-Output ""
+        Write-Output "=== INSTALANDO AS VERSOES DO RVC VALIDADO (CPU) ==="
+        # Reproduce the already-tested environment instead of dependency-resolving it as a fresh installation.
+        # The validated source intentionally has a local fairseq 0.12.3.1 wheel, while
+        # upstream rvc-python metadata requests fairseq 0.12.2. A normal resolver rejects
+        # this known-working source combination, so install the pinned freeze without
+        # re-resolving transitive dependencies; the source freeze contains those packages.
+        & $targetPython -m pip install --no-deps --prefer-binary --extra-index-url "https://download.pytorch.org/whl/cpu" -r $requirementsPath
+        if ($LASTEXITCODE -ne 0) { throw "Falha ao instalar dependencias. O ambiente antigo foi preservado." }
+    }
 
     Write-Output ""
     Write-Output "=== TESTE DE IMPORTACAO ==="
