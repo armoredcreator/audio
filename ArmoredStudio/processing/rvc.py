@@ -104,20 +104,30 @@ def converter_interno(entrada, saida, modelo, index, item_id=None):
         # contract directly so failures remain deterministic and actionable.
         model_info = rvc.models[rvc.current_model]
         file_index = model_info.get("index", "")
-        wav_opt = rvc.vc.vc_single(
-            sid=0,
-            input_audio_path=str(entrada),
-            f0_up_key=rvc.f0up_key,
-            f0_method=rvc.f0method,
-            file_index=file_index,
-            index_rate=rvc.index_rate,
-            filter_radius=rvc.filter_radius,
-            resample_sr=rvc.resample_sr,
-            rms_mix_rate=rvc.rms_mix_rate,
-            protect=rvc.protect,
-            f0_file="",
-            file_index2="",
-        )
+
+        # PyTorch >= 2.6 defaults torch.load(weights_only=True). Legacy
+        # Fairseq HuBERT checkpoints contain this metadata class, which is
+        # required for RVC inference. Allowlist only this known Fairseq class
+        # for the duration of inference instead of disabling weights_only,
+        # which would permit arbitrary pickle globals from a checkpoint.
+        import torch
+        from fairseq.data.dictionary import Dictionary
+
+        with torch.serialization.safe_globals([Dictionary]):
+            wav_opt = rvc.vc.vc_single(
+                sid=0,
+                input_audio_path=str(entrada),
+                f0_up_key=rvc.f0up_key,
+                f0_method=rvc.f0method,
+                file_index=file_index,
+                index_rate=rvc.index_rate,
+                filter_radius=rvc.filter_radius,
+                resample_sr=rvc.resample_sr,
+                rms_mix_rate=rvc.rms_mix_rate,
+                protect=rvc.protect,
+                f0_file="",
+                file_index2="",
+            )
         if (
             isinstance(wav_opt, tuple)
             and len(wav_opt) == 2
