@@ -112,10 +112,45 @@ try {
 
     $targetPackages = @(& $targetPython -m pip freeze)
     if ($LASTEXITCODE -ne 0) { throw "Nao foi possivel verificar as versoes instaladas." }
-    $packageDiff = @(Compare-Object -ReferenceObject @($sourcePackages | Sort-Object) -DifferenceObject @($targetPackages | Sort-Object))
+
+    # Some Windows CPU wheels report a local +cpu runtime version while the
+    # source environment's installed distribution metadata omits that suffix.
+    # Treat only torch/torchaudio's +cpu suffix as equivalent for freeze diff;
+    # the import test above still verifies torch.__version__ and CUDA=False.
+    $normalizePackageList = {
+        param([string[]]$Packages)
+        @($Packages | ForEach-Object {
+            if ($_ -match '^(torch|torchaudio)==(.+)\\+cpu
+        Write-Warning "O ambiente abre RVC, mas ha diferencas de pacotes. Primeiras diferencas:"
+        $packageDiff | Select-Object -First 20 | Format-Table -AutoSize
+        Write-Output "Manifesto temporario mantido em: $requirementsPath"
+        exit 2
+    }
+
+    Write-Output ""
+    Write-Output "MIGRACAO DO AMBIENTE PYTHON RVC CONCLUIDA."
+    Write-Output "Python ativo para Studio: $targetPython"
+    Write-Output "O ambiente Python 3.10.11 antigo nao foi removido nem alterado."
+    Remove-Item -LiteralPath $requirementsPath -Force
+} catch {
+    Write-Error $_
+    Write-Output "O ambiente antigo foi preservado."
+    Write-Output "Manifesto de dependencias preservado em: $requirementsPath"
+    throw
+}
+) {
+                "$($matches[1])==$($matches[2])"
+            } else {
+                $_
+            }
+        } | Sort-Object)
+    }
+    $sourceComparable = & $normalizePackageList $sourcePackages
+    $targetComparable = & $normalizePackageList $targetPackages
+    $packageDiff = @(Compare-Object -ReferenceObject @($sourceComparable) -DifferenceObject @($targetComparable))
     if ($packageDiff.Count -eq 0) {
         Write-Output ""
-        Write-Output "DEPENDENCIAS: correspondem ao ambiente RVC validado."
+        Write-Output "DEPENDENCIAS: correspondem ao ambiente RVC validado (sufixo +cpu normalizado para comparacao)."
     } else {
         Write-Warning "O ambiente abre RVC, mas ha diferencas de pacotes. Primeiras diferencas:"
         $packageDiff | Select-Object -First 20 | Format-Table -AutoSize
