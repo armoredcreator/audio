@@ -1,6 +1,6 @@
-# Optional classifier dependencies; install only inside ArmoredSpeech/runtime/venv.
-# First model use may download checkpoints into local model/cache directories.
-numpy>=1.26,<3
+# Analysis dependencies for the repository-root .venv shared by Speech, Studio and RVC.
+# NumPy 1.23.5 passed the current five-file Speech reference validation and unit suite.
+numpy==1.23.5
 torch>=2.2,<3
 transformers>=4.40,<5
 faster-whisper>=1.0,<2

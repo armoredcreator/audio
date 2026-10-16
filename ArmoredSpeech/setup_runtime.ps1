@@ -1,29 +1,54 @@
-# ArmoredSpeech: create and prepare its private Windows runtime.
-$ErrorActionPreference = "Stop"
-$SpeechRoot = $PSScriptRoot
-$RepoRoot = Split-Path -Parent $SpeechRoot
-$RuntimeRoot = Join-Path $SpeechRoot "runtime"
-$Python = Join-Path $RuntimeRoot "venv\Scripts\python.exe"
-$Requirements = Join-Path $SpeechRoot "requirements-analysis.txt"
+# Compatibility entry point. ArmoredSpeech uses the repository-root .venv.
+[CmdletBinding()]
+param(
+    [Parameter()]
+    [switch]$InstallSeparation
+)
 
-if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
-    throw "Python Launcher (py) not found. Install Python 3.11 and retry."
+$ErrorActionPreference = "Stop"
+$RepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
+$SharedEnv = Join-Path $RepoRoot ".venv"
+$Python = Join-Path $SharedEnv "Scripts\python.exe"
+$Requirements = Join-Path $PSScriptRoot "requirements-analysis.txt"
+
+if (!(Test-Path -LiteralPath $Python -PathType Leaf)) {
+    if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
+        throw "Python Launcher (py) nao encontrado. Instale Python 3.11 e tente novamente."
+    }
+    Write-Host "[ArmoredSpeech] Criando o unico ambiente compartilhado: $SharedEnv"
+    & py -3.11 -m venv $SharedEnv
+    if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $Python -PathType Leaf)) {
+        throw "Falha ao criar o ambiente compartilhado .venv."
+    }
 }
-New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
-if (-not (Test-Path $Python)) {
-    Write-Host "[ArmoredSpeech] Creating private Python 3.11 environment."
-    py -3.11 -m venv (Join-Path $RuntimeRoot "venv")
-    if ($LASTEXITCODE -ne 0) { throw "Failed to create ArmoredSpeech virtual environment." }
+
+$Version = (& $Python -c "import sys; print('.'.join(map(str, sys.version_info[:3])))").Trim()
+if ($LASTEXITCODE -ne 0 -or $Version -notmatch '^3\.11\.') {
+    throw "O ambiente compartilhado precisa usar Python 3.11.x. Encontrado: $Version"
 }
-& $Python -m pip install --upgrade pip
-if ($LASTEXITCODE -ne 0) { throw "Failed to upgrade pip in ArmoredSpeech runtime." }
+
+Write-Host "[ArmoredSpeech] Usando o ambiente compartilhado: $Python (Python $Version)"
 & $Python -m pip install -e $RepoRoot
-if ($LASTEXITCODE -ne 0) { throw "Failed to install the lab package into ArmoredSpeech runtime." }
+if ($LASTEXITCODE -ne 0) { throw "Falha ao instalar o AudioLab no .venv compartilhado." }
+
 & $Python -m pip install -r $Requirements
-if ($LASTEXITCODE -ne 0) { throw "Failed to install ArmoredSpeech analysis dependencies." }
-Write-Host "[ArmoredSpeech] Runtime ready."
-& $Python --version
-& $Python -c "import torch, transformers, silero_vad; print('torch:', torch.__version__); print('transformers:', transformers.__version__); print('silero_vad: OK')"
-if ($LASTEXITCODE -ne 0) { throw "Runtime smoke test failed." }
-Write-Host "Next command:"
-Write-Host ".\ArmoredSpeech\runtime\venv\Scripts\python.exe .\ArmoredSpeech\tests\validate_full_corpus.py"
+if ($LASTEXITCODE -ne 0) { throw "Falha ao instalar requirements-analysis.txt no .venv compartilhado." }
+
+if ($InstallSeparation) {
+    $SeparationRequirements = Join-Path $PSScriptRoot "requirements-separation.txt"
+    & $Python -m pip install -r $SeparationRequirements
+    if ($LASTEXITCODE -ne 0) { throw "Falha ao instalar separacao de audio no .venv compartilhado." }
+}
+
+& $Python -c "import sys, numpy, torch, transformers, faster_whisper, silero_vad; print('Python:', sys.version.split()[0]); print('NumPy:', numpy.__version__); print('Torch:', torch.__version__); print('Transformers:', transformers.__version__); print('Speech runtime: OK')"
+if ($LASTEXITCODE -ne 0) { throw "Smoke test do ambiente compartilhado falhou." }
+
+$Legacy = Join-Path $PSScriptRoot "runtime\venv"
+if (Test-Path -LiteralPath $Legacy) {
+    Write-Host "[ArmoredSpeech] ATENCAO: runtime\venv legado ainda existe, mas este script nao o usa nem o apaga."
+    Write-Host "[ArmoredSpeech] Remova-o somente apos confirmar que nenhum comando local depende dele."
+}
+
+Write-Host "[ArmoredSpeech] Ambiente compartilhado pronto."
+Write-Host "Validacao do corpus:"
+Write-Host '.\.venv\Scripts\python.exe .\ArmoredSpeech\tests\validate_full_corpus.py'
