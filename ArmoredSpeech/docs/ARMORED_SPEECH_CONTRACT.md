@@ -25,7 +25,7 @@ O caminho é sempre registrado no SQLite junto de `source_id` e `item_id`. Não 
 | Classe | RVC | Preparação | Comportamento final esperado no Studio |
 |---|---:|---|---|
 | `PT_BR_NARRATION` | Sim | WAV extraído | RVC na narração PT-BR |
-| `PT_BR_NARRATION_WITH_MUSIC` | Sim | separar e manter o stem vocal no WAV | RVC somente na voz separada |
+| `PT_BR_NARRATION_WITH_MUSIC` | **Bloqueado no v1** | separação pode gerar um stem vocal, mas ele ainda não é aprovado para RVC | Studio usa a rota conservadora; liberar RVC somente após validação explícita do stem |
 | `MUSIC_ONLY` | Não | WAV de referência | silenciar áudio original e aplicar o efeito sonoro existente |
 | `NOISE` | Não | WAV de referência | silenciar áudio original e aplicar o efeito sonoro existente |
 | `NO_AUDIO` | Não | WAV silencioso determinístico | aplicar efeito sonoro sem RVC |
@@ -44,7 +44,7 @@ A tabela experimental `armored_speech_results` é propriedade exclusiva do Armor
 - `rvc_eligible`: decisão explícita e fail-closed;
 - `status`, hashes do original antes/depois e erro.
 
-**ArmoredStudio não deve consultar diretamente essa tabela nem importar módulos internos do Speech.** ArmoredSpeech exporta um payload JSON versionado pelo contrato neutro descrito em `STUDIO_BRIDGE_V1.md`; o consumidor do Studio valida esse payload e mapeia a classe canônica para os próprios modos internos. A entrega do payload e o consumidor no repositório principal ainda precisam ser implementados e testados de ponta a ponta. ArmoredSpeech não escolhe destino do Hub: o roteamento continua ligado ao `source_id` e à configuração de destino já existente.
+**ArmoredStudio não deve consultar diretamente essa tabela nem importar módulos internos do Speech.** Nesta branch, o produtor do contrato está em `ArmoredSpeech/studio_bridge.py`, a entrega por item/lote em `ArmoredSpeech/studio_integration.py`, e a validação/consumo pertencem ao Studio (`ArmoredStudio/speech_handoff.py` e `ArmoredStudio/unified.py`). O pré-check do lote bloqueia a primeira chamada ao Studio se algum item não estiver pronto. Isso comprova a ligação de código e os testes de contrato, mas não certifica a conversão real RVC/Melody, a renderização completa no ambiente local nem uma integração com o repositório de produção. ArmoredSpeech não escolhe destino do Hub: o roteamento continua ligado ao `source_id` e à configuração de destino já existente.
 
 ## Segurança e limpeza
 
