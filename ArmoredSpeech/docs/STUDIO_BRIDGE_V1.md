@@ -6,8 +6,8 @@ ArmoredSpeech e ArmoredStudio continuam sendo ferramentas independentes. A integ
 
 - **ArmoredSpeech** lê seu próprio registro e exporta uma decisão pronta para consumo.
 - **Contrato v1** transporta identidade, caminhos de arquivos, classe de áudio, evidências disponíveis e restrições de segurança.
-- **ArmoredStudio** deverá validar o payload e mapear `audio_class` para seus próprios modos internos. Não deve importar `ArmoredSpeech`, usar a tabela `armored_speech_results` ou depender do schema SQLite experimental.
-- Esta PR ainda não implementa o consumidor dentro do repositório principal; portanto, **não é integração ponta a ponta**.
+- **ArmoredStudio** valida o payload em `ArmoredStudio/speech_handoff.py` e o consome em `ArmoredStudio/unified.py`, mapeando `audio_class` para os modos internos. Não deve importar `ArmoredSpeech`, usar a tabela `armored_speech_results` ou depender do schema SQLite experimental.
+- `ArmoredSpeech/studio_integration.py` exporta e entrega a decisão ao processador fornecido pelo chamador; `process_items_with_speech` pré-valida todos os itens antes da primeira chamada ao Studio. Esta ligação de código existe nesta branch de laboratório, mas **a conversão real com RVC/Melody e a execução completa local ainda não estão certificadas**.
 
 Implementação do produtor/contrato: `ArmoredSpeech/studio_bridge.py`.
 
@@ -62,8 +62,8 @@ Exemplo estrutural (valores ilustrativos):
 
 1. O schema experimental não persiste `classifier_version` nem um estado de validação de stem vocal; esses campos continuam nulos/bloqueados.
 2. O payload contém caminhos locais, não transporta os bytes dos arquivos. O consumidor precisa validar caminhos, existência e identidade antes de usar.
-3. O mecanismo de entrega (arquivo de handoff atômico ou IPC) ainda precisa ser decidido e testado; esta PR não escolhe implicitamente um.
-4. O Studio consumidor ainda não foi implementado no repositório principal.
+3. Nesta branch, a entrega é um payload JSON-safe em memória passado pela função `process_item_with_speech` ou `process_items_with_speech`; transporte entre processos separados (arquivo/IPC) não faz parte deste protótipo.
+4. Esta branch contém o consumidor no Studio, mas isso não equivale a integração no repositório de produção nem comprova a execução real do RVC.
 5. Não rodar RVC, renderização, publicação nem alterar originais durante os testes de contrato.
 
 ## Testes
