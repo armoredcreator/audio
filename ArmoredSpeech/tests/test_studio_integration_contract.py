@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from ArmoredSpeech.studio_adapter import sha256_file
+from ArmoredStudio.speech_handoff import sha256_file
 # This module tests the real Studio contract, whose video-analysis dependencies
 # belong to the Studio environment, not ArmoredSpeech's isolated runtime.
 pytest.importorskip("cv2", reason="Studio integration contract requires the Studio video dependencies")
