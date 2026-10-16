@@ -12,7 +12,7 @@ from ArmoredStudio.speech_handoff import sha256_file
 # belong to the Studio environment, not ArmoredSpeech's isolated runtime.
 pytest.importorskip("cv2", reason="Studio integration contract requires the Studio video dependencies")
 
-from ArmoredStudio.unified import UnifiedStudio
+from ArmoredStudio.unified import UnifiedStudio, _rvc_language_is_supported
 
 
 class FakeStorage:
@@ -164,3 +164,13 @@ def test_analysis_engine_uses_speech_override_without_second_audio_classificatio
     engine = unified.AnalysisEngine(audio_intelligence=NeverClassify())
     result = engine.analyze(tmp_path / "synthetic.mp4", audio_override=override)
     assert result.audio == override
+
+
+@pytest.mark.parametrize("language", ["pt", "pt-br", "pt_BR", " PT-BR "])
+def test_rvc_language_gate_accepts_speech_portuguese_aliases(language):
+    assert _rvc_language_is_supported(language) is True
+
+
+@pytest.mark.parametrize("language", ["en", "pt-pt", "unknown", None, ""])
+def test_rvc_language_gate_rejects_non_target_languages(language):
+    assert _rvc_language_is_supported(language) is False
