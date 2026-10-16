@@ -14,7 +14,7 @@ Validar no laboratório o contrato entre o resultado de áudio do ArmoredSpeech 
 
 ## Corpus de teste
 
-Diretório local: `C:\Users\Administrador\Downloads\ArmoredAudioLab\videos`.
+Diretório local: `C:\Users\Administrador\Downloads\ArmoredAudioLab\storage`.
 
 O corpus contém:
 - vídeos de teste para ArmoredSpeech;
@@ -73,6 +73,10 @@ O usuário transferirá os assets oficiais do Studio e o ambiente/modelo/índice
 5. Repetir o cálculo de SHA-256 dos originais e comparar com o inventário inicial.
 
 Não executar renderização real até as dependências/asset serem validadas, os testes automatizados passarem e o usuário autorizar o ensaio controlado. Nenhuma publicação real faz parte desta validação.
+
+## Ambiente Python compartilhado
+
+O setup do ArmoredSpeech usa o `.venv` da raiz, por meio de `ArmoredSpeech/setup_runtime.ps1`. NumPy 1.23.5 passou 45 testes unitários (1 ignorado) e a validação real dos cinco arquivos de referência, com hashes dos originais inalterados. A migração das dependências exclusivas do RVC está pendente; `env311` deve ser preservado até uma conversão Melody passar usando o interpretador compartilhado.
 
 ## Estado atual
 

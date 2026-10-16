@@ -12,9 +12,14 @@ Esta branch valida isoladamente a integração Speech → Studio antes de qualqu
 
 ## Corpus local preparado
 
-O corpus informado pelo usuário está em `C:\Users\Administrador\Downloads\ArmoredAudioLab\videos`. Contém vídeos para Speech e casos visuais de Studio com VEO 1, VEO 2, Gemini e barras pretas de diferentes tamanhos. Os arquivos são locais, não fazem parte do commit e não devem ser enviados ao Git. O teste deve usar workspace/cópias isoladas, manter os originais intactos e gerar um relatório por caso.
+O corpus informado pelo usuário está em `C:\Users\Administrador\Downloads\ArmoredAudioLab\storage`. Contém vídeos para Speech e casos visuais de Studio com VEO 1, VEO 2, Gemini e barras pretas de diferentes tamanhos. Os arquivos são locais, não fazem parte do commit e não devem ser enviados ao Git. O teste deve usar workspace/cópias isoladas, manter os originais intactos e gerar um relatório por caso.
 
 Os assets oficiais do Studio e os arquivos/modelo/índice do ambiente RVC serão transferidos pelo usuário separadamente. Até estarem disponíveis e validados no laboratório, o teste real de ponta a ponta permanece bloqueado.
+
+## Shared Python environment status
+- ArmoredSpeech setup now targets the root `.venv` rather than installing a second identical package set under `ArmoredSpeech/runtime/venv`.
+- The root `.venv` with NumPy 1.23.5 passed 45 unit tests (1 skipped) and the five real Speech reference cases; the original hashes remained unchanged.
+- The RVC environment `ArmoredStudio/runtime/rvc/env311` remains untouched until its unique dependencies and custom Fairseq build can be migrated safely and real Melody conversion passes under the root interpreter.
 
 ## Completed in the lab
 - Static audit: [ARMOREDSTUDIO_BASE_AUDIT.md](./ARMOREDSTUDIO_BASE_AUDIT.md)
