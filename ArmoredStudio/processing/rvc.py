@@ -110,10 +110,14 @@ def converter_interno(entrada, saida, modelo, index, item_id=None):
         # required for RVC inference. Allowlist only this known Fairseq class
         # for the duration of inference instead of disabling weights_only,
         # which would permit arbitrary pickle globals from a checkpoint.
+        import argparse
         import torch
         from fairseq.data.dictionary import Dictionary
 
-        with torch.serialization.safe_globals([Dictionary]):
+        # Legacy Fairseq checkpoints commonly include argparse.Namespace
+        # alongside Dictionary metadata. Both are explicitly allowlisted;
+        # we do not switch torch.load to unrestricted pickle loading.
+        with torch.serialization.safe_globals([Dictionary, argparse.Namespace]):
             wav_opt = rvc.vc.vc_single(
                 sid=0,
                 input_audio_path=str(entrada),
