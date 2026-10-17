@@ -118,3 +118,81 @@ def test_final_output_uses_one_ffmpeg_call_with_speech_graph_and_visual_graph(tm
     assert "concat=n=2:v=0:a=1[final_a]" in graph
     assert "-stream_loop" in command
     assert command[-1] == str(output)
+
+
+def test_effect_only_render_materializes_speech_declared_silence_input_without_route_logic(
+    tmp_path, monkeypatch
+):
+    video = tmp_path / "input.mp4"
+    effect = tmp_path / "effect.wav"
+    banner = tmp_path / "banner.png"
+    output = tmp_path / "result.mp4"
+    for path in (video, effect, banner):
+        path.write_bytes(b"test-input")
+
+    audio_inputs = [
+        {
+            "kind": "lavfi",
+            "role": "silence",
+            "source": "anullsrc=r=44100:cl=stereo",
+            "duration_seconds": 3.0,
+        },
+        {
+            "kind": "loop_file",
+            "role": "effect",
+            "path": str(effect),
+            "sha256": "b" * 64,
+        },
+    ]
+    plan = {"video_start": 0.0}
+    audio = build_audio_filter_graph(
+        visual_plan=plan,
+        audio_start_seconds=0.0,
+        main_duration_seconds=3.0,
+        intro=True,
+        intro_position="final",
+    )
+    captured = {"calls": 0}
+
+    monkeypatch.setattr(
+        visual_finalizer, "_probe_video", lambda path: (1080, 1920, "30/1")
+    )
+    monkeypatch.setattr(
+        visual_finalizer, "resolve_executable", lambda *args, **kwargs: Path("ffmpeg")
+    )
+
+    def fake_run(command, **kwargs):
+        captured["calls"] += 1
+        captured["command"] = list(command)
+        Path(command[-1]).write_bytes(b"rendered-video")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(visual_finalizer.subprocess, "run", fake_run)
+
+    result = visual_finalizer.render_with_speech_audio(
+        video,
+        audio_inputs,
+        banner,
+        output,
+        audio_filter_graph=audio["filter_graph"],
+        audio_output_label=audio["output_label"],
+        position="final",
+        intro=True,
+        plan=plan,
+    )
+
+    command = captured["command"]
+    graph = command[command.index("-filter_complex") + 1]
+    assert result == output
+    assert captured["calls"] == 1
+    assert command.count("-f") == 1
+    lavfi = command.index("lavfi")
+    assert command[lavfi + 1] == "-t"
+    assert command[lavfi + 2] == "3.000000"
+    assert command[lavfi + 3] == "-i"
+    assert command[lavfi + 4] == "anullsrc=r=44100:cl=stereo"
+    assert command.count("-stream_loop") == 1
+    assert "amix=inputs=2:duration=first" in graph
+    assert "audio_inputs" not in command
+    assert "route" not in command
+
