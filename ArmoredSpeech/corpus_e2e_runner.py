@@ -394,12 +394,13 @@ def run_corpus_batch(
         if not render:
             report["status"] = "SPEECH_READY_STUDIO_NOT_RUN"
             _write_json(report_dir / "speech-report.json", report)
+            studio_report_path = report_dir / "studio-report.json"
             print("STUDIO_RENDER=NOT_RUN; o manifesto permanece approved=false.")
-            print("Após revisar os 14 resultados, mude approved para true no manifesto e execute:")
+            print(f"Após revisar os {expected_count} resultados, mude approved para true no manifesto e execute:")
             print(
                 f'  "{sys.executable}" -m ArmoredSpeech.studio_batch_runner '
                 f'--root "{root}" --manifest "{manifest_path}" --speech-database "{database}" '
-                f'--report "{report_dir / "studio-report.json"}"'
+                f'--report "{studio_report_path}"'
             )
             print(f"MANIFEST={manifest_path}")
             return report
