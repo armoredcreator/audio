@@ -145,6 +145,7 @@ def _validate_audio_track(
     *,
     workspace: Path,
     label: str,
+    track_hash_cache: dict[tuple[str, int, int, int, int], str] | None = None,
 ) -> tuple[Path, str, dict[str, object]]:
     if not isinstance(raw, dict):
         raise SpeechHandoffError(f"{label} metadata missing or invalid")
@@ -182,8 +183,9 @@ def _validate_audio_track(
             actual_rate = audio.getframerate()
             actual_channels = audio.getnchannels()
             frames = audio.getnframes()
-            if frames < 1 or not audio.readframes(1):
-                raise SpeechHandoffError(f"{label} contains no readable samples")
+            sample_width = audio.getsampwidth()
+            if frames < 1 or sample_width != 2 or not audio.readframes(1):
+                raise SpeechHandoffError(f"{label} is not readable 16-bit PCM audio")
             actual_duration = frames / actual_rate
     except (wave.Error, EOFError, OSError, ZeroDivisionError) as exc:
         raise SpeechHandoffError(f"{label} is not a readable PCM WAV") from exc
@@ -192,7 +194,19 @@ def _validate_audio_track(
         raise SpeechHandoffError(f"{label} technical metadata mismatch")
     if abs(actual_duration - duration) > 0.02:
         raise SpeechHandoffError(f"{label} duration metadata mismatch")
-    digest = sha256_file(path)
+    stat = path.stat()
+    cache_key = (
+        str(path),
+        int(stat.st_dev),
+        int(stat.st_ino),
+        int(stat.st_size),
+        int(stat.st_mtime_ns),
+    )
+    digest = track_hash_cache.get(cache_key) if track_hash_cache is not None else None
+    if digest is None:
+        digest = sha256_file(path)
+        if track_hash_cache is not None:
+            track_hash_cache[cache_key] = digest
     if digest.lower() != expected_hash.lower():
         raise SpeechHandoffError(f"{label} SHA-256 mismatch")
     return path, digest, raw
@@ -205,8 +219,14 @@ def validate_audio_package(
     expected_source_id: str,
     expected_item_id: str,
     expected_original_path: Path | None = None,
+    track_hash_cache: dict[tuple[str, int, int, int, int], str] | None = None,
 ) -> ValidatedAudioPackage:
-    """Validate Speech-owned audio package v2 before any Studio render begins."""
+    """Validate Speech-owned audio package v2 before any Studio render begins.
+
+    A per-run cache avoids hashing the one shared effect WAV once per item. Each
+    cache entry is keyed by resolved file identity, size and mtime; unique voice
+    tracks remain individually hashed before the first render.
+    """
     if not isinstance(payload, dict) or payload.get("contract_version") != 2:
         raise SpeechHandoffError("Unsupported or invalid Speech audio package contract")
     if payload.get("status") != "READY":
@@ -283,10 +303,16 @@ def validate_audio_package(
         raise SpeechHandoffError("Unsupported audio route")
 
     voice_path, voice_hash, _ = _validate_audio_track(
-        payload.get("voice_track"), workspace=workspace, label="Voice track"
+        payload.get("voice_track"),
+        workspace=workspace,
+        label="Voice track",
+        track_hash_cache=track_hash_cache,
     )
     effect_path, effect_hash, effect_data = _validate_audio_track(
-        payload.get("effect_track"), workspace=workspace, label="Effect track"
+        payload.get("effect_track"),
+        workspace=workspace,
+        label="Effect track",
+        track_hash_cache=track_hash_cache,
     )
     if effect_data.get("gain_policy") != "loudnorm-I-12-LRA7-TP-1-then-volume-0.8":
         raise SpeechHandoffError("Effect gain policy is absent or not approved")
