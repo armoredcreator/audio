@@ -88,25 +88,54 @@ def _single_portrait_crop(
     if sx < 0 or sy < 0 or sw <= 0 or sh <= 0 or sx + sw > source_width or sy + sh > source_height:
         raise ValueError("crop_final inválido ou fora do vídeo")
 
-    # Exact integer multiples of 9x16 yield a portrait source crop that can be
-    # scaled to 1080x1920 without a second crop. Even multiples also satisfy
-    # common yuv420p chroma alignment constraints.
+    # Use exact 9:16 integer multiples and even dimensions/origins for yuv420p.
+    # A safe region can itself be a tight 9:16 crop with an odd x/y origin. In
+    # that edge case, shifting the crop by one pixel would leave the planner-
+    # approved region. Shrink the crop by two units until an even origin fits;
+    # never expand beyond the watermark-safe region to force alignment.
     units = min(sw // 9, sh // 16)
     units -= units % 2
-    if units < 2:
-        raise ValueError("Área segura pequena demais para formar um crop 9:16")
-    width, height = 9 * units, 16 * units
-    x = sx + (sw - width) // 2
-    y = sy + (sh - height) // 2
+    while units >= 2:
+        width, height = 9 * units, 16 * units
+        min_x, max_x = sx, sx + sw - width
+        min_y, max_y = sy, sy + sh - height
 
-    # Prefer even origins while remaining inside the planner-approved safe area.
-    if x % 2:
-        x = x + 1 if x + width <= sx + sw else x - 1
-    if y % 2:
-        y = y + 1 if y + height <= sy + sh else y - 1
-    if x < sx or y < sy or x + width > sx + sw or y + height > sy + sh:
-        raise ValueError("Não foi possível alinhar o crop final dentro da região segura")
-    return x, y, width, height
+        first_even_x = min_x if min_x % 2 == 0 else min_x + 1
+        last_even_x = max_x if max_x % 2 == 0 else max_x - 1
+        first_even_y = min_y if min_y % 2 == 0 else min_y + 1
+        last_even_y = max_y if max_y % 2 == 0 else max_y - 1
+
+        if first_even_x <= last_even_x and first_even_y <= last_even_y:
+            center_x_twice = 2 * sx + sw - width
+            center_y_twice = 2 * sy + sh - height
+            x_candidates = {
+                first_even_x,
+                last_even_x,
+                (center_x_twice // 4) * 2,
+                (center_x_twice // 4) * 2 + 2,
+            }
+            y_candidates = {
+                first_even_y,
+                last_even_y,
+                (center_y_twice // 4) * 2,
+                (center_y_twice // 4) * 2 + 2,
+            }
+            valid_x = [v for v in x_candidates if first_even_x <= v <= last_even_x]
+            valid_y = [v for v in y_candidates if first_even_y <= v <= last_even_y]
+            x = min(valid_x, key=lambda v: (abs(2 * v - center_x_twice), v))
+            y = min(valid_y, key=lambda v: (abs(2 * v - center_y_twice), v))
+
+            if (
+                x >= sx and y >= sy
+                and x + width <= sx + sw
+                and y + height <= sy + sh
+                and x % 2 == 0 and y % 2 == 0
+            ):
+                return x, y, width, height
+
+        units -= 2
+
+    raise ValueError("Área segura pequena demais para alinhar um crop 9:16 dentro da região segura")
 
 
 def _video_filter_graph(
