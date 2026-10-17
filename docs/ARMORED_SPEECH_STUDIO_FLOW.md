@@ -234,7 +234,7 @@ Speech prepara e valida as faixas e aplica a política/ganho do efeito. Studio m
 
 Foi movida a implementação de baixo nível do motor RVC para `armored_core/audio/rvc.py`. `ArmoredStudio/processing/rvc.py` foi reduzido a uma facade de compatibilidade que reexporta a interface pública anterior. O caminho de modelo/índice continua apontando para o diretório existente `ArmoredStudio/runtime/rvc`, e a resolução do ambiente continua usando a `.venv` da raiz.
 
-A extração manteve a facade v1 e o caminho do ambiente/modelos. Em commits posteriores nesta mesma branch, Speech passou a ter um produtor de pacote v2 que usa o motor compartilhado para Melody, gera silêncio determinístico para rotas não elegíveis e prepara a faixa de efeito uma vez por lote. O Studio tem validação v2 e um caminho de render que não reclassifica nem executa RVC/ganhos duplicados. Nenhum modelo, índice, asset ou arquivo de vídeo foi movido. O CI atual passou em compilação e **98 testes automatizados**. Isso não substitui o E2E real no Windows com Melody, ainda pendente.
+A extração manteve a facade v1 e o caminho do ambiente/modelos. Em commits posteriores nesta mesma branch, Speech passou a ter um produtor de pacote v2 que usa o motor compartilhado para Melody, gera silêncio determinístico para rotas não elegíveis e prepara a faixa de efeito uma vez por lote. O Studio tem validação v2 e um caminho de render que não reclassifica nem executa RVC/ganhos duplicados. Nenhum modelo, índice, asset ou arquivo de vídeo foi movido. O CI atual passou em compilação e **100 testes automatizados**. Isso não substitui o E2E real no Windows com Melody, ainda pendente.
 
 
 ## 15. Implementação do pacote v2 e portões do lote — 17/10/2026
@@ -250,45 +250,39 @@ O código experimental agora inclui:
 
 Para reduzir I/O em lotes extensos, a faixa de efeito é preparada uma vez por lote; a identidade/size/mtime de faixas compartilhadas alimentam um cache SHA-256 durante a validação; e o hash completo do modelo/índice Melody é conferido no preflight e no fechamento do lote, sem re-hash do modelo/índice por vídeo. Cada conversão ainda compara rapidamente o caminho e os metadados de arquivo antes de aceitar a saída.
 
-**Validação CI mais recente:** compileall passou e 98 testes passaram em 0,73 s no GitHub Actions: [run 39026971257](https://github.com/armoredcreator/audio/actions/runs/39026971257).
+**Validação CI mais recente:** compileall passou e 100 testes passaram em 0,70 s no GitHub Actions: [run 39029076011](https://github.com/armoredcreator/audio/actions/runs/39029076011).
 
 **Limite essencial:** os testes incluem WAVs sintéticos, stubs e o contrato/runner de laboratório. Não houve conversão real RVC nem renderização FFmpeg real no Windows usando o pacote v2 nesta etapa. A aprovação histórica em Windows vale para o caminho v1 anterior; o caminho v2 precisa repetir o E2E com o vídeo isolado de referência, comparar áudio/imagem/duração e validar SHA-256 antes/depois. A PR continua draft, sem merge, e nenhuma mudança foi portada ao repositório operacional.
 
 
-## 16. Preparar o E2E v2 real no Windows sem tocar no banco/original de origem
+## 16. Preparar o E2E v2 real no Windows usando um vídeo do laboratório
 
-A branch inclui `ArmoredSpeech/prepare_v2_smoke_fixture.py`, um utilitário de laboratório para preparar **um único item** já marcado READY e elegível para Melody:
+A branch inclui `ArmoredSpeech/prepare_v2_smoke_fixture.py` com dois caminhos de preparação:
 
-1. Lista itens candidatos no SQLite experimental, sem escrever nele.
-2. Copia o MP4 e o WAV sidecar para um workspace exclusivo sob `storage/Videos GRUPO_FONTE_1`, conferindo SHA-256.
-3. Usa o backup de SQLite para criar uma **cópia descartável do banco Speech**, insere nela uma linha de teste apontando para as cópias e grava um manifesto de lote completo aprovado.
-4. Não altera a mídia de origem nem o banco passado em `--speech-database`. O artefato novo fica sob `storage/validation/speech-v2-smoke-*/`; a cópia de mídia fica em uma pasta de teste identificada com `v2smoke_`.
+- **Com vídeo real de `storage/` (recomendado):** o utilitário copia o MP4 original para um workspace isolado, executa a análise real do `ModelProcessor` sobre a cópia, gera um WAV a partir dessa mesma cópia, valida SHA-256 e grava a decisão apenas em um SQLite de laboratório exclusivo, com nome `armored_speech_lab_*.sqlite3` sob `storage/database/`. Não abre o banco operacional `armoredcreator.db`.
+- **Com um registro Speech experimental já READY:** `--speech-database`, `--list-ready`, `--source-id` e `--item-id` mantêm o fluxo antigo de consulta somente leitura e cópia do registro elegível.
+
+No modo real, o MP4 de entrada precisa estar sob `storage/` e não dentro de `storage/validation/`. A amostra precisa ser classificada como `PT_BR_NARRATION`, idioma português, fala detectada, música não detectada e elegibilidade Melody verdadeira. Se não passar por essa condição, a preparação interrompe a execução; não força RVC.
 
 PowerShell, a partir da raiz do AudioLab:
 
 ```powershell
-# 1) Aponte somente para o SQLite experimental do ArmoredSpeech.
-$SpeechDb = '.\\storage\\database\\armored_speech_experimental.db'
-
-# 2) Liste candidatos READY, narração PT-BR limpa e RVC elegível.
-.\\.venv\\Scripts\\python.exe -m ArmoredSpeech.prepare_v2_smoke_fixture `
-  --root . --speech-database $SpeechDb --list-ready
-
-# 3) Use exatamente os source_id/item_id exibidos para preparar a cópia isolada.
-.\\.venv\\Scripts\\python.exe -m ArmoredSpeech.prepare_v2_smoke_fixture `
-  --root . --speech-database $SpeechDb `
-  --source-id 'COLE_SOURCE_ID' --item-id 'COLE_ITEM_ID'
+# Use um MP4 real que já esteja em storage.
+# O teste executa análise e extração em uma cópia; o original é preservado.
+.\.venv\Scripts\python.exe -m ArmoredSpeech.prepare_v2_smoke_fixture `
+  --root . `
+  --real-video '.\storage\1046_20uhmSz3VE.mp4'
 ```
 
-O utilitário imprime `MANIFEST_PATH` e `SPEECH_DATABASE_COPY`. Copie os caminhos mostrados para executar o lote real:
+O comando imprime `MANIFEST_PATH` e `SPEECH_DATABASE` (também expõe `SPEECH_DATABASE_COPY` como alias). Use exatamente os caminhos retornados:
 
 ```powershell
-.\\.venv\\Scripts\\python.exe -m ArmoredSpeech.studio_batch_runner `
+.\.venv\Scripts\python.exe -m ArmoredSpeech.studio_batch_runner `
   --root . `
   --manifest 'COLE_MANIFEST_PATH' `
-  --speech-database 'COLE_SPEECH_DATABASE_COPY'
+  --speech-database 'COLE_SPEECH_DATABASE'
 ```
 
-**Não acrescente `--copy-only` ao teste real.** O runner exigirá FFmpeg, o banner, o efeito sonoro existente e, se a linha for elegível, o modelo/índice Melody existentes. Um lote bem-sucedido gera um relatório JSON em `storage/validation/` e a saída MP4 na pasta de teste; confira o relatório, ouça o áudio, inspecione o vídeo/streams e compare o SHA-256 do original de teste antes/depois.
+**Não acrescente `--copy-only` ao teste real.** O runner exigirá FFmpeg, o banner, o efeito sonoro e, para rota elegível, modelo/índice Melody existentes. Ele renderiza somente a cópia isolada com identidade `v2smoke_real_*`. Não envia nada ao Hub.
 
-Se o arquivo SQLite tiver outro nome, substitua o exemplo pelo caminho real **do banco experimental**. O utilitário recusa o nome comum do banco operacional `armoredcreator.db`, exige a tabela de registro experimental de Speech e abre a fonte em modo somente leitura. Caso não apareça nenhum candidato, não force a elegibilidade: selecione um áudio READY classificado explicitamente, ou conclua primeiro a preparação Speech desse item.
+O relatório do runner e o MP4 renderizado ficam no espaço de validação/workspace do laboratório. Antes de considerar o E2E aprovado, conferir o resultado do runner, abrir o vídeo, ouvir a saída, inspecionar streams e duração, e confirmar que o hash do MP4 de entrada original permaneceu inalterado. Os testes de CI usam stubs para o preparador de mídia: eles validam a lógica da fixture, mas não substituem a conversão real Melody nem o render FFmpeg no Windows.
