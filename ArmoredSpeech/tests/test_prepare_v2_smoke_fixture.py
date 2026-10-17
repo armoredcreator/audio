@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ArmoredSpeech import model_processor
 from ArmoredSpeech.contracts import AudioClass, SpeechDecision
+from armored_core.storage import Storage
 from ArmoredSpeech.prepare_v2_smoke_fixture import (
     create_real_video_smoke_fixture,
     create_smoke_fixture,
@@ -162,7 +163,7 @@ def test_smoke_fixture_clones_database_and_media_without_mutating_sources(tmp_pa
 
 def test_real_video_smoke_fixture_uses_model_processor_and_only_mutates_cloned_db(tmp_path, monkeypatch):
     database, registered_original, registered_wav, _ = _fixture(tmp_path)
-    source_video = tmp_path / "storage" / "1046_20uhmSz3VE.mp4"
+    source_video = tmp_path / "storage" / "Videos GRUPO_FONTE_teste" / "2_narração_pt.mp4"
     source_video.parent.mkdir(parents=True, exist_ok=True)
     source_video.write_bytes(b"byte-identical real-video stand-in")
     source_bytes = source_video.read_bytes()
@@ -193,7 +194,7 @@ def test_real_video_smoke_fixture_uses_model_processor_and_only_mutates_cloned_d
     fixture = create_real_video_smoke_fixture(
         tmp_path,
         source_video=source_video,
-        test_source_id="source1",
+        test_source_id="source_teste",
     )
 
     copied_original = Path(fixture["original_copy"])
@@ -213,6 +214,9 @@ def test_real_video_smoke_fixture_uses_model_processor_and_only_mutates_cloned_d
     assert _sha(copied_original) == source_hash
     assert copied_wav.is_file()
     assert copied_original.parent == copied_wav.parent
+    assert copied_original.parent.parent == tmp_path / "storage" / "Videos GRUPO_FONTE_teste"
+    assert manifest["items"][0]["source_id"] == "source_teste"
+    assert manifest["items"][0]["content_id"].startswith("source_teste_")
     assert manifest["items"][0]["original_path"] == str(copied_original)
 
     with sqlite3.connect(database) as connection:
@@ -247,10 +251,62 @@ def test_real_video_smoke_fixture_rejects_validation_fixtures(tmp_path):
     fixture_video.write_bytes(b"fixture")
     try:
         create_real_video_smoke_fixture(
-            tmp_path, source_video=fixture_video, test_source_id="source1"
+            tmp_path, source_video=fixture_video, test_source_id="source_teste"
         )
     except Exception as exc:
         assert "storage/validation" in str(exc)
     else:
         raise AssertionError("validation media must not be accepted as a real storage source")
+
+
+def test_named_test_source_uses_original_source_workspace_pattern(tmp_path):
+    storage = Storage(tmp_path)
+    assert storage.source_workspace_root("source1") == tmp_path / "storage" / "Videos GRUPO_FONTE_1"
+    assert storage.source_workspace_root("source_teste") == (
+        tmp_path / "storage" / "Videos GRUPO_FONTE_teste"
+    )
+
+
+def test_real_video_smoke_fixture_allows_resolved_non_melody_route(tmp_path, monkeypatch):
+    database, _, _, _ = _fixture(tmp_path)
+    source_video = tmp_path / "storage" / "Videos GRUPO_FONTE_teste" / "1_ruido.mp4"
+    source_video.parent.mkdir(parents=True, exist_ok=True)
+    source_video.write_bytes(b"real-video stand-in for resolved noise route")
+    source_hash = _sha(source_video)
+    decision = SpeechDecision(
+        audio_class=AudioClass.NOISE,
+        language=None,
+        speech_detected=False,
+        music_detected=False,
+        confidence=0.91,
+        rationale="resolved noise route in isolated unit test",
+    )
+
+    class FakeProcessor:
+        def analyze(self, path):
+            assert Path(path).is_file()
+            assert Path(path) != source_video
+            return decision
+
+        def prepare_wav(self, video_path, wav_path, prepared_decision):
+            assert prepared_decision is decision
+            _write_wav(Path(wav_path))
+
+    monkeypatch.setattr(model_processor, "ModelProcessor", FakeProcessor)
+    fixture = create_real_video_smoke_fixture(
+        tmp_path, source_video=source_video, test_source_id="source_teste"
+    )
+
+    assert fixture["audio_class"] == "NOISE"
+    assert fixture["rvc_eligible"] == "false"
+    assert fixture["music_detected"] == "false"
+    assert Path(fixture["original_copy"]).parent.parent == (
+        tmp_path / "storage" / "Videos GRUPO_FONTE_teste"
+    )
+    assert _sha(source_video) == source_hash
+    with sqlite3.connect(Path(fixture["speech_database"])) as connection:
+        row = connection.execute(
+            "SELECT audio_class, rvc_eligible, status FROM armored_speech_results"
+        ).fetchall()
+    assert row == [("NOISE", 0, "READY")]
 
