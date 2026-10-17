@@ -3,32 +3,36 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from ArmoredStudio.processing import rvc as legacy_rvc
-from armored_core.audio import rvc as shared_rvc
+from ArmoredSpeech import rvc_engine
 
 
-def test_legacy_studio_entry_point_delegates_to_shared_rvc_engine():
-    assert legacy_rvc.converter_voz is shared_rvc.converter_voz
-    assert legacy_rvc.converter_interno is shared_rvc.converter_interno
-    assert legacy_rvc.executar_no_rvc is shared_rvc.executar_no_rvc
-    assert legacy_rvc.localizar_modelo is shared_rvc.localizar_modelo
-    assert legacy_rvc.main is shared_rvc.main
-
-
-def test_shared_engine_keeps_existing_root_venv_and_model_location():
+def test_rvc_engine_is_owned_by_armoredspeech():
     repo_root = Path(__file__).resolve().parents[2]
-    expected_rvc_root = os.getenv("ARMORED_RVC_ROOT", "").strip()
-    if expected_rvc_root:
-        expected_rvc_root = str(Path(expected_rvc_root).expanduser().resolve())
-    else:
-        expected_rvc_root = str((repo_root / "ArmoredStudio" / "runtime" / "rvc").resolve())
+    speech_root = repo_root / "ArmoredSpeech"
 
-    assert shared_rvc.REPO_ROOT == repo_root
-    assert shared_rvc.SHARED_ENV_DIR == repo_root / ".venv"
-    assert shared_rvc.RVC_ROOT == Path(expected_rvc_root)
-    assert shared_rvc.MODELS_DIR == Path(expected_rvc_root) / "models"
-    # Keep legacy diagnostic path constants stable even though implementation
-    # now lives in the shared engine package.
-    assert legacy_rvc.BASE_DIR == repo_root / "ArmoredStudio" / "processing"
-    assert legacy_rvc.STUDIO_ROOT == repo_root / "ArmoredStudio"
-    assert legacy_rvc.REPO_ROOT == repo_root
+    assert rvc_engine.REPO_ROOT == repo_root
+    assert rvc_engine.SPEECH_ROOT == speech_root
+    assert Path(rvc_engine.__file__).resolve().parent == speech_root
+    assert rvc_engine.SHARED_ENV_DIR == repo_root / ".venv"
+    assert rvc_engine.BASE_DIR == speech_root
+
+
+def test_rvc_models_default_to_speech_runtime_not_studio():
+    repo_root = Path(__file__).resolve().parents[2]
+    configured = os.getenv("ARMORED_RVC_ROOT", "").strip()
+    expected_root = (
+        Path(configured).expanduser().resolve()
+        if configured
+        else (repo_root / "ArmoredSpeech" / "runtime" / "rvc").resolve()
+    )
+
+    assert rvc_engine.RVC_ROOT == expected_root
+    assert rvc_engine.MODELS_DIR == expected_root / "models"
+    assert Path(rvc_engine.MODELS_DIR).parts[-3:] == ("runtime", "rvc", "models") or configured
+
+
+def test_studio_has_no_importable_rvc_entry_point():
+    from ArmoredStudio import unified
+
+    assert not hasattr(unified, "converter_voz")
+    assert not hasattr(unified, "rvc")
