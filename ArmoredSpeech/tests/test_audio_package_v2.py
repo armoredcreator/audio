@@ -295,16 +295,21 @@ def test_audio_package_builder_prepares_tracks_without_changing_original(tmp_pat
     )
 
     assert package["route"] == "RVC_MELODY"
-    assert package["contract_version"] == 3
-    assert package["voice_track"]["path"] == str(output_dir / "voice.wav")
-    assert package["effect_track"]["path"] == str(output_dir / "effect.wav")
+    assert package["contract_version"] == 4
+    assert package["final_audio_track"]["path"] == str(output_dir / "final_audio.m4a")
+    assert package["final_audio_track"]["composition_owner"] == "ArmoredSpeech"
     assert package["audio_timeline"]["composition_owner"] == "ArmoredSpeech"
-    assert (output_dir / "voice.wav").is_file()
+    assert (output_dir / "final_audio.m4a").is_file()
     assert (output_dir / "package.json").is_file()
+    assert not (output_dir / "voice.wav").exists()
+    assert not (output_dir / "effect.wav").exists()
     assert not (output_dir / "rvc_input.wav").exists()
     assert not (output_dir / "rvc_raw.wav").exists()
+    assert "voice_track" not in package
+    assert "effect_track" not in package
+    assert "audio_filter_graph" not in package
     assert _sha(original) == original_hash
-    assert _validate(tmp_path, original, package).route == "RVC_MELODY"
+    assert _validate(tmp_path, original, package).final_audio_track_path == output_dir / "final_audio.m4a"
 
 
 def test_audio_package_builder_routes_unapproved_audio_to_silence_plus_effect(tmp_path, monkeypatch):
@@ -361,9 +366,11 @@ def test_audio_package_builder_routes_unapproved_audio_to_silence_plus_effect(tm
     assert package["route"] == "EFFECT_ONLY"
     assert package["rvc_model"] is None
     assert package["rvc_eligible"] is False
+    assert "voice_track" not in package
+    assert "effect_track" not in package
     assert _validate(
         tmp_path, original, package, expected_item_id="telegram-2"
-    ).route == "EFFECT_ONLY"
+    ).final_audio_track_path == Path(package["final_audio_track"]["path"])
 
 
 def test_audio_package_builder_fails_closed_when_music_evidence_is_unknown(tmp_path):
@@ -480,17 +487,18 @@ def test_audio_package_builder_reuses_shared_batch_effect_without_reencoding(tmp
     )
 
     assert package["route"] == "RVC_MELODY"
-    assert package["contract_version"] == 3
-    assert package["voice_track"]["path"] == str(output_dir / "voice.wav")
-    assert package["effect_track"]["path"] == str(shared_effect)
+    assert package["contract_version"] == 4
+    assert package["final_audio_track"]["path"] == str(output_dir / "final_audio.m4a")
     assert package["audio_timeline"]["composition_owner"] == "ArmoredSpeech"
+    assert not (output_dir / "voice.wav").exists()
     assert not (output_dir / "effect.wav").exists()
+    assert shared_effect.is_file()
     assert "EFFECT_TRACK_PREPARATION_FAILED" not in events
     assert events.count("RVC_MELODY") == 1
     assert _sha(original) == original_hash
     assert _validate(
         tmp_path, original, package, expected_item_id="telegram-shared"
-    ).effect_track_path == shared_effect
+    ).final_audio_track_path == output_dir / "final_audio.m4a"
 
 
 def test_batch_preflight_hashes_melody_model_and_index_only_once(tmp_path, monkeypatch):
