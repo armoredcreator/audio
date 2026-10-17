@@ -195,9 +195,14 @@ def run_complete_batch(
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         report_path = root / "storage" / "validation" / f"speech-studio-{safe_batch}-{stamp}.json"
     else:
-        report_path = _rooted_path(root, str(report_path), "report")
-        if not _inside(report_path.parent, root):
-            raise BatchManifestError("O relatório precisa ser salvo dentro do root do laboratório")
+        requested_report = Path(report_path).expanduser()
+        if not requested_report.is_absolute():
+            requested_report = root / requested_report
+        report_path = requested_report.resolve()
+        try:
+            report_path.parent.relative_to(root)
+        except ValueError as exc:
+            raise BatchManifestError("O relatório precisa ser salvo dentro do root do laboratório") from exc
 
     report: dict[str, Any] = {
         "schema_version": 1,
