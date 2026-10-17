@@ -188,3 +188,25 @@ def test_runner_rejects_manifest_item_count_mismatch(tmp_path):
             speech_database=database,
             copy_only=True,
         )
+
+
+
+def test_runner_preserves_an_existing_result_and_blocks_the_whole_batch(tmp_path):
+    manifest_path, database, manifest = _fixture(tmp_path, item_count=2)
+    first_item = manifest["items"][0]
+    prior_output = Path(first_item["workspace"]) / "telegram-1_demo-1.mp4"
+    prior_bytes = b"pre-existing valid output must be preserved"
+    prior_output.write_bytes(prior_bytes)
+
+    with pytest.raises(RuntimeError, match="preservar resultado anterior"):
+        run_complete_batch(
+            root=tmp_path,
+            manifest_path=manifest_path,
+            speech_database=database,
+            copy_only=True,
+        )
+
+    assert prior_output.read_bytes() == prior_bytes
+    second_item = manifest["items"][1]
+    second_output = Path(second_item["workspace"]) / "telegram-2_demo-2.mp4"
+    assert not second_output.exists()
