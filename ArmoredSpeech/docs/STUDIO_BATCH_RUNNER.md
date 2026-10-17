@@ -1,32 +1,51 @@
-# Speech batch → Studio visual renderer (contract v4)
+# Speech batch → Studio visual renderer (contract v5)
 
-O runner recebe um manifesto que declara o lote Speech completo e aprovado. Não descobre lote parcial pelo SQLite operacional e não abre banco de produção.
+O runner recebe um manifesto que declara um lote Speech completo e aprovado. Não descobre lote parcial pelo SQLite operacional, não abre banco de produção e bloqueia destinos já existentes.
 
-## Fluxo
+## Responsabilidades e fluxo
 
-1. Studio faz uma pré-análise somente visual: enquadramento seguro, barras, banner e detectores VEO/Gemini.
-2. Speech lê as decisões READY da base isolada, valida original/WAV, classifica o áudio e resolve a rota segura.
-3. Speech executa RVC Melody quando elegível, prepara o efeito com ganho aplicado uma vez, decide a timeline de áudio, faz trim/fades/mixagem/intro e executa FFmpeg para materializar **um único AAC/M4A final por item**.
-4. O handoff v4 contém identidade, hash do original, arquivo final AAC/M4A, hash/duração e metadados da timeline/plano visual. Não contém WAVs separados de voz/efeito nem grafo de áudio.
-5. O runner valida todos os artefatos finais e a integridade dos originais antes da primeira renderização.
-6. Studio recalcula/valida o plano visual correspondente e faz um único crop na fonte. O FFmpeg final aplica somente o grafo visual e copia o AAC pronto com `-c:a copy` para o MP4.
-7. O runner verifica saída e SHA-256 dos originais.
+1. **Studio faz pré-análise visual read-only:** dimensões, barras, banner, marcas VEO e Gemini e plano visual. O detector de marca Gemini é local (OpenCV/template matching); ele não chama a API Google Gemini.
+2. **Speech valida as decisões persistidas:** identidade, original/WAV, classe, idioma, fala/música e elegibilidade RVC.
+3. **Speech prepara os artefatos de áudio:** quando elegível, executa RVC Melody; prepara faixa de voz ou silêncio, prepara uma faixa de efeito compartilhada e aplica a política de ganho uma única vez.
+4. **Speech compõe a timeline e o grafo de áudio:** trims, fades, sincronização, intro sonora, mixagem, `audio_filter_graph`, `audio_output_label` e as opções de codificação declaradas pelo contrato.
+5. **Handoff v5:** identidade, original e hash, caminhos/hashes/metadados das faixas `voice_track` e `effect_track`, grafo de áudio, timeline, plano visual assinado por hash e opções de renderização. Não é um AAC/M4A final pré-renderizado.
+6. O runner valida o lote e todos os pacotes antes do primeiro render. Plano/timeline divergentes, caminho fora do laboratório, hash incorreto, rota inconsistente ou artefato ausente bloqueiam o processamento.
+7. Studio valida o handoff, aplica um crop canônico na fonte e combina o grafo visual com o grafo de áudio do Speech em **uma única invocação FFmpeg para a renderização audiovisual final**.
+8. O runner confere a existência do resultado, a identidade do item e o SHA-256 do original.
+
+A regra de uma chamada FFmpeg vale para a renderização audiovisual final. Speech continua autorizado a usar FFmpeg para extração e preparação/normalização de áudio antes dela.
 
 ## Comandos
 
 Na raiz do laboratório:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-.\ArmoredSpeech\scripts\migrate_audio_assets.ps1
+.\\.venv\\Scripts\\python.exe -m compileall -q ArmoredSpeech ArmoredStudio armored_core
+.\\.venv\\Scripts\\python.exe -m pytest -q
+.\\.venv\\Scripts\\python.exe -m ArmoredSpeech.studio_batch_runner --root . --manifest '.\\storage\\validation\\<manifesto-aprovado>\\manifest.json' --speech-database '.\\storage\\database\\<sqlite-isolado>.sqlite3'
 ```
 
-O E2E real requer os modelos/índices em `ArmoredSpeech/runtime/rvc/models`, o efeito em `ArmoredSpeech/assets/efeitosonoro.wav`, o corpus local e um manifesto Speech aprovado. O script de migração copia e confere SHA-256 sem apagar os ativos antigos; só remova a origem após o E2E v4 real ser aprovado.
+O teste real não deve usar `--copy-only`. Escolha um manifesto já revisado e um banco de Speech experimental correspondente; não use `storage/database/armoredcreator.db`. Antes de executar, confira o HEAD, hashes dos originais, ativos necessários e inexistência do destino. Gere relatório/log novos por tentativa; não apague evidências nem sobrescreva resultados anteriores.
 
-## Separação e segurança
+## E2E v5 confirmado em 17/10/2026
 
-- A rota RVC/EFFECT_ONLY, o silêncio, a mixagem, os ganhos, fades e o AAC final pertencem ao Speech.
-- Studio só valida o artefato final, edita pixels e faz mux da trilha já codificada.
-- Um crop canônico é aplicado uma vez no grafo visual.
-- Há uma única invocação FFmpeg final por vídeo no Studio. Speech ainda usa suas próprias invocações FFmpeg para preparar o áudio.
-- Nenhum teste desta branch publica no Hub.
+Item `source_teste` / mensagem `5` concluído em Windows:
+- Runner: `STUDIO_SPEECH_BATCH=SUCCESS`, `MODE=REAL_STUDIO`, `ITEMS=1`, `ORIGINALS_INTACT=True`, exit code `0`.
+- Classificação/rota: `PT_BR_NARRATION` → `RVC_MELODY`.
+- Pacote criado e validado: `voice.wav`, `_shared/effect.wav` e `package.json`.
+- Vídeo de saída: `storage/Videos GRUPO_FONTE_teste/5/5_finaldomeulinknovo.mp4`.
+- Saída: H.264 1080×1920, 11,420 s; áudio AAC estéreo 44.100 Hz, 11,401 s.
+- Hash do original antes/depois: `c489fcaae803f36407c82dde3b93ff68077001ef5607909081a2c6555bee15a1`; igual ao manifesto.
+- O usuário confirmou visualmente o tratamento que removeu a marca d'água Gemini neste item.
+
+Relatório: `storage/validation/speech-studio-v5-item5-20261017T185708Z.json`  
+Log: `storage/validation/speech-studio-v5-item5-20261017T185708Z.log`
+
+O resultado comprova o caminho PT-BR/RVC v5 para esse item e preservação do original. Ainda é preciso testar cada classe sem RVC, revisar todas as rotas e terminar a auditoria de dependências antes de remover os ativos legados. Nenhum teste desta branch publica no Hub.
+
+## Segurança e isolamento
+
+- Sem escrita/leitura do banco operacional pelo runner, sem publicação e sem integração automática no repositório principal.
+- Não remover os assets antigos antes de testar rotas não-RVC e revisar referências.
+- Preservar originais, corpus, manifestos, relatórios, pacotes e vídeos de evidência.
+- A PR #5 permanece em draft até a revisão final e os testes de rotas adicionais.
