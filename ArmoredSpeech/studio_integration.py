@@ -148,8 +148,14 @@ def prepare_audio_packages_for_items(
                 "rvc_python_path": preflight["rvc_python_path"],
                 "rvc_model_path": preflight["rvc_model_path"],
                 "rvc_model_sha256": preflight["rvc_model_sha256"],
+                "rvc_model_size": preflight["rvc_model_size"],
+                "rvc_model_mtime_ns": preflight["rvc_model_mtime_ns"],
+                "rvc_model_inode": preflight["rvc_model_inode"],
                 "rvc_index_path": preflight["rvc_index_path"],
                 "rvc_index_sha256": preflight["rvc_index_sha256"],
+                "rvc_index_size": preflight["rvc_index_size"],
+                "rvc_index_mtime_ns": preflight["rvc_index_mtime_ns"],
+                "rvc_index_inode": preflight["rvc_index_inode"],
             }
 
     # The effect is the same project asset for the entire batch. Normalize and
@@ -183,4 +189,30 @@ def prepare_audio_packages_for_items(
 
     if sha256_file(effect_source_path).lower() != effect_source_hash.lower():
         raise RuntimeError("Project sound-effect asset changed during whole-batch Speech preparation")
+
+    if rvc_asset_fingerprint is not None:
+        # The full Melody/index hashes are checked once at the end of the
+        # complete Speech batch. Per-item checks above use path/size/mtime/inode
+        # so large model files aren't re-read for every video.
+        from armored_core.audio.rvc import localizar_modelo, resolver_rvc_python
+
+        if str(resolver_rvc_python().resolve(strict=True)) != rvc_asset_fingerprint["rvc_python_path"]:
+            raise RuntimeError("RVC Python environment changed during whole-batch Speech preparation")
+        model, index = localizar_modelo("melody")
+        if (
+            str(model.resolve(strict=True)) != rvc_asset_fingerprint["rvc_model_path"]
+            or sha256_file(model).lower() != str(rvc_asset_fingerprint["rvc_model_sha256"]).lower()
+        ):
+            raise RuntimeError("Melody model changed during whole-batch Speech preparation")
+        expected_index = rvc_asset_fingerprint.get("rvc_index_path")
+        if expected_index is None:
+            if index is not None:
+                raise RuntimeError("Melody index appeared during whole-batch Speech preparation")
+        elif (
+            index is None
+            or str(index.resolve(strict=True)) != str(expected_index)
+            or sha256_file(index).lower() != str(rvc_asset_fingerprint["rvc_index_sha256"]).lower()
+        ):
+            raise RuntimeError("Melody index changed during whole-batch Speech preparation")
+
     return prepared
