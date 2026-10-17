@@ -72,3 +72,65 @@ def process_items_with_speech(
         studio.process(item, speech_payload=payload)
         for item, payload in prepared
     ]
+
+
+def prepare_audio_packages_for_items(
+    items,
+    *,
+    speech_database: Path,
+    workspace_root: Path,
+    package_root: Path,
+    effect_source_path: Path,
+) -> list[tuple[object, dict]]:
+    """Preflight the entire v1 registry, then create every Speech v2 package.
+
+    This function deliberately does not call Studio. Its caller must validate
+    every returned v2 payload before making the first Studio process call.
+    """
+    import hashlib
+    import re
+
+    from .audio_package import prepare_audio_package
+
+    root = Path(workspace_root).resolve(strict=True)
+    package_root = Path(package_root).expanduser().resolve()
+    try:
+        package_root.relative_to(root)
+    except ValueError as exc:
+        raise RuntimeError("Audio package root must stay inside the lab root") from exc
+    effect_source_path = Path(effect_source_path).expanduser().resolve(strict=True)
+
+    # Read/validate all persisted decisions before spending CPU on any RVC run.
+    directives = []
+    for item in items:
+        directive = export_audio_directive(
+            Path(speech_database),
+            source_id=str(item.source_id),
+            item_id=str(item.telegram_message_id),
+            require_files=True,
+        )
+        directives.append((item, directive.to_payload()))
+
+    def safe_component(value: object) -> str:
+        original = str(value)
+        slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", original).strip("._-") or "item"
+        return f"{slug[:64]}-{hashlib.sha256(original.encode('utf-8')).hexdigest()[:10]}"
+
+    prepared: list[tuple[object, dict]] = []
+    for item, directive_payload in directives:
+        output_dir = (
+            package_root
+            / safe_component(item.source_id)
+            / safe_component(item.telegram_message_id)
+        )
+        package = prepare_audio_package(
+            directive_payload,
+            item,
+            workspace_root=root,
+            effect_source_path=effect_source_path,
+            output_dir=output_dir,
+            voice="melody",
+        )
+        prepared.append((item, package))
+
+    return prepared
