@@ -59,6 +59,7 @@ class ValidatedAudioPackage:
     effect_sha256: str
     audio_filter_graph: str
     audio_output_label: str
+    audio_render_options: dict[str, Any]
     audio_timeline: dict[str, Any]
     original_sha256: str
     visual_plan_sha256: str
@@ -204,6 +205,18 @@ def validate_audio_package(
     timeline = payload.get("audio_timeline")
     if not isinstance(timeline, dict):
         raise SpeechHandoffError("Speech audio timeline metadata is missing")
+    render_options = timeline.get("render_options")
+    if not isinstance(render_options, dict):
+        raise SpeechHandoffError("Speech final audio render options are missing")
+    if (
+        render_options.get("codec") != "aac"
+        or not isinstance(render_options.get("bitrate"), str)
+        or not re.fullmatch(r"[0-9]{2,3}k", render_options["bitrate"])
+        or render_options.get("sample_rate") != 44100
+        or render_options.get("channels") != 2
+        or render_options.get("effect_input_loop") is not True
+    ):
+        raise SpeechHandoffError("Speech final audio render options are invalid")
     visual_plan_hash = timeline.get("visual_plan_sha256")
     graph_hash = timeline.get("filter_graph_sha256")
     if not _valid_sha256(visual_plan_hash) or not _valid_sha256(graph_hash):
@@ -253,6 +266,7 @@ def validate_audio_package(
         effect_sha256=effect_hash,
         audio_filter_graph=graph,
         audio_output_label=output_label,
+        audio_render_options=dict(render_options),
         audio_timeline=dict(timeline),
         original_sha256=actual_original_hash,
         visual_plan_sha256=visual_plan_hash.lower(),
