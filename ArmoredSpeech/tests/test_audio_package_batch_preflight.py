@@ -55,7 +55,7 @@ def test_batch_preflights_all_directives_and_inputs_before_first_package_build(t
         events.append(("build", item.telegram_message_id))
         assert kwargs["preflight"]["preflight_for"] == item.telegram_message_id
         assert kwargs["prepared_effect_track"]["_prepared_and_verified"] is True
-        return {"contract_version": 2, "item_id": item.telegram_message_id}
+        return {"contract_version": 3, "item_id": item.telegram_message_id}
 
     monkeypatch.setattr(integration, "export_audio_directive", fake_export)
     monkeypatch.setattr(audio_package, "preflight_audio_package", fake_preflight)
