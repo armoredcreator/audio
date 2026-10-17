@@ -279,6 +279,13 @@ def test_visual_renderer_combines_audio_and_video_graphs_in_one_ffmpeg_call(tmp_
         video, voice, effect, banner, output,
         audio_filter_graph=audio_graph,
         audio_output_label="[main_a]",
+        audio_render_options={
+            "codec": "aac",
+            "bitrate": "192k",
+            "sample_rate": 44100,
+            "channels": 2,
+            "effect_input_loop": True,
+        },
         position="final",
         intro=False,
         plan={"video_start": 0.0},
