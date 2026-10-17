@@ -53,6 +53,18 @@ def _readonly_connection(database: Path) -> sqlite3.Connection:
     return connection
 
 
+def _resolve_media_path(value: object, root: Path, label: str) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        raise SmokeFixtureError(f"{label} path is missing")
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    try:
+        return path.resolve(strict=True)
+    except OSError as exc:
+        raise SmokeFixtureError(f"{label} path does not exist: {path}") from exc
+
+
 def _validate_database_path(root: Path, database: Path) -> Path:
     root = Path(root).resolve(strict=True)
     database = Path(database).expanduser().resolve(strict=True)
@@ -122,9 +134,12 @@ def list_ready_candidates(
 
     candidates = []
     for row in rows:
-        original = Path(row["video_path"]).expanduser()
-        wav_path = Path(row["wav_path"]) if row["wav_path"] else None
-        if not original.is_file() or wav_path is None or not wav_path.is_file():
+        try:
+            original = _resolve_media_path(row["video_path"], root, "Original")
+            wav_path = _resolve_media_path(row["wav_path"], root, "Speech WAV")
+        except SmokeFixtureError:
+            continue
+        if not original.is_file() or not wav_path.is_file():
             continue
         candidates.append({
             "source_id": str(row["source_id"]),
@@ -177,8 +192,8 @@ def create_smoke_fixture(
             "evidence and rvc_eligible=1"
         )
 
-    source_original = Path(row["video_path"]).expanduser().resolve(strict=True)
-    source_wav = Path(row["wav_path"]).expanduser().resolve(strict=True)
+    source_original = _resolve_media_path(row["video_path"], root, "Original")
+    source_wav = _resolve_media_path(row["wav_path"], root, "Speech WAV")
     if not source_original.is_file() or source_original.suffix.casefold() != ".mp4":
         raise SmokeFixtureError("Selected original must be an existing MP4 file")
     if not source_wav.is_file() or source_wav.suffix.casefold() != ".wav":
