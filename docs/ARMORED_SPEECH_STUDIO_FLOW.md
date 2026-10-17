@@ -186,3 +186,37 @@ Este é o documento canônico para fluxo, arquitetura, evidências, riscos, test
 - Não sobrescrever nem apagar originais, banco local, credenciais, modelo/índice RVC ou assets.
 - Não corrigir o falso positivo Gemini no mesmo conjunto de mudanças.
 - Nenhuma integração de produção é considerada aprovada apenas pela existência deste documento.
+
+
+## 12. Auditoria estática detalhada — 17/10/2026
+
+### Dependências reais confirmadas
+
+- `ArmoredSpeech/studio_integration.py` exporta uma decisão READY pelo `studio_bridge.py` e prepara todas as decisões do lote antes da primeira chamada a `studio.process`.
+- `ArmoredStudio/service.py` chama `UnifiedStudio.process`, que ainda valida o handoff, usa a decisão de Speech como override de classificação, volta a decidir elegibilidade RVC, extrai áudio via FFmpeg, gera silêncio quando necessário, chama `processing.rvc.converter_voz` e invoca `processing.finalizer.finalizar`.
+- `ArmoredStudio/processing/rvc.py` resolve o Python da raiz e carrega o `.pth` e o índice `.index` existentes em `ArmoredStudio/runtime/rvc/models/<voz>`. Reutilizar esta implementação e os assets; não recriar nem substituir modelos.
+- `ArmoredStudio/processing/finalizer.py` controla volume da voz, normalização/volume do efeito, mistura via `amix`, introdução e concatenação audiovisual. A mistura é feita no caminho com e sem intro.
+- `ArmoredStudio/speech_handoff.py` só aceita contrato v1 e WAV sidecar com nome-base igual ao original. Para áudio final precisaremos validar também o hash do artefato, formato, canais, sample rate, duração e rota.
+- `ArmoredSpeech/media.py` hoje prepara WAV mono 16 kHz de referência e pode gerar stem vocal para classe mista. Porém `studio_bridge.py` bloqueia RVC para classe mista, enquanto o teste de `model_processor.py` permite elegibilidade após separação. Até existir validação explícita do stem, a regra operacional segura continua bloqueando Melody para áudio misto.
+
+### Bloqueio de sincronização que precisa de solução antes de remover a mistura
+
+Hoje `finalizer.py` aplica `plan.audio_start` à voz antes de misturá-la, enquanto o efeito sonoro começa desde o início. Se Speech entregar um único WAV já mixado e Studio aplicar `audio_start` nesse WAV, o começo do efeito também será cortado/deslocado. Não podemos simplesmente remover o filtro temporal nem duplicar a mixagem. A migração deve preservar a semântica atual e testar `audio_start = 0` e `audio_start > 0` antes de aposentar o caminho antigo.
+
+### Testes identificados
+
+- `test_studio_bridge.py`, `test_studio_adapter.py`: payload, caminhos, hashes e elegibilidade.
+- `test_studio_integration.py`, `test_studio_integration_contract.py`: rotas e contrato de consumo; o caminho de integração usa modo copy-only, não prova RVC/renderização real.
+- `test_studio_batch_runner.py`, `test_studio_batch_integration.py`: lote completo, preflight e preservação dos originais/saídas.
+- `test_armoredspeech_model_processor.py`, `test_armoredspeech_audio_intelligence.py`, `test_armoredspeech_contracts.py`: classificação e decisão.
+- `validate_real_audio.py`, `validate_full_corpus.py` e `diagnose_real_audio.py`: ferramentas para corpus/áudio real; não substituem testes automatizados.
+
+Esta foi uma auditoria estática do código remoto; não executei testes nem renderização nesta sessão. O E2E aprovado anteriormente é evidência do caminho antigo, não da migração ainda não implementada.
+
+### Portões obrigatórios antes de aposentar v1
+
+1. Testes de contrato v2 para identidade, rota, estado, hash, formato, canais, sample rate, duração e caminhos dentro do workspace.
+2. Testes provando que Melody não é executado para música, silêncio, ruído, fala estrangeira, classe mista ou decisão desconhecida.
+3. Teste que o Studio não reclassifica, não chama RVC e não mistura novamente quando recebe contrato v2.
+4. Testes temporais para `audio_start = 0` e `audio_start > 0`.
+5. Compatibilidade v1 temporária, mutuamente exclusiva com v2 por item, para impedir RVC/mixagem duplicados.
