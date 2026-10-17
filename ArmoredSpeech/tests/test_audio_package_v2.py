@@ -126,35 +126,33 @@ def _validate(
     )
 
 
-def test_valid_v2_audio_package_validates_track_hashes_and_identity(tmp_path):
+def test_valid_v3_audio_package_validates_final_track_hash_and_identity(tmp_path):
     original, voice, effect, payload = _package(tmp_path)
 
     result = _validate(tmp_path, original, payload)
 
     assert result.route == "RVC_MELODY"
     assert result.rvc_eligible is True
-    assert result.voice_track_path == voice
-    assert result.effect_track_path == effect
-    assert result.voice_sha256 == _sha(voice)
-    assert result.effect_sha256 == _sha(effect)
+    assert result.final_audio_track_path == voice
+    assert result.final_audio_sha256 == _sha(voice)
 
 
 @pytest.mark.parametrize("field,value", [
     ("status", "PROCESSING"),
-    ("contract_version", 1),
+    ("contract_version", 2),
     ("route", "UNKNOWN"),
     ("rvc_model", "another-model"),
     ("source_id", "wrong-source"),
     ("item_id", "wrong-item"),
 ])
-def test_v2_package_rejects_wrong_status_contract_route_or_identity(tmp_path, field, value):
+def test_v3_package_rejects_wrong_status_contract_or_identity(tmp_path, field, value):
     original, _, _, payload = _package(tmp_path, **{field: value})
 
     with pytest.raises(SpeechHandoffError):
         _validate(tmp_path, original, payload)
 
 
-def test_v2_package_rejects_mutated_track_hash(tmp_path):
+def test_v3_package_rejects_mutated_final_track_hash(tmp_path):
     original, voice, _, payload = _package(tmp_path)
     voice.write_bytes(voice.read_bytes() + b"tampered")
 
@@ -162,22 +160,24 @@ def test_v2_package_rejects_mutated_track_hash(tmp_path):
         _validate(tmp_path, original, payload)
 
 
-def test_v2_package_rejects_track_outside_workspace(tmp_path):
+def test_v3_package_rejects_final_track_outside_workspace(tmp_path):
     original, _, _, payload = _package(tmp_path)
     outside = tmp_path.parent / f"{tmp_path.name}-outside.wav"
     _write_wav(outside)
-    payload["voice_track"]["path"] = str(outside)
-    payload["voice_track"]["sha256"] = _sha(outside)
+    payload["final_audio_track"]["path"] = str(outside)
+    payload["final_audio_track"]["sha256"] = _sha(outside)
 
     with pytest.raises(SpeechHandoffError, match="inside the lab workspace"):
         _validate(tmp_path, original, payload)
 
 
-def test_v2_package_requires_explicit_no_music_evidence_for_melody(tmp_path):
+def test_studio_validator_does_not_reclassify_speech_audio_policy(tmp_path):
     original, _, _, payload = _package(tmp_path, music_detected=None)
 
-    with pytest.raises(SpeechHandoffError, match="Unsafe or inconsistent RVC_MELODY"):
-        _validate(tmp_path, original, payload)
+    # Speech is responsible for classification and the Melody eligibility gate.
+    # Studio validates the already-completed soundtrack and its file contract.
+    result = _validate(tmp_path, original, payload)
+    assert result.final_audio_track_path.is_file()
 
 
 def test_audio_package_builder_prepares_tracks_without_changing_original(tmp_path, monkeypatch):
