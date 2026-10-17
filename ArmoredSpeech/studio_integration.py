@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-"""Prepare Speech-owned RVC/effect/timeline artifacts for the completed batch.
+"""Prepare Speech-owned audio and final AAC/M4A artifacts for a complete batch.
 
-This module does not call Studio or render videos. It reads only Speech-owned
-SQLite decisions and produces validated audio graph contracts for the final
-single-pass Studio renderer.
+This module does not call Studio or render video. It reads Speech-owned SQLite
+decisions, prepares/validates audio internally, and returns only final audio
+artifacts for the Studio visual renderer.
 """
 
 from pathlib import Path
@@ -23,14 +23,13 @@ def prepare_audio_packages_for_items(
     intro: bool = True,
     intro_position: str = "final",
 ) -> list[tuple[object, dict]]:
-    """Prepare a Speech-owned audio-render recipe for every item in the batch.
+    """Prepare one completed AAC/M4A soundtrack per item for the whole batch.
 
     The caller supplies a read-only visual plan so Speech can calculate temporal
-    relationships. This function owns all audio decisions, route selection,
-    RVC, effect preparation/gain, and the audio filter graph. It does not call
-    Studio or render video. The v3 payload declares validated input tracks and
-    the complete audio graph; Studio only combines that graph with the visual
-    graph in one final audiovisual FFmpeg call.
+    relationships. Speech owns audio decisions, RVC, effect preparation/gain,
+    synchronization, mix/fades and final audio encoding. This function does not
+    call Studio or render video. The v4 payload exports one final validated audio
+    file; Studio receives no component tracks or audio filter graph.
     """
     import hashlib
     import re
