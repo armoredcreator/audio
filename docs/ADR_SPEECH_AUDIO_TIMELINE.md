@@ -1,6 +1,6 @@
 # Decisão técnica — áudio Speech → Studio e alinhamento temporal
 
-**Status:** decisão aplicada parcialmente nesta branch isolada. O pacote v2 de Speech, o validador Studio, o finalizer de faixas preparadas e a invocação do motor RVC via `armored_core.audio.rvc` estão codificados e cobertos por testes sintéticos/CI. O E2E real Windows/RVC v2 continua pendente.  
+**Status:** decisão aplicada parcialmente nesta branch isolada. O pacote v2 de Speech, o validador Studio, o finalizer de faixas preparadas e a invocação do motor RVC via `armored_core.audio.rvc` estão codificados e cobertos por testes sintéticos/CI. O E2E real Windows/RVC v2 continua pendente. Um utilitário de fixture isolada foi adicionado para tornar esse teste reproduzível sem modificar o banco ou o original de origem.  
 **Branch:** `design/speech-studio-audio-timeline-20261017`  
 **Contexto:** a fase ArmoredSpeech deve concluir o lote aprovado antes da fase de processamento do ArmoredStudio. O Studio descobre `video_start` e `audio_start` com o plano visual.
 
@@ -75,7 +75,7 @@ O v2 deve rejeitar caminhos fora do workspace, arquivos vazios/ilegíveis, hashe
 3. **Feito:** o validador Studio aceita v1 e v2; v2 valida identidades, caminhos, hash do original, rota e metadados/hash das faixas.
 4. **Feito no runner de laboratório:** v1 é usado no modo copy-only; execução real usa v2. O lote e todos os pacotes são preflightados antes da primeira chamada ao Studio, impedindo processamento parcial.
 5. **Feito no finalizer v2:** recebe voz e efeito já preparados, aplica o corte temporal apenas à voz e combina as faixas sem repetir a normalização/ganho; a intro mantém seus fades/trim próprios.
-6. **Feito em testes sintéticos:** cobrem as rotas, os hashes, o hash-cache do efeito compartilhado, a reutilização do fingerprint Melody, bloqueio do lote se um pacote falhar, e `audio_start=0`/`audio_start>0`. A compilação e 96 testes CI passaram.
+6. **Feito em testes sintéticos:** cobrem as rotas, os hashes, o hash-cache do efeito compartilhado, a reutilização do fingerprint Melody, bloqueio do lote se um pacote falhar, e `audio_start=0`/`audio_start>0`. A compilação e 98 testes CI passaram.
 7. **Pendente:** executar no Windows com FFmpeg e o modelo/índice Melody reais, usando cópia isolada do vídeo E2E previamente aprovado; comparar áudio, imagem, duração e hashes antes/depois.
 8. **Pendente:** aposentar v1 e remover caminhos antigos somente depois do E2E real v2 ser aprovado manualmente. Não mesclar esta PR antes disso.
 
@@ -91,4 +91,4 @@ O v2 deve rejeitar caminhos fora do workspace, arquivos vazios/ilegíveis, hashe
 
 ## 8. Limitações e evidência
 
-A decisão e a implementação resultam da auditoria de `unified.py`, `speech_handoff.py`, `processing/rvc.py`, `processing/finalizer.py`, `studio_bridge.py`, `media.py`, do novo produtor de pacote v2 e dos testes de contrato/lote. CI mais recente passou em compilação e 96 testes automatizados. Não houve renderização FFmpeg real nem conversão RVC real com o novo caminho Speech-owned nesta etapa. O E2E histórico aprovado prova apenas a rota anterior testada, não a arquitetura v2.
+A decisão e a implementação resultam da auditoria de `unified.py`, `speech_handoff.py`, `processing/rvc.py`, `processing/finalizer.py`, `studio_bridge.py`, `media.py`, do novo produtor de pacote v2 e dos testes de contrato/lote. CI mais recente passou em compilação e 98 testes automatizados. Não houve renderização FFmpeg real nem conversão RVC real com o novo caminho Speech-owned nesta etapa. O E2E histórico aprovado prova apenas a rota anterior testada, não a arquitetura v2.
