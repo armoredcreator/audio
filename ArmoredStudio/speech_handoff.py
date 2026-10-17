@@ -125,91 +125,17 @@ def validate_handoff(
 
 @dataclass(frozen=True, slots=True)
 class ValidatedAudioPackage:
-    """A fully validated v2 package produced by ArmoredSpeech."""
+    """Minimal validated v3 handoff: one completed Speech-owned soundtrack."""
     source_id: str
     item_id: str
     original_path: Path
-    voice_track_path: Path
-    effect_track_path: Path
+    final_audio_track_path: Path
     audio_class: str
-    language: str
     route: str
-    rvc_eligible: bool
     original_sha256: str
-    voice_sha256: str
-    effect_sha256: str
-
-
-def _validate_audio_track(
-    raw: object,
-    *,
-    workspace: Path,
-    label: str,
-    track_hash_cache: dict[tuple[str, int, int, int, int], str] | None = None,
-) -> tuple[Path, str, dict[str, object]]:
-    if not isinstance(raw, dict):
-        raise SpeechHandoffError(f"{label} metadata missing or invalid")
-    try:
-        path = Path(raw["path"]).resolve(strict=True)
-        expected_hash = raw["sha256"]
-        sample_rate = raw["sample_rate"]
-        channels = raw["channels"]
-        duration = float(raw["duration_seconds"])
-        format_name = raw["format"]
-    except (KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
-        raise SpeechHandoffError(f"{label} metadata or path unavailable") from exc
-
-    if not path.is_file() or not _is_within(path, workspace):
-        raise SpeechHandoffError(f"{label} must be a file inside the lab workspace")
-    if path.stat().st_size <= 44:
-        raise SpeechHandoffError(f"{label} file is empty or too small")
-    if format_name != "wav-pcm-s16le":
-        raise SpeechHandoffError(f"{label} must declare wav-pcm-s16le")
-    if isinstance(sample_rate, bool) or sample_rate != 44100:
-        raise SpeechHandoffError(f"{label} must use 44100 Hz")
-    if isinstance(channels, bool) or channels != 2:
-        raise SpeechHandoffError(f"{label} must use stereo audio")
-    if not isinstance(expected_hash, str) or len(expected_hash) != 64:
-        raise SpeechHandoffError(f"{label} SHA-256 metadata invalid")
-    try:
-        int(expected_hash, 16)
-    except ValueError as exc:
-        raise SpeechHandoffError(f"{label} SHA-256 metadata invalid") from exc
-    if not (duration > 0.0):
-        raise SpeechHandoffError(f"{label} duration must be positive")
-
-    try:
-        with wave.open(str(path), "rb") as audio:
-            actual_rate = audio.getframerate()
-            actual_channels = audio.getnchannels()
-            frames = audio.getnframes()
-            sample_width = audio.getsampwidth()
-            if frames < 1 or sample_width != 2 or not audio.readframes(1):
-                raise SpeechHandoffError(f"{label} is not readable 16-bit PCM audio")
-            actual_duration = frames / actual_rate
-    except (wave.Error, EOFError, OSError, ZeroDivisionError) as exc:
-        raise SpeechHandoffError(f"{label} is not a readable PCM WAV") from exc
-
-    if actual_rate != sample_rate or actual_channels != channels:
-        raise SpeechHandoffError(f"{label} technical metadata mismatch")
-    if abs(actual_duration - duration) > 0.02:
-        raise SpeechHandoffError(f"{label} duration metadata mismatch")
-    stat = path.stat()
-    cache_key = (
-        str(path),
-        int(stat.st_dev),
-        int(stat.st_ino),
-        int(stat.st_size),
-        int(stat.st_mtime_ns),
-    )
-    digest = track_hash_cache.get(cache_key) if track_hash_cache is not None else None
-    if digest is None:
-        digest = sha256_file(path)
-        if track_hash_cache is not None:
-            track_hash_cache[cache_key] = digest
-    if digest.lower() != expected_hash.lower():
-        raise SpeechHandoffError(f"{label} SHA-256 mismatch")
-    return path, digest, raw
+    final_audio_sha256: str
+    visual_plan_sha256: str
+    timeline: dict[str, Any]
 
 
 def validate_audio_package(
@@ -221,32 +147,31 @@ def validate_audio_package(
     expected_original_path: Path | None = None,
     track_hash_cache: dict[tuple[str, int, int, int, int], str] | None = None,
 ) -> ValidatedAudioPackage:
-    """Validate Speech-owned audio package v2 before any Studio render begins.
+    """Validate the final Speech soundtrack without duplicating audio decisions.
 
-    A per-run cache avoids hashing the one shared effect WAV once per item. Each
-    cache entry is keyed by resolved file identity, size and mtime; unique voice
-    tracks remain individually hashed before the first render.
+    Studio checks identity, containment, original integrity, WAV format/hash and
+    timeline-plan correspondence. It deliberately does not classify audio, make
+    an RVC decision, inspect RVC assets, or receive separate voice/effect tracks.
     """
-    if not isinstance(payload, dict) or payload.get("contract_version") != 2:
-        raise SpeechHandoffError("Unsupported or invalid Speech audio package contract")
+    if not isinstance(payload, dict) or payload.get("contract_version") != 3:
+        raise SpeechHandoffError("Studio requires ArmoredSpeech final-audio contract v3")
     if payload.get("status") != "READY":
-        raise SpeechHandoffError("Speech audio package is not READY")
+        raise SpeechHandoffError("Speech final-audio package is not READY")
     if (
         str(payload.get("source_id")) != expected_source_id
         or str(payload.get("item_id")) != expected_item_id
     ):
-        raise SpeechHandoffError("Speech audio package identity does not match Studio item")
+        raise SpeechHandoffError("Speech package identity does not match Studio item")
 
     try:
         workspace = Path(workspace_root).resolve(strict=True)
         original = Path(payload["original_path"]).resolve(strict=True)
     except (KeyError, TypeError, OSError, RuntimeError) as exc:
-        raise SpeechHandoffError("Original media unavailable in Speech audio package") from exc
+        raise SpeechHandoffError("Original media unavailable in Speech package") from exc
     if not original.is_file() or not _is_within(original, workspace):
         raise SpeechHandoffError("Original must be a file inside the lab workspace")
-    if expected_original_path is not None:
-        if original != Path(expected_original_path).resolve(strict=True):
-            raise SpeechHandoffError("Original path does not match Studio item")
+    if expected_original_path is not None and original != Path(expected_original_path).resolve(strict=True):
+        raise SpeechHandoffError("Original path does not match Studio item")
 
     before = payload.get("original_sha256_before")
     after = payload.get("original_sha256_after")
@@ -259,82 +184,51 @@ def validate_audio_package(
     ):
         raise SpeechHandoffError("Speech original SHA-256 evidence is missing or inconsistent")
 
-    audio_class = payload.get("audio_class")
-    supported_classes = {
-        "PT_BR_NARRATION", "PT_BR_NARRATION_WITH_MUSIC", "MUSIC_ONLY",
-        "NO_AUDIO", "NOISE", "NO_USABLE_NARRATION", "FOREIGN_SPEECH",
-    }
-    if audio_class not in supported_classes:
-        raise SpeechHandoffError("Unknown/unsupported v2 audio class")
-    language = str(payload.get("language") or "").strip().lower().replace("_", "-")
-    route = payload.get("route")
-    rvc_eligible = payload.get("rvc_eligible") is True
-    model = payload.get("rvc_model")
-    safe_rvc_decision = (
-        audio_class == "PT_BR_NARRATION"
-        and language in {"pt", "pt-br"}
-        and payload.get("speech_detected") is True
-        and payload.get("music_detected") is False
-        and rvc_eligible
+    track, track_hash, track_data = _validate_audio_track(
+        payload.get("final_audio_track"),
+        workspace=workspace,
+        label="Final Speech soundtrack",
+        track_hash_cache=track_hash_cache,
     )
-    if route == "RVC_MELODY":
-        if not safe_rvc_decision or str(model).strip().lower() != "melody":
-            raise SpeechHandoffError("Unsafe or inconsistent RVC_MELODY route")
-        model_hash = payload.get("rvc_model_sha256")
-        index_hash = payload.get("rvc_index_sha256")
-        if not isinstance(model_hash, str) or len(model_hash) != 64:
-            raise SpeechHandoffError("RVC model SHA-256 is missing")
-        try:
-            int(model_hash, 16)
-            if index_hash is not None:
-                if not isinstance(index_hash, str) or len(index_hash) != 64:
-                    raise ValueError("invalid index hash")
-                int(index_hash, 16)
-        except ValueError as exc:
-            raise SpeechHandoffError("RVC model/index SHA-256 is invalid") from exc
-    elif route == "EFFECT_ONLY":
-        if (
-            rvc_eligible or model is not None or safe_rvc_decision
-            or payload.get("rvc_model_sha256") is not None
-            or payload.get("rvc_index_sha256") is not None
-        ):
-            raise SpeechHandoffError("EFFECT_ONLY route conflicts with RVC eligibility")
-    else:
-        raise SpeechHandoffError("Unsupported audio route")
+    if track_data.get("composition_owner") != "ArmoredSpeech":
+        raise SpeechHandoffError("Final soundtrack must be composed by ArmoredSpeech")
 
-    voice_path, voice_hash, _ = _validate_audio_track(
-        payload.get("voice_track"),
-        workspace=workspace,
-        label="Voice track",
-        track_hash_cache=track_hash_cache,
-    )
-    effect_path, effect_hash, effect_data = _validate_audio_track(
-        payload.get("effect_track"),
-        workspace=workspace,
-        label="Effect track",
-        track_hash_cache=track_hash_cache,
-    )
-    if effect_data.get("gain_policy") != "loudnorm-I-12-LRA7-TP-1-then-volume-0.8":
-        raise SpeechHandoffError("Effect gain policy is absent or not approved")
-    effect_source_hash = effect_data.get("source_sha256")
-    if not isinstance(effect_source_hash, str) or len(effect_source_hash) != 64:
-        raise SpeechHandoffError("Effect source SHA-256 metadata missing or invalid")
+    timeline = payload.get("timeline")
+    if not isinstance(timeline, dict):
+        raise SpeechHandoffError("Speech final-audio timeline metadata missing")
+    plan_hash = timeline.get("visual_plan_sha256")
+    if not isinstance(plan_hash, str) or len(plan_hash) != 64:
+        raise SpeechHandoffError("Visual plan SHA-256 is missing or invalid")
     try:
-        int(effect_source_hash, 16)
-    except ValueError as exc:
-        raise SpeechHandoffError("Effect source SHA-256 metadata missing or invalid") from exc
+        int(plan_hash, 16)
+        audio_start = float(timeline.get("audio_start_seconds"))
+        intro_enabled = timeline.get("intro_enabled")
+        intro_duration = float(timeline.get("intro_duration_seconds"))
+    except (TypeError, ValueError) as exc:
+        raise SpeechHandoffError("Speech audio timeline metadata is invalid") from exc
+    if audio_start < 0 or not isinstance(intro_enabled, bool):
+        raise SpeechHandoffError("Speech audio timeline fields are invalid")
+    position = timeline.get("intro_position")
+    if intro_enabled:
+        if position not in {"inicio", "final"} or abs(intro_duration - 2.0) > 0.01:
+            raise SpeechHandoffError("Speech intro timeline policy is invalid")
+    elif position is not None or abs(intro_duration) > 0.01:
+        raise SpeechHandoffError("Speech no-intro timeline metadata is inconsistent")
+
+    audio_class = str(payload.get("audio_class") or "")
+    route = str(payload.get("route") or "")
+    if not audio_class or not route:
+        raise SpeechHandoffError("Speech audio decision metadata is missing")
 
     return ValidatedAudioPackage(
         source_id=expected_source_id,
         item_id=expected_item_id,
         original_path=original,
-        voice_track_path=voice_path,
-        effect_track_path=effect_path,
-        audio_class=str(audio_class),
-        language=language,
-        route=str(route),
-        rvc_eligible=rvc_eligible,
+        final_audio_track_path=track,
+        audio_class=audio_class,
+        route=route,
         original_sha256=actual_original_hash,
-        voice_sha256=voice_hash,
-        effect_sha256=effect_hash,
+        final_audio_sha256=track_hash,
+        visual_plan_sha256=plan_hash.lower(),
+        timeline=dict(timeline),
     )
