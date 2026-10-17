@@ -18,6 +18,7 @@ import sys
 from typing import Any
 
 from armored_core.models import Item, State
+from armored_core.storage import Storage
 from ArmoredStudio.service import build as build_studio
 from .studio_integration import process_items_with_speech
 
@@ -221,6 +222,28 @@ def run_complete_batch(
     os.environ["ARMORED_STUDIO_FORCE_COPY"] = "1" if copy_only else "0"
     os.environ["ARMORED_STUDIO_ALLOW_COPY"] = "1" if copy_only else "0"
     try:
+        # Refuse to overwrite any existing result. A retry must use an isolated
+        # destination or an explicitly reviewed cleanup; a prior valid output
+        # is never deleted as a side effect of starting this batch.
+        target_storage = Storage(root)
+        for item in items:
+            destination = Path(
+                target_storage.result(
+                    item.content_id,
+                    item.affiliate_url,
+                    item.affiliate_name,
+                    source_id=item.source_id,
+                )
+            ).resolve()
+            if not _inside(destination.parent, root):
+                raise RuntimeError(f"Destino Studio fora do root do laboratório: {destination}")
+            if destination == Path(item.original_path).resolve():
+                raise RuntimeError(f"Destino Studio colide com o original: {destination}")
+            if destination.exists():
+                raise RuntimeError(
+                    f"Destino já existe; lote bloqueado para preservar resultado anterior: {destination}"
+                )
+
         studio = build_studio(root)
         # This function preflights every READY Speech directive before its first
         # Studio call. Missing/blocked items therefore fail the entire batch closed.
