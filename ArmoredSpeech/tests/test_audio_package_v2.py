@@ -167,74 +167,71 @@ def _validate(
     )
 
 
-def test_valid_v3_audio_package_validates_final_track_hash_and_identity(tmp_path):
-    original, voice, effect, payload = _package(tmp_path)
+def test_valid_v4_audio_package_validates_final_track_hash_and_identity(tmp_path):
+    original, final_audio, _, payload = _package(tmp_path)
 
     result = _validate(tmp_path, original, payload)
 
-    assert result.route == "RVC_MELODY"
-    assert result.rvc_eligible is True
-    assert result.voice_track_path == voice
-    assert result.voice_sha256 == _sha(voice)
-    assert result.effect_track_path == effect
-    assert result.effect_sha256 == _sha(effect)
-    assert "[voice_main][effect_main]amix=" in result.audio_filter_graph
+    assert result.final_audio_track_path == final_audio
+    assert result.final_audio_sha256 == _sha(final_audio)
+    assert result.visual_plan_sha256 == _plan_digest({"video_start": 0.0})
+    assert not hasattr(result, "voice_track_path")
+    assert not hasattr(result, "effect_track_path")
 
 
 @pytest.mark.parametrize("field,value", [
     ("status", "PROCESSING"),
-    ("contract_version", 2),
-    ("route", "UNKNOWN"),
-    ("rvc_model", "another-model"),
+    ("contract_version", 3),
     ("source_id", "wrong-source"),
     ("item_id", "wrong-item"),
 ])
-def test_v3_package_rejects_wrong_status_contract_or_identity(tmp_path, field, value):
+def test_v4_package_rejects_wrong_status_contract_or_identity(tmp_path, field, value):
     original, _, _, payload = _package(tmp_path, **{field: value})
 
     with pytest.raises(SpeechHandoffError):
         _validate(tmp_path, original, payload)
 
 
-def test_v3_package_rejects_mutated_final_track_hash(tmp_path):
-    original, voice, _, payload = _package(tmp_path)
-    voice.write_bytes(voice.read_bytes() + b"tampered")
+def test_v4_package_rejects_mutated_final_track_hash(tmp_path):
+    original, final_audio, _, payload = _package(tmp_path)
+    final_audio.write_bytes(final_audio.read_bytes() + b"tampered")
 
     with pytest.raises(SpeechHandoffError, match="SHA-256 mismatch"):
         _validate(tmp_path, original, payload)
 
 
-def test_v3_package_rejects_final_track_outside_workspace(tmp_path):
+def test_v4_package_rejects_final_track_outside_workspace(tmp_path):
     original, _, _, payload = _package(tmp_path)
-    outside = tmp_path.parent / f"{tmp_path.name}-outside.wav"
-    _write_wav(outside)
-    payload["voice_track"]["path"] = str(outside)
-    payload["voice_track"]["sha256"] = _sha(outside)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.m4a"
+    _write_m4a(outside)
+    payload["final_audio_track"]["path"] = str(outside)
+    payload["final_audio_track"]["sha256"] = _sha(outside)
+    payload["final_audio_track"]["size_bytes"] = outside.stat().st_size
 
     with pytest.raises(SpeechHandoffError, match="inside the lab workspace"):
         _validate(tmp_path, original, payload)
 
 
-def test_studio_validates_effect_only_contract_without_selecting_audio_route(tmp_path):
-    original, _, effect, payload = _package(
+def test_studio_validator_does_not_make_audio_route_decisions(tmp_path):
+    original, final_audio, _, payload = _package(
         tmp_path,
-        audio_class="MUSIC_ONLY",
+        audio_class="UNRECOGNIZED_CLASS_FOR_AUDIT_ONLY",
         language="unknown",
         speech_detected=False,
-        music_detected=True,
-        route="EFFECT_ONLY",
+        music_detected=None,
+        route="UNRECOGNIZED_ROUTE_FOR_AUDIT_ONLY",
         rvc_eligible=False,
         rvc_model=None,
         rvc_model_sha256=None,
         rvc_index_sha256=None,
-        voice_track=None,
     )
 
     result = _validate(tmp_path, original, payload)
-    assert result.route == "EFFECT_ONLY"
-    assert result.rvc_eligible is False
-    assert result.voice_track_path is None
-    assert result.effect_track_path == effect
+    assert result.final_audio_track_path == final_audio
+    assert "voice_track" not in payload
+    assert "effect_track" not in payload
+    assert "audio_inputs" not in payload
+    assert "filter_graph" not in payload["audio_timeline"]
 
 
 def test_audio_package_builder_prepares_tracks_without_changing_original(tmp_path, monkeypatch):
