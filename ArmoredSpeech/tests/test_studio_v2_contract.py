@@ -98,6 +98,23 @@ def _payload(root: Path, original: Path, voice: Path | None, effect: Path, plan:
             "duration_seconds": 3.0,
             "gain_policy": "loudnorm-I-12-LRA7-TP-1-then-volume-0.8",
         },
+        "audio_inputs": ([
+            {
+                "kind": "file", "role": "voice",
+                "path": str(voice), "sha256": _sha(voice),
+            }
+        ] if rvc else [
+            {
+                "kind": "lavfi", "role": "silence",
+                "source": "anullsrc=r=44100:cl=stereo",
+                "duration_seconds": 3.0,
+            }
+        ]) + [
+            {
+                "kind": "loop_file", "role": "effect",
+                "path": str(effect), "sha256": _sha(effect),
+            }
+        ],
         "audio_timeline": audio_timeline,
         "prepared_video_duration_seconds": 3.0,
     }
@@ -126,14 +143,12 @@ def test_studio_combines_one_speech_audio_graph_with_one_visual_render(tmp_path,
     monkeypatch.setenv("ARMORED_FFMPEG", "ffmpeg")
     monkeypatch.setattr(unified_module.shutil, "which", lambda _: "ffmpeg")
 
-    def fake_render(video, voice_path, effect_path, banner_path, output_path, **kwargs):
+    def fake_render(video, audio_inputs, banner_path, output_path, **kwargs):
         captured.update({
             "video": Path(video),
-            "voice": Path(voice_path),
-            "effect": Path(effect_path),
+            "audio_inputs": list(audio_inputs),
             "banner": Path(banner_path),
             "output": Path(output_path),
-            "route": kwargs.get("route"),
             "audio_filter_graph": kwargs.get("audio_filter_graph"),
             "audio_output_label": kwargs.get("audio_output_label"),
             "plan": kwargs.get("plan"),
@@ -149,9 +164,10 @@ def test_studio_combines_one_speech_audio_graph_with_one_visual_render(tmp_path,
 
     assert result == output
     assert output.read_bytes() == b"synthetic rendered output"
-    assert captured["voice"] == voice
-    assert captured["effect"] == effect
-    assert captured["route"] == "RVC_MELODY"
+    assert captured["audio_inputs"][0]["kind"] == "file"
+    assert Path(captured["audio_inputs"][0]["path"]) == voice
+    assert captured["audio_inputs"][1]["kind"] == "loop_file"
+    assert Path(captured["audio_inputs"][1]["path"]) == effect
     assert captured["audio_filter_graph"] == payload["audio_timeline"]["filter_graph"]
     assert captured["audio_output_label"] == "[final_a]"
     assert captured["plan"] == plan
