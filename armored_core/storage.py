@@ -54,7 +54,10 @@ class Storage:
             match = __import__("re").fullmatch(
                 r"source([A-Za-z0-9_-]+)", value, __import__("re").IGNORECASE
             )
-            index = match.group(1) if match else "1"
+            # A separator after the word "source" belongs to the namespace,
+            # not to the physical folder suffix: source_teste -> ..._teste.
+            suffix = match.group(1).lstrip("_-") if match else ""
+            index = suffix or "1"
         return self.storage / f"Videos GRUPO_FONTE_{index}"
 
     def _source_for_content_id(
