@@ -309,8 +309,11 @@ def run_complete_batch(
                     "item_id": str(item.telegram_message_id),
                     "audio_class": validated.audio_class,
                     "route": validated.route,
-                    "final_audio_track_path": str(validated.final_audio_track_path),
-                    "final_audio_track_sha256": validated.final_audio_sha256,
+                    "voice_track_path": str(validated.voice_track_path) if validated.voice_track_path else None,
+                    "voice_track_sha256": validated.voice_sha256,
+                    "effect_track_path": str(validated.effect_track_path),
+                    "effect_track_sha256": validated.effect_sha256,
+                    "audio_filter_graph_sha256": validated.audio_filter_graph_sha256,
                     "visual_plan_sha256": validated.visual_plan_sha256,
                     "original_sha256": validated.original_sha256,
                 })
