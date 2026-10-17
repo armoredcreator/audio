@@ -263,7 +263,7 @@ A árvore atual não contém mais `ArmoredStudio/analysis/audio_intelligence.py`
 
 ### Validação automatizada atual
 
-A branch passou em compilação e **79 testes automatizados**: [GitHub Actions — execução 39039829421](https://github.com/armoredcreator/audio/actions/runs/39039829421). O teste histórico no Windows comprovou a versão anterior do handoff; o contrato v3 atual ainda precisa de um E2E real no Windows depois da migração dos ativos Melody para o caminho de Speech.
+A branch passou em compilação e **80 testes automatizados**: [GitHub Actions — execução 39040067359](https://github.com/armoredcreator/audio/actions/runs/39040067359). O teste histórico no Windows comprovou a versão anterior do handoff; o contrato v3 atual ainda precisa de um E2E real no Windows depois da migração dos ativos Melody para o caminho de Speech.
 
 ## 16. Migrar ativos locais para ArmoredSpeech e validar a arquitetura v3
 
