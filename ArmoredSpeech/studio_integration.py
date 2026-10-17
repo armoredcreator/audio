@@ -7,9 +7,99 @@ decisions, prepares/validates audio inputs, and returns tracks plus the audio
 filter graph for Studio's single final audiovisual render.
 """
 
+import hashlib
+import os
+import re
 from pathlib import Path
 
 from .studio_bridge import export_audio_directive
+from .vocal_separation import (
+    VocalSeparationError,
+    separate_vocal_stem,
+    validate_vocal_separation_receipt,
+)
+
+
+
+
+def _safe_component(value: object) -> str:
+    original = str(value)
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", original).strip("._-") or "item"
+    return f"{slug[:64]}-{hashlib.sha256(original.encode('utf-8')).hexdigest()[:10]}"
+
+
+def prepare_directive_payload(
+    item,
+    payload: dict,
+    *,
+    workspace_root: Path,
+    package_root: Path,
+) -> dict:
+    """Promote mixed PT-BR narration only after validating a real vocal stem."""
+    root = Path(workspace_root).resolve(strict=True)
+    package_root = Path(package_root).expanduser().resolve()
+    if payload.get("audio_class") != "PT_BR_NARRATION_WITH_MUSIC":
+        return payload
+
+    language = str(payload.get("language") or "").strip().lower().replace("_", "-")
+    if (
+        payload.get("rvc_candidate_eligible") is not True
+        or language not in {"pt", "pt-br"}
+        or payload.get("speech_detected") is not True
+    ):
+        raise VocalSeparationError(
+            f"MIXED_NARRATION_NOT_RVC_CANDIDATE: source={item.source_id} "
+            f"item={item.telegram_message_id}; refusing silent effect-only fallback"
+        )
+
+    original = Path(item.original_path).resolve(strict=True)
+    prior_audio = Path(str(payload.get("audio_artifact_path") or "")).resolve(strict=True)
+    separation = validate_vocal_separation_receipt(
+        original, prior_audio, workspace_root=root
+    )
+    vocal_path = prior_audio
+    if separation is None:
+        # Old Speech batches predate receipts. Never trust an unproven sidecar
+        # or run RVC on it: re-separate from the immutable MP4 into this run's
+        # isolated package namespace.
+        vocal_path = (
+            package_root / "_separation"
+            / _safe_component(item.source_id)
+            / _safe_component(item.telegram_message_id)
+            / "vocals.wav"
+        )
+        try:
+            vocal_path, separation = separate_vocal_stem(
+                original,
+                output_wav=vocal_path,
+                workspace_root=root,
+                model_filename=os.getenv(
+                    "ARMORED_SPEECH_SEPARATION_MODEL",
+                    "UVR-MDX-NET-Voc_FT.onnx",
+                ),
+            )
+        except VocalSeparationError as exc:
+            raise VocalSeparationError(
+                f"MIXED_NARRATION_SEPARATION_FAILED for "
+                f"{item.source_id}/{item.telegram_message_id}: {exc}"
+            ) from exc
+
+    prepared = dict(payload)
+    prepared["source_audio_class"] = "PT_BR_NARRATION_WITH_MUSIC"
+    prepared["source_audio_artifact_path"] = str(prior_audio)
+    prepared["audio_artifact_path"] = str(vocal_path)
+    prepared["audio_class"] = "PT_BR_NARRATION"
+    prepared["music_detected"] = False
+    prepared["speech_detected"] = True
+    prepared["rvc_eligible"] = True
+    prepared["rvc_candidate_eligible"] = True
+    prepared["requires_vocal_separation"] = False
+    prepared["vocal_separation"] = {
+        **separation,
+        "route": "SEPARATED_VOCALS",
+        "rvc_authorized_after_validation": True,
+    }
+    return prepared
 
 
 def prepare_audio_packages_for_items(
@@ -31,9 +121,6 @@ def prepare_audio_packages_for_items(
     call Studio or render video. The v4 payload exports one final validated audio
     file; Studio receives no component tracks or audio filter graph.
     """
-    import hashlib
-    import re
-
     from .audio_package import (
         preflight_audio_package,
         prepare_audio_package,
@@ -56,7 +143,7 @@ def prepare_audio_packages_for_items(
         raise RuntimeError("Effect asset must stay inside the lab root") from exc
     effect_source_hash = sha256_file(effect_source_path)
 
-    # Read/validate all persisted decisions before spending CPU on any RVC run.
+    # Validate all decisions and prove mixed-voice stems before any RVC run.
     directives = []
     for item in items:
         directive = export_audio_directive(
@@ -65,12 +152,13 @@ def prepare_audio_packages_for_items(
             item_id=str(item.telegram_message_id),
             require_files=True,
         )
-        directives.append((item, directive.to_payload()))
-
-    def safe_component(value: object) -> str:
-        original = str(value)
-        slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", original).strip("._-") or "item"
-        return f"{slug[:64]}-{hashlib.sha256(original.encode('utf-8')).hexdigest()[:10]}"
+        payload = prepare_directive_payload(
+            item,
+            directive.to_payload(),
+            workspace_root=root,
+            package_root=package_root,
+        )
+        directives.append((item, payload))
 
     # Audio owns onset/timing analysis. Studio's input plan is visual-only;
     # Speech may provide the video cut derived from the audio onset when a visual
@@ -142,8 +230,8 @@ def prepare_audio_packages_for_items(
     for (item, directive_payload), preflight in zip(directives, preflights, strict=True):
         output_dir = (
             package_root
-            / safe_component(item.source_id)
-            / safe_component(item.telegram_message_id)
+            / _safe_component(item.source_id)
+            / _safe_component(item.telegram_message_id)
         )
         package = prepare_audio_package(
             directive_payload,

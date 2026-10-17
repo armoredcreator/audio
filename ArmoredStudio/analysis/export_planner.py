@@ -129,23 +129,29 @@ def _intersect(a: Crop, b: Crop) -> Optional[Crop]:
 
 
 def _box_from_center(resultado: Optional[Dict[str, Any]]) -> Optional[Box]:
-    """Converte Gemini (centro/largura/altura) em caixa absoluta."""
+    """Converte a marca Gemini selecionada para uma caixa espacial real."""
     if not resultado or not resultado.get("gemini"):
         return None
+
+    # FAST may return independent Gemini 1 / Gemini 2 matches. Use the actual
+    # winning detector scale so a smaller mark gets a smaller exclusion box.
+    detectors = resultado.get("detectors")
+    selected_name = resultado.get("detector")
+    if isinstance(detectors, dict) and isinstance(detectors.get(selected_name), dict):
+        resultado = detectors[selected_name]
+        if not resultado.get("gemini"):
+            return None
 
     try:
         cx = _float(resultado.get("x"))
         cy = _float(resultado.get("y"))
-        # IMPORTANTE: Gemini FAST usa width/height para as dimensoes
-        # ORIGINAIS DO VIDEO. Elas NAO sao o tamanho da estrela.
-        # A caixa espacial da marca usa o tamanho do template FAST,
-        # escalado para a largura real do video.
         W = _int(resultado.get("width", 0))
         H = _int(resultado.get("height", 0))
         if W <= 0 or H <= 0:
             return None
-
-        base = 61.0
+        base = _float(resultado.get("template_size_720", 61.0), 61.0)
+        if base <= 0:
+            return None
         escala = float(W) / 720.0
         w = base * escala
         h = base * escala

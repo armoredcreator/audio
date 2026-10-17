@@ -25,7 +25,7 @@ O caminho é sempre registrado no SQLite junto de `source_id` e `item_id`. Não 
 | Classe | RVC | Preparação | Comportamento final esperado no Studio |
 |---|---:|---|---|
 | `PT_BR_NARRATION` | Sim | WAV extraído | RVC na narração PT-BR |
-| `PT_BR_NARRATION_WITH_MUSIC` | **Bloqueado no v1** | separação pode gerar um stem vocal, mas ele ainda não é aprovado para RVC | Studio usa a rota conservadora; liberar RVC somente após validação explícita do stem |
+| `PT_BR_NARRATION_WITH_MUSIC` | Só após validação do stem | Speech separa voz e música, verifica duração/energia e grava recibo com hashes da origem, stem e modelo | RVC Melody recebe somente o stem vocal validado; se a separação falhar, o lote falha explicitamente em vez de silenciar a voz |
 | `MUSIC_ONLY` | Não | WAV de referência | silenciar áudio original e aplicar o efeito sonoro existente |
 | `NOISE` | Não | WAV de referência | silenciar áudio original e aplicar o efeito sonoro existente |
 | `NO_AUDIO` | Não | WAV silencioso determinístico | aplicar efeito sonoro sem RVC |
@@ -34,6 +34,8 @@ O caminho é sempre registrado no SQLite junto de `source_id` e `item_id`. Não 
 | `UNKNOWN` | **Bloqueado** | não liberar WAV como aprovado | pendência/erro; nunca presumir elegibilidade |
 
 A classificação `FOREIGN_SPEECH` está incluída como proteção inicial. A rota final de fala estrangeira precisa ser confirmada antes de integração com Studio.
+
+Para classe mista, `rvc_eligible` no payload continua falso até Speech validar um recibo de separação vocal. `rvc_candidate_eligible` registra apenas a possibilidade inicial baseada na decisão persistida. O render usa o stem vocal separado, não o WAV misturado; ausência de recibo válido dispara erro explícito antes do primeiro RVC.
 
 ## SQLite / contrato com Studio
 

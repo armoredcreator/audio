@@ -623,6 +623,9 @@ def prepare_audio_package(
             # Decision fields are evidence/debug metadata only. Studio consumes
             # the single final track and never dispatches on class/route.
             "audio_class": payload["audio_class"],
+            "source_audio_class": payload.get("source_audio_class", payload["audio_class"]),
+            "source_audio_artifact_path": payload.get("source_audio_artifact_path"),
+            "vocal_separation": payload.get("vocal_separation"),
             "language": payload.get("language"),
             "speech_detected": payload.get("speech_detected") is True,
             "music_detected": payload.get("music_detected"),

@@ -66,6 +66,9 @@ FAST_STAR_CENTER_Y = 0.906
 
 FAST_STAR_TEMPLATE_SIZE_720 = 61.0
 FAST_STAR_SEARCH_RADIUS_720 = 35.0
+# Independent smaller Gemini 2 star. Gemini 1 constants stay unchanged.
+FAST_GEMINI2_TEMPLATE_SIZE_720 = 41.0
+FAST_GEMINI2_MATCH_THRESHOLD = 0.46
 
 FAST_STAR_MATCH_THRESHOLD = 0.43
 
@@ -1149,6 +1152,7 @@ def validate_between_frames(
 
 def build_gemini_shape_template(
     width: int,
+    template_size_720: float = FAST_STAR_TEMPLATE_SIZE_720,
 ) -> np.ndarray:
     """
     Cria uma máscara analítica da estrela Gemini
@@ -1163,33 +1167,18 @@ def build_gemini_shape_template(
         / BASE_WIDTH
     )
 
-    size = int(
-        round(
-            FAST_STAR_TEMPLATE_SIZE_720
-            * scale
-        )
-    )
-
-    if size < 31:
-        size = 31
-
+    size = int(round(float(template_size_720) * scale))
+    minimum_size = 31 if template_size_720 >= FAST_STAR_TEMPLATE_SIZE_720 else 15
+    if size < minimum_size:
+        size = minimum_size
     if size % 2 == 0:
         size += 1
 
-    arm = (
-        23.0
-        * scale
-    )
-
-    center = (
-        6.0
-        * scale
-    )
-
-    base = (
-        6.0
-        * scale
-    )
+    # Keep the shape proportional to its own template size.
+    shape_scale = scale * (float(template_size_720) / FAST_STAR_TEMPLATE_SIZE_720)
+    arm = 23.0 * shape_scale
+    center = 6.0 * shape_scale
+    base = 6.0 * shape_scale
 
     yy, xx = np.mgrid[
         0:size,
@@ -1267,7 +1256,7 @@ def build_gemini_shape_template(
     template = cv2.GaussianBlur(
         template,
         (0, 0),
-        1.5 * scale,
+        max(0.5, 1.5 * shape_scale),
     )
 
     return template
@@ -1275,6 +1264,7 @@ def build_gemini_shape_template(
 
 def match_gemini_shape_fast(
     frame: np.ndarray,
+    template_size_720: float = FAST_STAR_TEMPLATE_SIZE_720,
 ) -> tuple[
     float,
     int,
@@ -1301,7 +1291,7 @@ def match_gemini_shape_fast(
 
     template = (
         build_gemini_shape_template(
-            width
+            width, template_size_720=template_size_720
         )
     )
 
@@ -1478,27 +1468,53 @@ def detect_fast(
                 "score": 0.0,
             }
 
-        score, x, y = (
-            match_gemini_shape_fast(
-                frame
-            )
+        score1, x1, y1 = match_gemini_shape_fast(
+            frame, template_size_720=FAST_STAR_TEMPLATE_SIZE_720
+        )
+        score2, x2, y2 = match_gemini_shape_fast(
+            frame, template_size_720=FAST_GEMINI2_TEMPLATE_SIZE_720
         )
 
-        gemini = (
-            score
-            >= FAST_STAR_MATCH_THRESHOLD
+        detectors = {
+            "gemini1": {
+                "gemini": score1 >= FAST_STAR_MATCH_THRESHOLD,
+                "detector": "gemini1",
+                "template_size_720": FAST_STAR_TEMPLATE_SIZE_720,
+                "score": float(score1), "x": int(x1), "y": int(y1),
+                "width": width, "height": height,
+            },
+            "gemini2": {
+                "gemini": score2 >= FAST_GEMINI2_MATCH_THRESHOLD,
+                "detector": "gemini2",
+                "template_size_720": FAST_GEMINI2_TEMPLATE_SIZE_720,
+                "score": float(score2), "x": int(x2), "y": int(y2),
+                "width": width, "height": height,
+            },
+        }
+        accepted = [result for result in detectors.values() if result["gemini"]]
+        pool = accepted or list(detectors.values())
+        chosen = max(
+            pool,
+            key=lambda result: result["score"] / (
+                FAST_GEMINI2_MATCH_THRESHOLD
+                if result["detector"] == "gemini2"
+                else FAST_STAR_MATCH_THRESHOLD
+            ),
         )
 
         return {
             "video": path,
-            "gemini": gemini,
+            "gemini": bool(accepted),
+            "detector": chosen["detector"] if accepted else "none",
+            "detectors": detectors,
             "mode": "fast",
             "frame": 0,
-            "score": score,
-            "x": x,
-            "y": y,
+            "score": chosen["score"],
+            "x": chosen["x"],
+            "y": chosen["y"],
             "width": width,
             "height": height,
+            "template_size_720": chosen["template_size_720"],
             "fps": fps,
             "frames": frame_count,
         }

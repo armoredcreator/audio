@@ -71,7 +71,9 @@ def test_mixed_audio_is_blocked_until_separation_is_validated(tmp_path):
     directive = export_audio_directive(db, source_id="s1", item_id="i1")
     assert directive.audio_class == "PT_BR_NARRATION_WITH_MUSIC"
     assert directive.requires_vocal_separation is True
+    assert directive.rvc_candidate_eligible is True
     assert directive.rvc_eligible is False
+    assert directive.to_payload()["rvc_candidate_eligible"] is True
 
 
 @pytest.mark.parametrize("audio_class", [
