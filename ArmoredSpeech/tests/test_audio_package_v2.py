@@ -510,7 +510,7 @@ def test_batch_preflight_hashes_melody_model_and_index_only_once(tmp_path, monke
     effect_source = tmp_path / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
     effect_source.parent.mkdir(parents=True, exist_ok=True)
     effect_source.write_bytes(b"effect asset bytes large enough for preflight" * 2)
-    model_dir = tmp_path / "ArmoredStudio" / "runtime" / "rvc" / "models" / "melody"
+    model_dir = tmp_path / "ArmoredSpeech" / "runtime" / "rvc" / "models" / "melody"
     model_dir.mkdir(parents=True, exist_ok=True)
     model = model_dir / "melody.pth"
     index = model_dir / "melody.index"
