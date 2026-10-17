@@ -172,42 +172,36 @@ def _video_filter_graph(
 
 def render_with_speech_audio(
     video,
-    voice_track,
-    effect_track,
+    audio_inputs,
     banner,
     output,
     *,
-    route: str,
     audio_filter_graph: str,
     audio_output_label: str,
-    video_duration_seconds: float,
     position: str = "final",
     intro: bool = True,
     plan: dict[str, Any] | None = None,
 ) -> Path:
-    """Render visuals and Speech's audio graph in one final FFmpeg invocation."""
-    video, effect_track, banner, output = map(Path, (video, effect_track, banner, output))
-    voice = Path(voice_track) if voice_track is not None else None
+    """Apply Studio's visual graph and materialize Speech's declared audio inputs.
+
+    This is the neutral final-render adapter: it does not inspect the audio
+    class, select voice vs silence, or invent an audio route. Speech supplies
+    the allowlisted input descriptors and complete audio filter graph.
+    """
+    video, banner, output = map(Path, (video, banner, output))
     _validate_file(video, "Vídeo")
-    _validate_file(effect_track, "Efeito sonoro preparado pelo ArmoredSpeech")
-    if route == "RVC_MELODY":
-        if voice is None:
-            raise RuntimeError("Rota RVC_MELODY exige a trilha de voz preparada pelo Speech")
-        _validate_file(voice, "Trilha RVC preparada pelo ArmoredSpeech")
-    elif route != "EFFECT_ONLY" or voice is not None:
-        raise RuntimeError("Contrato de áudio Speech inválido para a renderização")
     if intro:
         _validate_file(banner, "Banner")
         if position not in {"inicio", "final"}:
             raise RuntimeError(f"Posição de intro inválida: {position}")
     if output.exists():
         raise FileExistsError(f"Studio nunca deve sobrescrever um resultado existente: {output}")
+    if not isinstance(audio_inputs, (list, tuple)) or len(audio_inputs) != 2:
+        raise RuntimeError("Speech deve entregar exatamente dois descritores de entrada de áudio")
     if not audio_filter_graph.strip() or len(audio_filter_graph) > 10000:
         raise RuntimeError("Grafo de áudio do Speech ausente ou inválido")
     if audio_output_label not in {"[main_a]", "[final_a]"}:
         raise RuntimeError("Label de saída de áudio do Speech inválida")
-    if not (video_duration_seconds > 0):
-        raise RuntimeError("Duração de vídeo inválida para a trilha de silêncio")
 
     width, height, fps = _probe_video(video)
     video_graph, video_output_label = _video_filter_graph(
@@ -218,16 +212,43 @@ def render_with_speech_audio(
     ffmpeg = resolve_executable("ffmpeg", env_var="ARMORED_FFMPEG", project_root=PROJECT_ROOT)
 
     command = [str(ffmpeg), "-nostdin", "-n", "-i", str(video)]
-    if voice is not None:
-        command += ["-i", str(voice)]
-    else:
-        # A mute route uses generated silence and never consumes the source
-        # video's original audio. This is an FFmpeg input, not a saved temp WAV.
-        command += [
-            "-f", "lavfi", "-t", f"{video_duration_seconds:.6f}",
-            "-i", "anullsrc=r=44100:cl=stereo",
-        ]
-    command += ["-stream_loop", "-1", "-i", str(effect_track)]
+    # Speech has already validated the meaning and identity of every input.
+    # Studio only translates the declared, allowlisted input kind to CLI flags.
+    for spec in audio_inputs:
+        if not isinstance(spec, dict):
+            raise RuntimeError("Descritor de áudio Speech inválido")
+        kind = spec.get("kind")
+        if kind in {"file", "loop_file"}:
+            try:
+                source_path = Path(spec["path"])
+            except (KeyError, TypeError) as exc:
+                raise RuntimeError("Caminho de entrada de áudio ausente") from exc
+            _validate_file(
+                source_path,
+                "Entrada de áudio declarada pelo Speech",
+            )
+            if kind == "loop_file":
+                command += ["-stream_loop", "-1"]
+            command += ["-i", str(source_path)]
+        elif kind == "lavfi":
+            source = spec.get("source")
+            if source != "anullsrc=r=44100:cl=stereo":
+                raise RuntimeError("Fonte lavfi não permitida no contrato de áudio")
+            try:
+                duration = float(spec.get("duration_seconds"))
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("Duração da entrada de silêncio inválida") from exc
+            if not (duration > 0):
+                raise RuntimeError("Duração da entrada de silêncio precisa ser positiva")
+            command += [
+                "-f", "lavfi", "-t", f"{duration:.6f}",
+                "-i", source,
+            ]
+        else:
+            raise RuntimeError(f"Tipo de entrada de áudio não permitido: {kind!r}")
+
+    # Input indexes are stable: video [0:v], two Speech-declared audio inputs
+    # [1:a]/[2:a], and optional visual banner [3:v].
     if intro:
         command += ["-loop", "1", "-i", str(banner)]
     command += [
