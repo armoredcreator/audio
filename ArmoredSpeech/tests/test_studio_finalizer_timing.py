@@ -4,12 +4,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from ArmoredStudio.processing import visual_finalizer
+from ArmoredSpeech.timeline_mixer import build_audio_filter_graph
 
 
-def test_studio_visual_graph_has_no_audio_processing():
+def test_visual_graph_crops_once_before_splitting_main_and_intro():
     graph, label = visual_finalizer._video_filter_graph(
-        Path("input.mp4"),
-        Path("banner.png"),
         1080,
         1920,
         "30/1",
@@ -19,36 +18,37 @@ def test_studio_visual_graph_has_no_audio_processing():
     )
 
     assert label == "[vout]"
+    assert graph.count("crop=") == 1
+    assert "split=2[main_src][intro_src]" in graph
     assert "concat=n=2:v=1:a=0[vout]" in graph
     assert "atrim=" not in graph
     assert "amix=" not in graph
-    assert "loudnorm=" not in graph
-    assert "volume=" not in graph
     assert "afade=" not in graph
 
 
-def test_visual_plan_trims_video_only():
+def test_visual_plan_video_start_and_crop_are_applied_once_before_the_branch():
     graph, _ = visual_finalizer._video_filter_graph(
-        Path("input.mp4"),
-        Path("banner.png"),
-        1080,
         1920,
+        1080,
         "30/1",
-        {"audio_start": 1.25, "video_start": 0.75},
+        {
+            "audio_start": 1.25,
+            "video_start": 0.75,
+            "crop_final": {"x": 0, "y": 0, "width": 1920, "height": 1080},
+        },
         intro=True,
         position="inicio",
     )
 
-    assert graph.count("trim=start=0.75") == 2
+    assert graph.count("trim=start=0.75") == 1
+    assert graph.count("crop=") == 1
+    assert graph.count("split=2[main_src][intro_src]") == 1
     assert "atrim=start=1.25" not in graph
-    assert "audio_start" not in graph
     assert "concat=n=2:v=1:a=0[vout]" in graph
 
 
-def test_no_intro_visual_graph_does_not_reference_banner_or_audio(tmp_path):
+def test_no_intro_visual_graph_has_one_crop_and_no_banner_input():
     graph, label = visual_finalizer._video_filter_graph(
-        Path("input.mp4"),
-        Path("unused-banner.png"),
         1080,
         1920,
         "30/1",
@@ -58,26 +58,31 @@ def test_no_intro_visual_graph_does_not_reference_banner_or_audio(tmp_path):
     )
 
     assert label == "[main_v]"
-    assert "[2:v]" not in graph
+    assert graph.count("crop=") == 1
+    assert "[3:v]" not in graph
+    assert "split=2" not in graph
     assert "concat=" not in graph
     assert "amix=" not in graph
-    assert "atrim=" not in graph
 
 
-def test_final_render_maps_one_speech_soundtrack_without_audio_filters(tmp_path, monkeypatch):
+def test_final_output_uses_one_ffmpeg_call_with_speech_graph_and_visual_graph(tmp_path, monkeypatch):
     video = tmp_path / "input.mp4"
-    audio = tmp_path / "final_audio.wav"
+    voice = tmp_path / "voice.wav"
+    effect = tmp_path / "effect.wav"
     banner = tmp_path / "banner.png"
     output = tmp_path / "result.mp4"
-    for path in (video, audio, banner):
+    for path in (video, voice, effect, banner):
         path.write_bytes(b"test-input")
 
-    captured = {}
+    captured = {"calls": 0}
+    plan = {"audio_start": 0.5, "video_start": 0.0}
+    audio = build_audio_filter_graph(visual_plan=plan, intro=True, intro_position="final")
 
     monkeypatch.setattr(visual_finalizer, "_probe_video", lambda path: (1080, 1920, "30/1"))
     monkeypatch.setattr(visual_finalizer, "resolve_executable", lambda *args, **kwargs: Path("ffmpeg"))
 
     def fake_run(command, **kwargs):
+        captured["calls"] += 1
         captured["command"] = list(command)
         Path(command[-1]).write_bytes(b"rendered-video")
         return SimpleNamespace(returncode=0)
@@ -85,21 +90,31 @@ def test_final_render_maps_one_speech_soundtrack_without_audio_filters(tmp_path,
     monkeypatch.setattr(visual_finalizer.subprocess, "run", fake_run)
 
     result = visual_finalizer.render_with_speech_audio(
-        video, audio, banner, output,
+        video,
+        voice,
+        effect,
+        banner,
+        output,
+        route="RVC_MELODY",
+        audio_filter_graph=audio["filter_graph"],
+        audio_output_label=audio["output_label"],
+        video_duration_seconds=3.0,
         position="final",
         intro=True,
-        plan={"audio_start": 0.5, "video_start": 0.0},
+        plan=plan,
     )
 
     command = captured["command"]
     graph = command[command.index("-filter_complex") + 1]
     assert result == output
+    assert captured["calls"] == 1
     assert command[command.index("-map") + 1] == "[vout]"
-    second_map_index = command.index("-map", command.index("-map") + 1)
-    assert command[second_map_index + 1] == "1:a:0"
-    assert "atrim=" not in graph
-    assert "amix=" not in graph
-    assert "loudnorm=" not in graph
-    assert "volume=" not in graph
-    assert "afade=" not in graph
-    assert "-stream_loop" not in command
+    second_map = command.index("-map", command.index("-map") + 1)
+    assert command[second_map + 1] == "[final_a]"
+    assert graph.count("crop=") == 1
+    assert "split=2[main_src][intro_src]" in graph
+    assert "[voice_main][effect_main]amix=" in graph
+    assert "afade=t=in:st=0:d=0.4" in graph
+    assert "concat=n=2:v=0:a=1[final_a]" in graph
+    assert "-stream_loop" in command
+    assert command[-1] == str(output)
