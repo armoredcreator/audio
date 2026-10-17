@@ -4,7 +4,7 @@ import hashlib
 import json
 import wave
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
 import pytest
@@ -15,7 +15,7 @@ import ArmoredStudio.unified as unified_module
 from ArmoredStudio.processing import visual_finalizer
 from ArmoredStudio.speech_handoff import sha256_file, validate_audio_package
 from ArmoredStudio.unified import UnifiedStudio
-from ArmoredSpeech.timeline_mixer import build_audio_filter_graph
+from ArmoredSpeech.timeline_mixer import build_audio_filter_graph, visual_plan_digest
 
 
 @dataclass
@@ -301,3 +301,21 @@ def test_visual_renderer_combines_audio_and_video_graphs_in_one_ffmpeg_call(tmp_
     second_map = command.index("-map", command.index("-map") + 1)
     assert command[second_map + 1] == "[main_a]"
     assert command[-1] == str(output)
+
+
+def test_visual_plan_digests_handle_pathlike_detector_metadata_consistently():
+    detector_path = PureWindowsPath("C:/ArmoredAudioLab/item5.mp4")
+    plan = {
+        "video_info": {"path": detector_path},
+        "detectores": {"gemini": {"video": detector_path}},
+        "video_start": 0.0,
+    }
+    normalized = {
+        "video_info": {"path": str(detector_path)},
+        "detectores": {"gemini": {"video": str(detector_path)}},
+        "video_start": 0.0,
+    }
+
+    expected = visual_plan_digest(normalized)
+    assert visual_plan_digest(plan) == expected
+    assert unified_module._visual_plan_digest(plan) == expected
