@@ -37,9 +37,9 @@ def resolver_rvc_python() -> Path:
         if candidate.exists() and candidate.is_file():
             return candidate
 
-    expected = "\\n".join(str(path) for path in candidates)
+    expected = "\n".join(str(path) for path in candidates)
     raise FileNotFoundError(
-        "Python do ambiente unificado da raiz não encontrado. Caminhos esperados:\\n"
+        "Python do ambiente unificado da raiz não encontrado. Caminhos esperados:\n"
         + expected
     )
 
