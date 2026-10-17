@@ -326,11 +326,12 @@ def create_real_video_smoke_fixture(
     source_video: Path,
     test_source_id: str = "source1",
 ) -> dict[str, str]:
-    """Analyze a real storage MP4 on a byte-identical copy and build an isolated v2 fixture.
+    """Analyze a real storage MP4 copy and build a lab-only v2 fixture.
 
-    The source video and source Speech database are read-only. A ModelProcessor
-    decision and WAV sidecar are created only for the copied MP4, and the READY
-    row is inserted only into a disposable SQLite backup.
+    This deliberately does not open or mutate the operational ArmoredCreator
+    database. Speech produces the WAV on a copy, then the READY decision is
+    written to a uniquely named lab database under storage/database, matching
+    the production directory layout without sharing production state.
     """
     from .contracts import AudioClass, SpeechStatus
     from .model_processor import ModelProcessor
@@ -465,11 +466,13 @@ def create_real_video_smoke_fixture(
     return {
         "batch_id": batch_id,
         "manifest_path": str(manifest_path),
-        "speech_database_copy": str(database_copy),
+        "speech_database": str(database_path),
+        # Keep the alias used by the runner instructions for compatibility.
+        "speech_database_copy": str(database_path),
         "original_copy": str(original_copy),
         "wav_copy": str(wav_copy),
         "source_original": str(video),
-        "source_database": str(database),
+        "source_database": "NOT_USED; operational ArmoredCreator database was not opened",
         "source_database_modified": "false",
         "original_sha256": source_hash,
         "audio_class": decision.audio_class.value,
