@@ -192,7 +192,6 @@ def test_real_video_smoke_fixture_uses_model_processor_and_only_mutates_cloned_d
 
     fixture = create_real_video_smoke_fixture(
         tmp_path,
-        database,
         source_video=source_video,
         test_source_id="source1",
     )
@@ -248,7 +247,7 @@ def test_real_video_smoke_fixture_rejects_validation_fixtures(tmp_path):
     fixture_video.write_bytes(b"fixture")
     try:
         create_real_video_smoke_fixture(
-            tmp_path, database, source_video=fixture_video, test_source_id="source1"
+            tmp_path, source_video=fixture_video, test_source_id="source1"
         )
     except Exception as exc:
         assert "storage/validation" in str(exc)
