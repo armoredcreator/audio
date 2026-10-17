@@ -113,7 +113,7 @@ def _plan_dimensions(plan, width, height):
     return width, height
 
 
-def criar_filtro(position, largura, altura, fps, plan=None):
+def criar_filtro(position, largura, altura, fps, plan=None, *, audio_tracks_prepared=False):
     plan_video = _plan_video_filters(plan)
     base_video = plan_video + _story_normalization_filters(largura, altura) + [
         f"eq=brightness={BRIGHTNESS}:contrast={CONTRAST}:saturation={SATURATION}:gamma={GAMMA}",
@@ -140,23 +140,36 @@ def criar_filtro(position, largura, altura, fps, plan=None):
     audio_filters = _plan_video_filters(plan, audio=True)
     if audio_filters:
         audio_main += ",".join(audio_filters) + ","
-    audio_main += (
-        f"volume={VOICE_VOLUME}[voice];"
-        f"[2:a]loudnorm=I=-12:LRA=7:TP=-1,volume={MUSIC_VOLUME}[music];"
-        "[voice][music]amix=inputs=2:duration=first:dropout_transition=2[main_a]"
-    )
-
-    audio_intro = (
-        f"[2:a]afade=t=in:st=0:d=0.4,afade=t=out:st=1.5:d=0.5,"
-        f"loudnorm=I=-12:LRA=7:TP=-1,volume={INTRO_MUSIC_VOLUME},"
-        f"atrim=duration={INTRO_DURATION},asetpts=PTS-STARTPTS[intro_a]"
-    )
+    if audio_tracks_prepared:
+        # Speech v2 already prepared voice/effect PCM tracks and applied the
+        # approved effect gain. Studio only applies the visual timeline and
+        # combines tracks; re-normalizing/re-gaining here would double-process.
+        audio_main += (
+            "anull[voice];"
+            "[2:a]anull[music];"
+            "[voice][music]amix=inputs=2:duration=first:dropout_transition=2[main_a]"
+        )
+        audio_intro = (
+            f"[2:a]afade=t=in:st=0:d=0.4,afade=t=out:st=1.5:d=0.5,"
+            f"atrim=duration={INTRO_DURATION},asetpts=PTS-STARTPTS[intro_a]"
+        )
+    else:
+        audio_main += (
+            f"volume={VOICE_VOLUME}[voice];"
+            f"[2:a]loudnorm=I=-12:LRA=7:TP=-1,volume={MUSIC_VOLUME}[music];"
+            "[voice][music]amix=inputs=2:duration=first:dropout_transition=2[main_a]"
+        )
+        audio_intro = (
+            f"[2:a]afade=t=in:st=0:d=0.4,afade=t=out:st=1.5:d=0.5,"
+            f"loudnorm=I=-12:LRA=7:TP=-1,volume={INTRO_MUSIC_VOLUME},"
+            f"atrim=duration={INTRO_DURATION},asetpts=PTS-STARTPTS[intro_a]"
+        )
     concat_order = "[intro_v][intro_a][main_v][main_a]" if position == "inicio" else "[main_v][main_a][intro_v][intro_a]"
     concat = f"{concat_order}concat=n=2:v=1:a=1[vout][aout]"
     return ";".join([visual, intro, audio_main, audio_intro, concat])
 
 
-def finalizar(video, voz, musica, banner, saida, position="final", intro=True, plan=None):
+def finalizar(video, voz, musica, banner, saida, position="final", intro=True, plan=None, *, audio_tracks_prepared=False):
     video, voz, musica, banner, saida = map(Path, (video, voz, musica, banner, saida))
     validar_arquivo(video, "Vídeo")
     validar_arquivo(voz, "Áudio RVC")
@@ -174,7 +187,7 @@ def finalizar(video, voz, musica, banner, saida, position="final", intro=True, p
         saida.unlink()
 
     if intro:
-        filtro = criar_filtro(position, output_largura, output_altura, fps, plan)
+        filtro = criar_filtro(position, output_largura, output_altura, fps, plan, audio_tracks_prepared=audio_tracks_prepared)
         maps = ("[vout]", "[aout]")
     else:
         vf = _plan_video_filters(plan) + _story_normalization_filters(largura, altura) + [
@@ -182,13 +195,19 @@ def finalizar(video, voz, musica, banner, saida, position="final", intro=True, p
             f"unsharp={UNSHARP}", "setpts=PTS-STARTPTS",
         ]
         af = _plan_video_filters(plan, audio=True)
-        filtro = (
-            "[0:v]" + ",".join(vf) + "[main_v];"
-            + "[1:a]" + (",".join(af) + "," if af else "")
-            + f"volume={VOICE_VOLUME}[voice];"
-            f"[2:a]loudnorm=I=-12:LRA=7:TP=-1,volume={MUSIC_VOLUME}[music];"
-            "[voice][music]amix=inputs=2:duration=first:dropout_transition=2[main_a]"
-        )
+        voice_chain = "[1:a]" + (",".join(af) + "," if af else "")
+        if audio_tracks_prepared:
+            audio_chain = voice_chain + (
+                "anull[voice];[2:a]anull[music];"
+                "[voice][music]amix=inputs=2:duration=first:dropout_transition=2[main_a]"
+            )
+        else:
+            audio_chain = voice_chain + (
+                f"volume={VOICE_VOLUME}[voice];"
+                f"[2:a]loudnorm=I=-12:LRA=7:TP=-1,volume={MUSIC_VOLUME}[music];"
+                "[voice][music]amix=inputs=2:duration=first:dropout_transition=2[main_a]"
+            )
+        filtro = "[0:v]" + ",".join(vf) + "[main_v];" + audio_chain
         maps = ("[main_v]", "[main_a]")
 
     ffmpeg = resolve_executable("ffmpeg", env_var="ARMORED_FFMPEG", project_root=PROJECT_ROOT)
