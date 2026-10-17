@@ -47,6 +47,7 @@ class ValidatedAudioPackage:
     video_duration_seconds: float
     visual_plan_sha256: str
     audio_timeline: dict[str, Any]
+    audio_inputs: tuple[dict[str, Any], ...]
     audio_filter_graph: str
     audio_filter_graph_sha256: str
 
@@ -213,6 +214,68 @@ def validate_audio_package(
     if not video_duration_seconds > 0:
         raise SpeechHandoffError("Speech prepared video duration must be positive")
 
+    # Validate the declarative FFmpeg input plan produced by Speech. Studio's
+    # renderer only materializes these allowlisted input types; it never decides
+    # whether the first audio input should be voice or generated silence.
+    raw_inputs = payload.get("audio_inputs")
+    if not isinstance(raw_inputs, list) or len(raw_inputs) != 2:
+        raise SpeechHandoffError("Speech renderer must declare exactly two audio inputs")
+    first_input, effect_input = raw_inputs
+    normalized_inputs: list[dict[str, Any]] = []
+
+    if route == "RVC_MELODY":
+        if not isinstance(first_input, dict) or first_input.get("kind") != "file" or first_input.get("role") != "voice":
+            raise SpeechHandoffError("RVC route must declare its Speech-prepared voice input")
+        try:
+            declared_voice_path = Path(first_input["path"]).resolve(strict=True)
+        except (KeyError, TypeError, OSError, RuntimeError) as exc:
+            raise SpeechHandoffError("Speech voice input path is unavailable") from exc
+        if (
+            declared_voice_path != voice_path
+            or first_input.get("sha256") != voice_hash
+        ):
+            raise SpeechHandoffError("Declared voice input differs from validated Speech voice track")
+        normalized_inputs.append({
+            "kind": "file", "role": "voice", "path": str(voice_path),
+            "sha256": voice_hash,
+        })
+    else:
+        if (
+            not isinstance(first_input, dict)
+            or first_input.get("kind") != "lavfi"
+            or first_input.get("role") != "silence"
+            or first_input.get("source") != "anullsrc=r=44100:cl=stereo"
+        ):
+            raise SpeechHandoffError("EFFECT_ONLY route must declare the approved silence input")
+        try:
+            silence_duration = float(first_input.get("duration_seconds"))
+        except (TypeError, ValueError) as exc:
+            raise SpeechHandoffError("Speech silence input duration is invalid") from exc
+        if not (silence_duration > 0) or abs(silence_duration - video_duration_seconds) > 0.02:
+            raise SpeechHandoffError("Speech silence input duration does not match the timeline")
+        normalized_inputs.append({
+            "kind": "lavfi", "role": "silence",
+            "source": "anullsrc=r=44100:cl=stereo",
+            "duration_seconds": round(silence_duration, 6),
+        })
+
+    if (
+        not isinstance(effect_input, dict)
+        or effect_input.get("kind") != "loop_file"
+        or effect_input.get("role") != "effect"
+    ):
+        raise SpeechHandoffError("Speech must declare the looping project-effect input")
+    try:
+        declared_effect_path = Path(effect_input["path"]).resolve(strict=True)
+    except (KeyError, TypeError, OSError, RuntimeError) as exc:
+        raise SpeechHandoffError("Speech effect input path is unavailable") from exc
+    if declared_effect_path != effect_path or effect_input.get("sha256") != effect_hash:
+        raise SpeechHandoffError("Declared effect input differs from validated Speech effect track")
+    normalized_inputs.append({
+        "kind": "loop_file", "role": "effect", "path": str(effect_path),
+        "sha256": effect_hash,
+    })
+
     timeline = payload.get("audio_timeline")
     if not isinstance(timeline, dict):
         raise SpeechHandoffError("Speech audio timeline recipe missing")
@@ -281,6 +344,7 @@ def validate_audio_package(
         video_duration_seconds=video_duration_seconds,
         visual_plan_sha256=plan_hash.lower(),
         audio_timeline=dict(timeline),
+        audio_inputs=tuple(normalized_inputs),
         audio_filter_graph=graph,
         audio_filter_graph_sha256=graph_hash.lower(),
     )
