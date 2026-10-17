@@ -215,7 +215,7 @@ def run_complete_batch(
         "phase": "ARMORED_SPEECH_TO_STUDIO",
         "status": "RUNNING",
         "mode": "COPY_ONLY_TEST" if copy_only else "REAL_STUDIO",
-        "audio_contract_version": 0 if copy_only else 4,
+        "audio_contract_version": 0 if copy_only else 5,
         "expected_item_count": manifest["expected_item_count"],
         "audio_packages": [],
         "processed": [],
@@ -266,11 +266,12 @@ def run_complete_batch(
                 visual_analyses[identity] = visual
                 visual_plans[identity] = visual.plan
 
-            # Speech now owns RVC, effect gain, timeline trimming/fades/mixing,
-            # and emits one complete soundtrack for each item before any render.
+            # Speech owns RVC, effect preparation/gain and the audio filter graph.
+            # Every item's voice/effect inputs and graph are validated before the
+            # one final FFmpeg audiovisual render starts.
             safe_batch = re.sub(r"[^A-Za-z0-9_.-]+", "_", manifest["batch_id"]).strip("._-") or "batch"
             package_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-            package_root = root / "storage" / "validation" / "speech-audio-v4" / f"{safe_batch}-{package_stamp}"
+            package_root = root / "storage" / "validation" / "speech-audio-v5" / f"{safe_batch}-{package_stamp}"
             configured_effect = os.getenv("ARMORED_SPEECH_EFFECT", "").strip()
             effect_source = (
                 Path(configured_effect).expanduser()
@@ -315,10 +316,12 @@ def run_complete_batch(
                     "item_id": str(item.telegram_message_id),
                     "audio_class": payload.get("audio_class"),
                     "route": payload.get("route"),
-                    "final_audio_track_path": str(validated.final_audio_track_path),
-                    "final_audio_track_sha256": validated.final_audio_sha256,
-                    "final_audio_codec": "aac",
-                    "final_audio_duration_seconds": validated.final_audio_duration_seconds,
+                    "voice_track_path": str(validated.voice_track_path),
+                    "voice_track_sha256": validated.voice_sha256,
+                    "effect_track_path": str(validated.effect_track_path),
+                    "effect_track_sha256": validated.effect_sha256,
+                    "audio_filter_graph_sha256": validated.audio_timeline["filter_graph_sha256"],
+                    "audio_output_label": validated.audio_output_label,
                     "visual_plan_sha256": validated.visual_plan_sha256,
                     "original_sha256": validated.original_sha256,
                 })
