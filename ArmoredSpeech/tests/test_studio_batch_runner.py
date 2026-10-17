@@ -337,9 +337,12 @@ def test_real_runner_blocks_all_studio_calls_if_any_v3_package_is_invalid(tmp_pa
         return packages
 
     class FakeStudio:
-        def process(self, item, *, speech_payload=None):
+        def analyze_visual(self, item):
+            return SimpleNamespace(plan={"audio_start": 0.0})
+
+        def process(self, item, *, speech_payload=None, visual_analysis=None):
             events.append(("studio", str(item.telegram_message_id)))
-            raise AssertionError("No Studio call is allowed when any v2 package is invalid")
+            raise AssertionError("No Studio call is allowed when any v3 package is invalid")
 
     monkeypatch.setattr(runner_module, "prepare_audio_packages_for_items", fake_prepare)
     monkeypatch.setattr(runner_module, "build_studio", lambda _root: FakeStudio())
