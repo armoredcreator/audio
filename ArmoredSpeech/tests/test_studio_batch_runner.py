@@ -241,22 +241,34 @@ def _write_v2_wav(path: Path) -> None:
         wav.writeframes(bytes(44100 * 2 * 2))
 
 
-def _fake_v4_package(root: Path, item, *, corrupt_effect_hash: bool = False) -> dict:
-    from ArmoredSpeech.timeline_mixer import visual_plan_digest
+def _fake_v5_package(root: Path, item, *, corrupt_effect_hash: bool = False) -> dict:
+    from ArmoredSpeech.timeline_mixer import build_audio_filter_graph
 
     original = Path(item.original_path)
     output_dir = root / "storage" / "validation" / "fake-packages" / str(item.telegram_message_id)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    final_audio = output_dir / "final_audio.m4a"
-    final_audio.write_bytes(b"\\x00\\x00\\x00\\x18ftypM4A " + b"synthetic aac payload" * 16)
+    voice = output_dir / "voice.wav"
+    effect = output_dir / "effect.wav"
+    _write_v2_wav(voice)
+    _write_v2_wav(effect)
     digest = _sha(original)
-    audio_hash = _sha(final_audio)
+    effect_hash = _sha(effect)
     if corrupt_effect_hash:
-        audio_hash = "0" * 64
+        effect_hash = "0" * 64
     plan = {"crop_final": None, "video_start": 0.0, "acoes": []}
-    duration = 3.0
+    audio = build_audio_filter_graph(
+        visual_plan=plan,
+        audio_start_seconds=0.0,
+        main_duration_seconds=1.0,
+        intro=True,
+        intro_position="final",
+    )
+    timeline = {
+        key: value for key, value in audio.items()
+        if key not in {"filter_graph", "output_label"}
+    }
+    timeline["final_audio_duration_seconds"] = 3.0
     return {
-        "contract_version": 4,
+        "contract_version": 5,
         "status": "READY",
         "source_id": str(item.source_id),
         "item_id": str(item.telegram_message_id),
@@ -274,39 +286,40 @@ def _fake_v4_package(root: Path, item, *, corrupt_effect_hash: bool = False) -> 
         "rvc_model": None,
         "rvc_model_sha256": None,
         "rvc_index_sha256": None,
-        "final_audio_track": {
-            "path": str(final_audio),
-            "sha256": audio_hash,
-            "format": "aac-m4a",
-            "codec": "aac",
+        "voice_track": {
+            "path": str(voice),
+            "sha256": _sha(voice),
+            "format": "wav-pcm-s16le",
             "sample_rate": 44100,
             "channels": 2,
-            "duration_seconds": duration,
-            "composition_owner": "ArmoredSpeech",
-            "size_bytes": final_audio.stat().st_size,
+            "duration_seconds": 1.0,
+            "size_bytes": voice.stat().st_size,
+            "role": "silence",
         },
-        "audio_timeline": {
-            "visual_plan_sha256": visual_plan_digest(plan),
-            "audio_start_seconds": 0.0,
-            "video_start_seconds": 0.0,
-            "main_duration_seconds": 1.0,
-            "intro_enabled": True,
-            "intro_position": "final",
-            "intro_duration_seconds": 2.0,
-            "final_audio_duration_seconds": duration,
-            "composition_owner": "ArmoredSpeech",
-            "filter_graph_sha256": "a" * 64,
+        "effect_track": {
+            "path": str(effect),
+            "sha256": effect_hash,
+            "source_sha256": "e" * 64,
+            "format": "wav-pcm-s16le",
+            "sample_rate": 44100,
+            "channels": 2,
+            "duration_seconds": 1.0,
+            "size_bytes": effect.stat().st_size,
+            "gain_policy": "loudnorm-I-12-LRA7-TP-1-then-volume-0.8",
         },
+        "audio_filter_graph": audio["filter_graph"],
+        "audio_output_label": audio["output_label"],
+        "audio_timeline": timeline,
         "prepared_video_duration_seconds": 1.0,
     }
 
-def test_real_runner_validates_entire_v4_batch_before_first_studio_call(tmp_path, monkeypatch):
+def test_real_runner_validates_entire_v5_batch_before_first_studio_call(tmp_path, monkeypatch):
     manifest_path, database, _ = _fixture(tmp_path, item_count=2)
     report_path = tmp_path / "storage" / "validation" / "v2-report.json"
     events = []
 
     def fake_prepare(items, **kwargs):
-        packages = [(item, _fake_v4_package(tmp_path, item)) for item in items]
+        packages = [(item, _fake_v5_package(tmp_path, item)) for item in items]
         events.append(("all-packages-prepared", len(packages)))
         return packages
 
@@ -337,7 +350,7 @@ def test_real_runner_validates_entire_v4_batch_before_first_studio_call(tmp_path
     )
 
     assert report["status"] == "SUCCESS"
-    assert report["audio_contract_version"] == 4
+    assert report["audio_contract_version"] == 5
     assert len(report["audio_packages"]) == 2
     assert len(report["processed"]) == 2
     assert events == [
@@ -347,7 +360,7 @@ def test_real_runner_validates_entire_v4_batch_before_first_studio_call(tmp_path
     ]
 
 
-def test_real_runner_blocks_all_studio_calls_if_any_v4_package_is_invalid(tmp_path, monkeypatch):
+def test_real_runner_blocks_all_studio_calls_if_any_v5_package_is_invalid(tmp_path, monkeypatch):
     manifest_path, database, _ = _fixture(tmp_path, item_count=2)
     report_path = tmp_path / "storage" / "validation" / "v2-report-failed.json"
     events = []
@@ -366,7 +379,7 @@ def test_real_runner_blocks_all_studio_calls_if_any_v4_package_is_invalid(tmp_pa
 
         def process(self, item, *, speech_payload=None, visual_analysis=None):
             events.append(("studio", str(item.telegram_message_id)))
-            raise AssertionError("No Studio call is allowed when any v4 package is invalid")
+            raise AssertionError("No Studio call is allowed when any v5 package is invalid")
 
     monkeypatch.setattr(runner_module, "prepare_audio_packages_for_items", fake_prepare)
     monkeypatch.setattr(runner_module, "build_studio", lambda _root: FakeStudio())
