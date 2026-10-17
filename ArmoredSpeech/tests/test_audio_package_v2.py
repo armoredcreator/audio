@@ -86,6 +86,30 @@ def _package(tmp_path: Path, **overrides):
         "prepared_video_duration_seconds": 1.0,
     }
     payload.update(overrides)
+    # Renderer inputs are declarative Speech policy, recomputed after overrides.
+    if payload.get("voice_track") is not None:
+        first_input = {
+            "kind": "file",
+            "role": "voice",
+            "path": payload["voice_track"]["path"],
+            "sha256": payload["voice_track"]["sha256"],
+        }
+    else:
+        first_input = {
+            "kind": "lavfi",
+            "role": "silence",
+            "source": "anullsrc=r=44100:cl=stereo",
+            "duration_seconds": float(payload["prepared_video_duration_seconds"]),
+        }
+    payload["audio_inputs"] = [
+        first_input,
+        {
+            "kind": "loop_file",
+            "role": "effect",
+            "path": payload["effect_track"]["path"],
+            "sha256": payload["effect_track"]["sha256"],
+        },
+    ]
     return original, voice, effect, payload
 
 
