@@ -33,16 +33,29 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _write_m4a(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\\x00\\x00\\x00\\x18ftypM4A " + b"synthetic aac payload" * 16)
+
+
+def _plan_digest(plan: dict) -> str:
+    import json
+    return hashlib.sha256(
+        json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def _package(tmp_path: Path, **overrides):
     original = tmp_path / "original.mp4"
     original.write_bytes(b"synthetic, immutable original bytes")
-    voice = tmp_path / "package" / "voice.wav"
-    effect = tmp_path / "package" / "effect.wav"
-    _write_wav(voice)
-    _write_wav(effect)
+    final_audio = tmp_path / "package" / "final_audio.m4a"
+    _write_m4a(final_audio)
     digest = _sha(original)
+    plan = {"video_start": 0.0}
+    main_duration = 1.0
+    final_duration = 3.0
     payload = {
-        "contract_version": 3,
+        "contract_version": 4,
         "status": "READY",
         "source_id": "source-1",
         "item_id": "telegram-1",
@@ -60,63 +73,54 @@ def _package(tmp_path: Path, **overrides):
         "rvc_model": "melody",
         "rvc_model_sha256": "c" * 64,
         "rvc_index_sha256": "d" * 64,
-        "voice_track": {
-            "path": str(voice),
-            "sha256": _sha(voice),
-            "format": "wav-pcm-s16le",
+        "final_audio_track": {
+            "path": str(final_audio),
+            "sha256": _sha(final_audio),
+            "format": "aac-m4a",
+            "codec": "aac",
             "sample_rate": 44100,
             "channels": 2,
-            "duration_seconds": 1.0,
+            "duration_seconds": final_duration,
+            "composition_owner": "ArmoredSpeech",
+            "size_bytes": final_audio.stat().st_size,
         },
-        "effect_track": {
-            "path": str(effect),
-            "sha256": _sha(effect),
-            "source_sha256": "a" * 64,
-            "format": "wav-pcm-s16le",
-            "sample_rate": 44100,
-            "channels": 2,
-            "duration_seconds": 1.0,
-            "gain_policy": "loudnorm-I-12-LRA7-TP-1-then-volume-0.8",
+        "audio_timeline": {
+            "visual_plan_sha256": _plan_digest(plan),
+            "audio_start_seconds": 0.0,
+            "video_start_seconds": 0.0,
+            "main_duration_seconds": main_duration,
+            "intro_enabled": True,
+            "intro_position": "final",
+            "intro_duration_seconds": 2.0,
+            "final_audio_duration_seconds": final_duration,
+            "composition_owner": "ArmoredSpeech",
+            "filter_graph_sha256": "a" * 64,
         },
-        "audio_timeline": __import__(
-            "ArmoredSpeech.timeline_mixer", fromlist=["build_audio_filter_graph"]
-        ).build_audio_filter_graph(
-            visual_plan={"video_start": 0.0}, audio_start_seconds=0.0, main_duration_seconds=1.0, intro=True, intro_position="final"
-        ),
-        "prepared_video_duration_seconds": 1.0,
+        "prepared_video_duration_seconds": main_duration,
     }
     payload.update(overrides)
-    # Renderer inputs are declarative Speech policy, recomputed after overrides.
-    if payload.get("voice_track") is not None:
-        first_input = {
-            "kind": "file",
-            "role": "voice",
-            "path": payload["voice_track"]["path"],
-            "sha256": payload["voice_track"]["sha256"],
-        }
-    else:
-        first_input = {
-            "kind": "lavfi",
-            "role": "silence",
-            "source": "anullsrc=r=44100:cl=stereo",
-            "duration_seconds": float(payload["prepared_video_duration_seconds"]),
-        }
-    payload["audio_inputs"] = [
-        first_input,
-        {
-            "kind": "loop_file",
-            "role": "effect",
-            "path": payload["effect_track"]["path"],
-            "sha256": payload["effect_track"]["sha256"],
-        },
-    ]
-    return original, voice, effect, payload
-
+    return original, final_audio, final_audio, payload
 
 
 def _mock_final_timeline(monkeypatch) -> None:
-    # Speech no longer runs a separate FFmpeg to build the final mixed WAV.
-    return None
+    from ArmoredSpeech import timeline_mixer
+
+    def fake_render(**kwargs):
+        output = Path(kwargs["output_path"])
+        _write_m4a(output)
+        return {
+            "path": str(output),
+            "sha256": _sha(output),
+            "format": "aac-m4a",
+            "codec": "aac",
+            "sample_rate": 44100,
+            "channels": 2,
+            "duration_seconds": float(kwargs["expected_duration_seconds"]),
+            "composition_owner": "ArmoredSpeech",
+            "size_bytes": output.stat().st_size,
+        }
+
+    monkeypatch.setattr(timeline_mixer, "render_final_audio_track", fake_render)
 
 
 def _preflight(root: Path, original: Path, source_wav: Path, effect: Path, *, rvc_allowed: bool):
