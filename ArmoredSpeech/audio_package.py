@@ -309,6 +309,10 @@ def prepare_audio_package(
             "prepared_video_duration_seconds": round(video_duration, 6),
             "package_id": final_dir.name,
         }
+        # Conversion intermediates are not part of the handoff contract. Keep
+        # only validated final tracks and manifest after a successful build.
+        rvc_input.unlink(missing_ok=True)
+        rvc_raw.unlink(missing_ok=True)
         (stage / "package.json").write_text(
             json.dumps(package, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
