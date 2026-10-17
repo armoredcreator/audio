@@ -82,6 +82,18 @@ def _package(tmp_path: Path, **overrides):
 
 
 
+def _mock_final_timeline(monkeypatch) -> None:
+    from ArmoredSpeech import timeline_mixer
+
+    monkeypatch.setenv("ARMORED_FFMPEG", "mock-ffmpeg")
+    monkeypatch.setattr(timeline_mixer.shutil, "which", lambda _: "mock-ffmpeg")
+    monkeypatch.setattr(
+        timeline_mixer,
+        "_run",
+        lambda command: _write_wav(Path(command[-1]), sample_rate=44100, channels=2),
+    )
+
+
 def _preflight(root: Path, original: Path, source_wav: Path, effect: Path, *, rvc_allowed: bool):
     model = root / "test-models" / "melody.pth"
     index = root / "test-models" / "melody.index"
@@ -181,6 +193,7 @@ def test_studio_validator_does_not_reclassify_speech_audio_policy(tmp_path):
 
 
 def test_audio_package_builder_prepares_tracks_without_changing_original(tmp_path, monkeypatch):
+    _mock_final_timeline(monkeypatch)
     original = tmp_path / "source.mp4"
     original.write_bytes(b"synthetic immutable original")
     source_wav = tmp_path / "source.wav"
@@ -250,6 +263,7 @@ def test_audio_package_builder_prepares_tracks_without_changing_original(tmp_pat
 
 
 def test_audio_package_builder_routes_unapproved_audio_to_silence_plus_effect(tmp_path, monkeypatch):
+    _mock_final_timeline(monkeypatch)
     original = tmp_path / "music.mp4"
     original.write_bytes(b"synthetic original")
     source_wav = tmp_path / "music.wav"
@@ -341,6 +355,7 @@ def test_audio_package_builder_fails_closed_when_music_evidence_is_unknown(tmp_p
             output_dir=tmp_path / "storage" / "validation" / "batch3" / "source1" / "telegram3",
         )
 def test_audio_package_builder_reuses_shared_batch_effect_without_reencoding(tmp_path, monkeypatch):
+    _mock_final_timeline(monkeypatch)
     original = tmp_path / "source.mp4"
     original.write_bytes(b"synthetic immutable original")
     source_wav = tmp_path / "source.wav"
