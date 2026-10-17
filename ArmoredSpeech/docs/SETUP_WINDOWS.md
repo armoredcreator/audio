@@ -11,7 +11,16 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 .\ArmoredSpeech\setup_runtime.ps1
 ```
 
-O script instala/reafirma as dependências do Speech no ambiente compartilhado. Não cria um ambiente virtual próprio do Speech. Se instalar dependências novas de RVC, mantenha as versões existentes congeladas e confira o inventário antes/depois.
+O script instala o AudioLab em modo editável e reafirma as dependências do Speech no ambiente compartilhado. O `pyproject.toml` declara `opencv-python-headless==4.10.0.84`, necessário para importar a análise visual do Studio, sem depender do pacote GUI do OpenCV. Não cria um ambiente virtual próprio do Speech.
+
+Se a `.venv` já existe e o único erro for `ModuleNotFoundError: No module named 'cv2'`, instale somente a versão declarada, sem resolver/alterar dependências transitivas:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install --no-deps opencv-python-headless==4.10.0.84
+.\.venv\Scripts\python.exe -c "import cv2, numpy; print('OpenCV:', cv2.__version__); print('NumPy:', numpy.__version__)"
+```
+
+Essa instalação deve adicionar apenas OpenCV; confira que NumPy continue em `1.23.5` e que Torch/TorchAudio mantenham suas versões validadas. Se for preparar um ambiente do zero, use o setup acima.
 
 ## Validar o Speech
 
