@@ -390,10 +390,11 @@ def prepare_audio_package(
     intro: bool = True,
     intro_position: str = "final",
 ) -> dict[str, Any]:
-    """Prepare component tracks and the complete timeline soundtrack in Speech.
+    """Prepare internal voice/effect intermediates and a finished AAC/M4A track.
 
-    The output directory must be new. The returned handoff exposes only the
-    completed final_audio_track; voice/effect WAVs remain Speech-owned intermediates.
+    The output directory must be new. Speech performs RVC, effect gain and
+    timeline mixing internally, then deletes component WAVs after the final track
+    is validated. The returned contract exposes only the final audio artifact.
     """
     from .timeline_mixer import build_audio_filter_graph, render_final_audio_track
 
