@@ -10,6 +10,7 @@ one final audiovisual FFmpeg render; Studio does not create audio policy.
 import hashlib
 import json
 import math
+import os
 import wave
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,7 @@ class AudioTimelineError(ValueError):
 def visual_plan_digest(plan: dict[str, Any] | None) -> str:
     """Digest the visual/timeline facts Speech used to prepare its audio graph."""
     raw = json.dumps(
-        plan or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        plan or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=os.fspath
     ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
