@@ -113,13 +113,15 @@ def prepare_audio_packages_for_items(
     intro: bool = True,
     intro_position: str = "final",
 ) -> list[tuple[object, dict]]:
-    """Prepare one completed AAC/M4A soundtrack per item for the whole batch.
+    """Prepare Speech-owned v5 tracks and an audio filter graph for a whole batch.
 
     The caller supplies a read-only visual plan so Speech can calculate temporal
     relationships. Speech owns audio decisions, RVC, effect preparation/gain,
-    synchronization, mix/fades and final audio encoding. This function does not
-    call Studio or render video. The v4 payload exports one final validated audio
-    file; Studio receives no component tracks or audio filter graph.
+    synchronization, mix/fades and audio timeline construction. This function
+    may use FFmpeg for audio preparation, but never calls Studio or renders a
+    completed video. The v5 handoff contains validated canonical PCM voice and
+    effect tracks plus the Speech-owned graph used by the single final
+    audiovisual FFmpeg render.
     """
     from .audio_package import (
         preflight_audio_package,
