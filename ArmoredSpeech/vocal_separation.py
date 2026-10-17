@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import wave
 from typing import Any
@@ -48,6 +49,12 @@ def _resolve_executable(name: str, env_var: str) -> str:
     discovered = shutil.which(name)
     if discovered:
         return discovered
+    # Direct execution via .venv\\Scripts\\python.exe does not necessarily
+    # activate that environment on PATH. Look beside the active interpreter.
+    sibling_name = f"{name}.exe" if os.name == "nt" else name
+    sibling = Path(sys.executable).resolve().parent / sibling_name
+    if sibling.is_file():
+        return str(sibling)
     raise VocalSeparationError(
         f"{name} is unavailable. Configure {env_var} or install the optional "
         "ArmoredSpeech separation dependency."
@@ -168,8 +175,14 @@ def separate_vocal_stem(
         raise VocalSeparationError("Separation model filename cannot be empty")
 
     source_hash_before = _sha256(source)
-    model_cache = root / "storage" / "models" / "audio-separation"
-    model_cache.mkdir(parents=True, exist_ok=True)
+    # Prefer the separator's existing model cache. A custom cache is opt-in so
+    # an older Speech run does not trigger an unnecessary multi-GB model download.
+    configured_model_dir = os.getenv("ARMORED_SPEECH_SEPARATION_MODEL_DIR", "").strip()
+    model_dir = Path(configured_model_dir).expanduser().resolve() if configured_model_dir else None
+    if model_dir is not None and not model_dir.is_dir():
+        raise VocalSeparationError(
+            "ARMORED_SPEECH_SEPARATION_MODEL_DIR must point to an existing model cache directory"
+        )
 
     def run(command: list[str], label: str) -> subprocess.CompletedProcess:
         try:
@@ -207,13 +220,11 @@ def separate_vocal_stem(
             raw_metrics = _wav_metrics(raw_wav)
             raw_hash = _sha256(raw_wav)
 
-            run([
-                separator, str(raw_wav),
-                "--model_filename", model,
-                "--model_file_dir", str(model_cache),
-                "--output_dir", str(stems_dir),
-                "--output_format", "WAV",
-            ], "VOCAL_SEPARATION_FAILED")
+            separation_command = [separator, str(raw_wav), "--model_filename", model]
+            if model_dir is not None:
+                separation_command.extend(["--model_file_dir", str(model_dir)])
+            separation_command.extend(["--output_dir", str(stems_dir), "--output_format", "WAV"])
+            run(separation_command, "VOCAL_SEPARATION_FAILED")
 
             vocal_candidates = sorted(
                 p for p in stems_dir.rglob("*")
