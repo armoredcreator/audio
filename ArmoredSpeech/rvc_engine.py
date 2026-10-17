@@ -14,17 +14,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SPEECH_ROOT = Path(__file__).resolve().parent
 SHARED_ENV_DIR = REPO_ROOT / ".venv"
 _configured_rvc_root = os.getenv("ARMORED_RVC_ROOT", "").strip()
-_speech_rvc_root = SPEECH_ROOT / "runtime" / "rvc"
-_legacy_rvc_root = REPO_ROOT / "ArmoredStudio" / "runtime" / "rvc"
-# Speech owns the engine and will own the assets. During the asset migration,
-# keep the known-good local model/index usable when the new Speech runtime
-# folder has not been populated yet. ARMORED_RVC_ROOT remains an explicit override.
-if _configured_rvc_root:
-    RVC_ROOT = Path(_configured_rvc_root).expanduser().resolve()
-elif _speech_rvc_root.exists():
-    RVC_ROOT = _speech_rvc_root.resolve()
-else:
-    RVC_ROOT = _legacy_rvc_root.resolve()
+# Single owner path: RVC code, routing and assets belong to ArmoredSpeech.
+# ARMORED_RVC_ROOT remains an explicit deployment override; there is no
+# implicit fallback into ArmoredStudio.
+RVC_ROOT = (
+    Path(_configured_rvc_root).expanduser().resolve()
+    if _configured_rvc_root
+    else SPEECH_ROOT / "runtime" / "rvc"
+).resolve()
 MODELS_DIR = RVC_ROOT / "models"
 BASE_DIR = SPEECH_ROOT
 
@@ -84,7 +81,7 @@ def _backend_output_tail(stdout: str, stderr: str, limit: int = 12) -> str:
 def converter_interno(entrada, saida, modelo, index, item_id=None):
     import scipy.io.wavfile as wavfile
 
-    prefix = f"[STUDIO][ITEM {item_id}] " if item_id else "[STUDIO] "
+    prefix = f"[SPEECH][ITEM {item_id}] " if item_id else "[SPEECH] "
     print(f"{prefix}RVC voz={modelo.parent.name}")
 
     captured_stdout = io.StringIO()
@@ -170,7 +167,7 @@ def executar_no_rvc(entrada, saida, voz, item_id=None):
     modelo, index = localizar_modelo(voz)
     rvc_python = resolver_rvc_python()
 
-    prefix = f"[STUDIO][ITEM {item_id}]" if item_id else "[STUDIO]"
+    prefix = f"[SPEECH][ITEM {item_id}]" if item_id else "[STUDIO]"
     print(f"\n{prefix} RVC voz={voz}")
 
     current_python = Path(sys.executable).resolve()
