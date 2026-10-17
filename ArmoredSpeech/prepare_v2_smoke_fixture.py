@@ -357,21 +357,57 @@ def create_real_video_smoke_fixture(
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     suffix = uuid.uuid4().hex[:6]
     safe_stem = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in video.stem)
-    test_item_id = f"v2smoke_real_{safe_stem}_{suffix}"
     batch_id = f"speech-v2-real-smoke-{stamp}-{suffix}"
     run_dir = root / "storage" / "validation" / batch_id
     run_dir.mkdir(parents=True, exist_ok=False)
 
     storage = Storage(root)
-    workspace = storage.source_workspace_root(test_source_id) / test_item_id
+    source_workspace_root = storage.source_workspace_root(test_source_id).resolve()
+    # When a corpus sample is organized as <source-root>/<message-id>/<label>.mp4,
+    # use that numeric folder as its simulated Telegram message ID. This follows
+    # the canonical storage layout instead of creating an unrelated v2smoke_* ID.
+    corpus_item_id = None
+    try:
+        relative_to_source = video.relative_to(source_workspace_root)
+        if (
+            len(relative_to_source.parts) == 2
+            and relative_to_source.parts[0].isdigit()
+            and video.parent.resolve() == (source_workspace_root / relative_to_source.parts[0]).resolve()
+        ):
+            corpus_item_id = relative_to_source.parts[0]
+    except ValueError:
+        pass
+
+    if corpus_item_id is not None:
+        test_item_id = corpus_item_id
+        workspace = source_workspace_root / test_item_id
+        workspace_created = False
+    else:
+        test_item_id = f"v2smoke_real_{safe_stem}_{suffix}"
+        workspace = source_workspace_root / test_item_id
+        workspace_created = False
+
+    # Match the file contract used by the original workspace simulation.
     original_copy = workspace / f"{test_item_id}_finallinkoriginal.mp4"
     wav_copy = workspace / f"{test_item_id}_finallinkoriginal.wav"
-    workspace_created = False
+    original_copy_claimed = False
+    wav_copy_claimed = False
     database_path: Path | None = None
 
     try:
-        workspace.mkdir(parents=True, exist_ok=False)
-        workspace_created = True
+        if corpus_item_id is None:
+            workspace.mkdir(parents=True, exist_ok=False)
+            workspace_created = True
+        elif not workspace.is_dir():
+            raise SmokeFixtureError(f"Test corpus item directory does not exist: {workspace}")
+
+        # Never overwrite an earlier test artifact or a Studio result.
+        if original_copy.exists():
+            raise SmokeFixtureError(f"Canonical test original already exists; preserving it: {original_copy}")
+        if wav_copy.exists():
+            raise SmokeFixtureError(f"Canonical Speech WAV already exists; preserving it: {wav_copy}")
+
+        original_copy_claimed = True
         shutil.copy2(video, original_copy)
         if sha256_file(original_copy).lower() != source_hash.lower():
             raise SmokeFixtureError("Copied real MP4 SHA-256 differs from source")
@@ -385,6 +421,7 @@ def create_real_video_smoke_fixture(
                 "No Studio run was prepared."
             )
 
+        wav_copy_claimed = True
         processor.prepare_wav(original_copy, wav_copy, decision)
         if not wav_copy.is_file() or wav_copy.stat().st_size <= 44:
             raise SmokeFixtureError("Real Speech processing did not produce a usable WAV sidecar")
@@ -439,8 +476,10 @@ def create_real_video_smoke_fixture(
                 "workspace": str(workspace),
                 "original_path": str(original_copy),
                 "original_sha256": source_hash,
-                "affiliate_name": "speech-v2-real-smoke",
-                "affiliate_url": f"https://example.invalid/speech-v2-real-smoke/{test_item_id}",
+                # A known lab-only suffix simulates the canonical result filename;
+                # do not derive the output tail from the input item ID.
+                "affiliate_name": "finaldomeulinknovo",
+                "affiliate_url": "https://example.invalid/finaldomeulinknovo",
             }],
         }
         manifest_path = run_dir / "manifest.json"
@@ -449,6 +488,12 @@ def create_real_video_smoke_fixture(
             encoding="utf-8",
         )
     except Exception:
+        # Corpus folders existed before this run. Remove only files claimed by
+        # this attempt; never recursively delete the user's source item folder.
+        if original_copy_claimed:
+            original_copy.unlink(missing_ok=True)
+        if wav_copy_claimed:
+            wav_copy.unlink(missing_ok=True)
         if workspace_created:
             shutil.rmtree(workspace, ignore_errors=True)
         if database_path is not None:
