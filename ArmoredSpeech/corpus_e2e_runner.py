@@ -96,8 +96,7 @@ def _is_generated_or_evidence(path: Path, root: Path, scan_root: Path) -> bool:
 
     # Ignore workspaces this helper created on prior runs and known outputs from
     # the v5 smoke test. The source set must be original inputs, not generated MP4s.
-    if any(part.casefold().startswith("videos grupo_fonte_corpus14_")
-           for part in path.parts):
+    if re.search(r"videos grupo_fonte_corpus\d+_", "\\".join(path.parts), re.IGNORECASE):
         return True
     name = path.name.casefold()
     if "finaldomeulinknovo" in name or path.stem.endswith("_"):
@@ -191,7 +190,7 @@ def _make_batch_manifest(
             "workspace": _relative(workspace, root),
             "original_path": _relative(original, root),
             "original_sha256": digest,
-            "affiliate_name": f"corpus14_{batch_id}_{item_id}",
+            "affiliate_name": f"corpus{len(ready_items)}_{batch_id}_{item_id}",
             "affiliate_url": None,
             "original_url": None,
             "affiliate_urls": [],
@@ -207,7 +206,7 @@ def _make_batch_manifest(
         "phase": "ARMORED_SPEECH",
         "phase_status": "COMPLETE",
         "approved": approved,
-        "batch_id": f"corpus14-{batch_id}",
+        "batch_id": f"corpus{len(items)}-{batch_id}",
         "expected_item_count": len(items),
         "items": items,
     }
@@ -239,11 +238,11 @@ def run_corpus_batch(
     batch_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", batch_id).strip("._-")[:48]
     if not batch_id:
         raise CorpusBatchError("batch-id inválido")
-    source_id = f"source_corpus14_{batch_id}"
+    source_id = f"source_corpus{expected_count}_{batch_id}"
     storage_root = root / "storage"
-    workspace_root = storage_root / f"Videos GRUPO_FONTE_corpus14_{batch_id}"
-    database = storage_root / "database" / f"armored_speech_corpus14_{batch_id}.sqlite3"
-    report_dir = storage_root / "validation" / f"corpus14_{batch_id}"
+    workspace_root = storage_root / f"Videos GRUPO_FONTE_corpus{expected_count}_{batch_id}"
+    database = storage_root / "database" / f"armored_speech_corpus{expected_count}_{batch_id}.sqlite3"
+    report_dir = storage_root / "validation" / f"corpus{expected_count}_{batch_id}"
     for target, label in (
         (workspace_root, "workspace"),
         (database, "SQLite"),
@@ -395,7 +394,13 @@ def run_corpus_batch(
         if not render:
             report["status"] = "SPEECH_READY_STUDIO_NOT_RUN"
             _write_json(report_dir / "speech-report.json", report)
-            print(f"STUDIO_RENDER=NOT_RUN (use --render after reviewing the Speech report)")
+            print("STUDIO_RENDER=NOT_RUN; o manifesto permanece approved=false.")
+            print("Após revisar os 14 resultados, mude approved para true no manifesto e execute:")
+            print(
+                f'  "{sys.executable}" -m ArmoredSpeech.studio_batch_runner '
+                f'--root "{root}" --manifest "{manifest_path}" --speech-database "{database}" '
+                f'--report "{report_dir / "studio-report.json"}"'
+            )
             print(f"MANIFEST={manifest_path}")
             return report
 
