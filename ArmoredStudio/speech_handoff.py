@@ -138,6 +138,46 @@ class ValidatedAudioPackage:
     timeline: dict[str, Any]
 
 
+def _validate_audio_track(raw, *, workspace, label, track_hash_cache=None):
+    if not isinstance(raw, dict):
+        raise SpeechHandoffError(f"{label} metadata missing or invalid")
+    try:
+        path = Path(raw["path"]).resolve(strict=True)
+        expected = raw["sha256"]
+        rate = int(raw["sample_rate"])
+        channels = int(raw["channels"])
+        duration = float(raw["duration_seconds"])
+    except (KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+        raise SpeechHandoffError(f"{label} metadata or path unavailable") from exc
+    if not path.is_file() or not _is_within(path, workspace):
+        raise SpeechHandoffError(f"{label} must be a file inside the lab workspace")
+    if path.stat().st_size <= 44 or raw.get("format") != "wav-pcm-s16le":
+        raise SpeechHandoffError(f"{label} format or size is invalid")
+    if rate != 44100 or channels != 2 or len(str(expected)) != 64 or duration <= 0:
+        raise SpeechHandoffError(f"{label} technical metadata is invalid")
+    try:
+        with wave.open(str(path), "rb") as stream:
+            actual_rate, actual_channels = stream.getframerate(), stream.getnchannels()
+            frames, width = stream.getnframes(), stream.getsampwidth()
+            if frames < 1 or width != 2 or not stream.readframes(1):
+                raise SpeechHandoffError(f"{label} WAV is unreadable")
+            actual_duration = frames / actual_rate
+    except (wave.Error, EOFError, OSError, ZeroDivisionError) as exc:
+        raise SpeechHandoffError(f"{label} WAV is unreadable") from exc
+    if (actual_rate, actual_channels) != (rate, channels) or abs(actual_duration-duration) > .02:
+        raise SpeechHandoffError(f"{label} technical metadata mismatch")
+    stat = path.stat()
+    key = (str(path), int(stat.st_dev), int(stat.st_ino), int(stat.st_size), int(stat.st_mtime_ns))
+    digest = track_hash_cache.get(key) if track_hash_cache is not None else None
+    if digest is None:
+        digest = sha256_file(path)
+        if track_hash_cache is not None:
+            track_hash_cache[key] = digest
+    if digest.lower() != str(expected).lower():
+        raise SpeechHandoffError(f"{label} SHA-256 mismatch")
+    return path, digest, raw
+
+
 def validate_audio_package(
     payload: dict[str, Any],
     *,
