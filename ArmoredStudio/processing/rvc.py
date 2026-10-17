@@ -21,46 +21,25 @@ RVC_ROOT = (
     else STUDIO_ROOT / "runtime" / "rvc"
 ).resolve()
 MODELS_DIR = RVC_ROOT / "models"
-RVC_ENV_DIR = RVC_ROOT / "env"
-RVC_ENV311_DIR = RVC_ROOT / "env311"
 
 DEFAULT_VOICE = "melody"
 DEFAULT_OUTPUT = RVC_ROOT / "output" / "audio_rvc.wav"
 
 
 def resolver_rvc_python() -> Path:
-    """Resolve the shared root Python by default, retaining an explicit RVC rollback."""
-    shared_candidates = (
+    """Resolve the only operational Python environment: the repository-root .venv."""
+    candidates = (
         SHARED_ENV_DIR / "Scripts" / "python.exe",
         SHARED_ENV_DIR / "bin" / "python",
         SHARED_ENV_DIR / "bin" / "python3",
     )
-    reference_candidates = (
-        RVC_ENV311_DIR / "Scripts" / "python.exe",
-        RVC_ENV311_DIR / "bin" / "python",
-        RVC_ENV311_DIR / "bin" / "python3",
-        RVC_ENV_DIR / "Scripts" / "python.exe",
-        RVC_ENV_DIR / "bin" / "python",
-        RVC_ENV_DIR / "bin" / "python3",
-    )
-
-    # One operational environment at the repository root is the default.
-    # Set ARMORED_RVC_USE_REFERENCE=1 only to explicitly run the preserved
-    # env311/legacy reference during rollback or comparison.
-    use_reference = os.getenv("ARMORED_RVC_USE_REFERENCE", "").strip().lower()
-    candidates = (
-        reference_candidates + shared_candidates
-        if use_reference in {"1", "true", "yes"}
-        else shared_candidates + reference_candidates
-    )
-
     for candidate in candidates:
         if candidate.exists() and candidate.is_file():
             return candidate
 
-    expected = "\n".join(str(path) for path in candidates)
+    expected = "\\n".join(str(path) for path in candidates)
     raise FileNotFoundError(
-        "Python do ambiente compartilhado/RVC não encontrado. Caminhos esperados:\n"
+        "Python do ambiente unificado da raiz não encontrado. Caminhos esperados:\\n"
         + expected
     )
 
