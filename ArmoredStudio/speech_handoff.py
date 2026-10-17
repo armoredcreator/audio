@@ -260,8 +260,24 @@ def validate_audio_package(
     if route == "RVC_MELODY":
         if not safe_rvc_decision or str(model).strip().lower() != "melody":
             raise SpeechHandoffError("Unsafe or inconsistent RVC_MELODY route")
+        model_hash = payload.get("rvc_model_sha256")
+        index_hash = payload.get("rvc_index_sha256")
+        if not isinstance(model_hash, str) or len(model_hash) != 64:
+            raise SpeechHandoffError("RVC model SHA-256 is missing")
+        try:
+            int(model_hash, 16)
+            if index_hash is not None:
+                if not isinstance(index_hash, str) or len(index_hash) != 64:
+                    raise ValueError("invalid index hash")
+                int(index_hash, 16)
+        except ValueError as exc:
+            raise SpeechHandoffError("RVC model/index SHA-256 is invalid") from exc
     elif route == "EFFECT_ONLY":
-        if rvc_eligible or model is not None or safe_rvc_decision:
+        if (
+            rvc_eligible or model is not None or safe_rvc_decision
+            or payload.get("rvc_model_sha256") is not None
+            or payload.get("rvc_index_sha256") is not None
+        ):
             raise SpeechHandoffError("EFFECT_ONLY route conflicts with RVC eligibility")
     else:
         raise SpeechHandoffError("Unsupported audio route")
