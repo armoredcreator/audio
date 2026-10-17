@@ -60,22 +60,30 @@ def _package(tmp_path: Path, **overrides):
         "rvc_model": "melody",
         "rvc_model_sha256": "c" * 64,
         "rvc_index_sha256": "d" * 64,
-        "timeline": {
-            "visual_plan_sha256": "a" * 64,
-            "audio_start_seconds": 0.0,
-            "intro_enabled": True,
-            "intro_position": "final",
-            "intro_duration_seconds": 2.0,
-        },
-        "final_audio_track": {
+        "voice_track": {
             "path": str(voice),
             "sha256": _sha(voice),
             "format": "wav-pcm-s16le",
             "sample_rate": 44100,
             "channels": 2,
             "duration_seconds": 1.0,
-            "composition_owner": "ArmoredSpeech",
         },
+        "effect_track": {
+            "path": str(effect),
+            "sha256": _sha(effect),
+            "source_sha256": "a" * 64,
+            "format": "wav-pcm-s16le",
+            "sample_rate": 44100,
+            "channels": 2,
+            "duration_seconds": 1.0,
+            "gain_policy": "loudnorm-I-12-LRA7-TP-1-then-volume-0.8",
+        },
+        "audio_timeline": __import__(
+            "ArmoredSpeech.timeline_mixer", fromlist=["build_audio_filter_graph"]
+        ).build_audio_filter_graph(
+            visual_plan={"audio_start": 0.0}, intro=True, intro_position="final"
+        ),
+        "prepared_video_duration_seconds": 1.0,
     }
     payload.update(overrides)
     return original, voice, effect, payload
@@ -145,8 +153,11 @@ def test_valid_v3_audio_package_validates_final_track_hash_and_identity(tmp_path
 
     assert result.route == "RVC_MELODY"
     assert result.rvc_eligible is True
-    assert result.final_audio_track_path == voice
-    assert result.final_audio_sha256 == _sha(voice)
+    assert result.voice_track_path == voice
+    assert result.voice_sha256 == _sha(voice)
+    assert result.effect_track_path == effect
+    assert result.effect_sha256 == _sha(effect)
+    assert "[voice_main][effect_main]amix=" in result.audio_filter_graph
 
 
 @pytest.mark.parametrize("field,value", [
@@ -176,20 +187,33 @@ def test_v3_package_rejects_final_track_outside_workspace(tmp_path):
     original, _, _, payload = _package(tmp_path)
     outside = tmp_path.parent / f"{tmp_path.name}-outside.wav"
     _write_wav(outside)
-    payload["final_audio_track"]["path"] = str(outside)
-    payload["final_audio_track"]["sha256"] = _sha(outside)
+    payload["voice_track"]["path"] = str(outside)
+    payload["voice_track"]["sha256"] = _sha(outside)
 
     with pytest.raises(SpeechHandoffError, match="inside the lab workspace"):
         _validate(tmp_path, original, payload)
 
 
-def test_studio_validator_does_not_reclassify_speech_audio_policy(tmp_path):
-    original, _, _, payload = _package(tmp_path, music_detected=None)
+def test_studio_validates_effect_only_contract_without_selecting_audio_route(tmp_path):
+    original, _, effect, payload = _package(
+        tmp_path,
+        audio_class="MUSIC_ONLY",
+        language="unknown",
+        speech_detected=False,
+        music_detected=True,
+        route="EFFECT_ONLY",
+        rvc_eligible=False,
+        rvc_model=None,
+        rvc_model_sha256=None,
+        rvc_index_sha256=None,
+        voice_track=None,
+    )
 
-    # Speech is responsible for classification and the Melody eligibility gate.
-    # Studio validates the already-completed soundtrack and its file contract.
     result = _validate(tmp_path, original, payload)
-    assert result.final_audio_track_path.is_file()
+    assert result.route == "EFFECT_ONLY"
+    assert result.rvc_eligible is False
+    assert result.voice_track_path is None
+    assert result.effect_track_path == effect
 
 
 def test_audio_package_builder_prepares_tracks_without_changing_original(tmp_path, monkeypatch):
