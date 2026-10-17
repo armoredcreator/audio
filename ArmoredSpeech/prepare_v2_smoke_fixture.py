@@ -326,10 +326,11 @@ def create_real_video_smoke_fixture(
 ) -> dict[str, str]:
     """Analyze a real storage MP4 copy and build a lab-only v2 fixture.
 
-    This deliberately does not open or mutate the operational ArmoredCreator
-    database. Speech produces the WAV on a copy, then the READY decision is
-    written to a uniquely named lab database under storage/database, matching
-    the production directory layout without sharing production state.
+    Speech classification must resolve a supported, non-UNKNOWN audio class.
+    Only the clean PT-BR narration route can pass the later Studio bridge as
+    RVC-eligible; other resolved classes are tested through the safe effect-only
+    route. The operational ArmoredCreator database is never opened.
+    The READY decision is stored in a unique lab database under storage/database.
     """
     from .contracts import AudioClass, SpeechStatus
     from .model_processor import ModelProcessor
@@ -378,19 +379,10 @@ def create_real_video_smoke_fixture(
         # Use the real analyzer/converter; never synthesize a classification row.
         processor = ModelProcessor()
         decision = processor.analyze(original_copy)
-        if (
-            decision.audio_class is not AudioClass.PT_BR_NARRATION
-            or str(decision.language or "").strip().lower().replace("_", "-") not in {"pt", "pt-br"}
-            or not decision.speech_detected
-            or decision.music_detected is not False
-            or not decision.rvc_eligible
-        ):
+        if decision.audio_class is AudioClass.UNKNOWN:
             raise SmokeFixtureError(
-                "Real source did not pass the clean Melody route: "
-                f"class={decision.audio_class.value}, language={decision.language!r}, "
-                f"speech_detected={decision.speech_detected}, "
-                f"music_detected={decision.music_detected}, "
-                f"rvc_eligible={decision.rvc_eligible}. No Studio run was prepared."
+                "Speech classification is UNKNOWN; refusing to fabricate a route or READY result. "
+                "No Studio run was prepared."
             )
 
         processor.prepare_wav(original_copy, wav_copy, decision)
