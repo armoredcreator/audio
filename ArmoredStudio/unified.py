@@ -200,7 +200,7 @@ class UnifiedStudio:
         music = Path(os.getenv("ARMORED_STUDIO_MUSIC", str(self.root / "ArmoredStudio" / "assets" / "efeitosonoro.wav")))
         banner = Path(os.getenv("ARMORED_STUDIO_BANNER", str(self.root / "ArmoredStudio" / "assets" / "banner.png")))
 
-        if not music.is_file() or not banner.is_file():
+        if (speech_audio_package is None and not music.is_file()) or not banner.is_file():
             raise FileNotFoundError(
                 "Recursos do Studio ausentes. Configure ARMORED_STUDIO_MUSIC e "
                 "ARMORED_STUDIO_BANNER ou instale os assets no projeto."
