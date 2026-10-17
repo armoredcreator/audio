@@ -141,9 +141,9 @@ class UnifiedStudio:
             output.replace(destination)
             return destination, {"mode": "test-copy", "plan": None}
 
-        if not isinstance(speech_payload, dict) or speech_payload.get("contract_version") != 4:
+        if not isinstance(speech_payload, dict) or speech_payload.get("contract_version") != 5:
             raise RuntimeError(
-                "ArmoredSpeech final-audio contract v4 é obrigatório; "
+                "ArmoredSpeech audio contract v5 é obrigatório; "
                 "os caminhos legados de áudio do Studio estão desabilitados."
             )
         try:
