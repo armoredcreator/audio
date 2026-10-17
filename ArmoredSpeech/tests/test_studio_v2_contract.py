@@ -114,7 +114,7 @@ def test_studio_combines_one_speech_audio_graph_with_one_visual_render(tmp_path,
     banner.write_bytes(b"synthetic banner")
     output = tmp_path / "final.mp4"
     item = FakeItem("source-1", "content-1", "telegram-1", original)
-    plan = {"audio_start": 0.25, "video_start": 0.0}
+    plan = {"video_start": 0.0}
     visual = SimpleNamespace(plan=plan, video={"sucesso": True, "duracao": 3.0})
     payload = _payload(tmp_path, original, voice, effect, plan)
     captured = {}
@@ -165,7 +165,7 @@ def test_studio_rejects_voice_hash_mismatch_before_render(tmp_path, monkeypatch)
     _write_wav(voice)
     _write_wav(effect)
     output = tmp_path / "final.mp4"
-    plan = {"audio_start": 0.0}
+    plan = {"video_start": 0.0}
     payload = _payload(tmp_path, original, voice, effect, plan)
     payload["voice_track"]["sha256"] = "0" * 64
     item = FakeItem("source-1", "content-1", "telegram-1", original)
@@ -190,9 +190,9 @@ def test_studio_rejects_audio_graph_composed_for_different_visual_plan(tmp_path,
     _write_wav(voice)
     _write_wav(effect)
     output = tmp_path / "final.mp4"
-    package_plan = {"audio_start": 0.0}
+    package_plan = {"video_start": 0.0}
     payload = _payload(tmp_path, original, voice, effect, package_plan)
-    different_visual_plan = {"audio_start": 0.25}
+    different_visual_plan = {"video_start": 0.25}
     item = FakeItem("source-1", "content-1", "telegram-1", original)
     studio = UnifiedStudio(tmp_path, FakeStorage(output))
 
@@ -229,4 +229,4 @@ def test_effect_only_contract_has_no_voice_file_or_rvc_metadata(tmp_path):
     assert validated.route == "EFFECT_ONLY"
     assert validated.voice_track_path is None
     assert validated.effect_track_path == effect
-    assert validated.audio_output_label if hasattr(validated, "audio_output_label") else validated.audio_timeline["output_label"] == "[final_a]"
+    assert validated.audio_timeline["output_label"] == "[final_a]"
