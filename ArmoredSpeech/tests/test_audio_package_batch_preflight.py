@@ -37,14 +37,31 @@ def test_batch_preflights_all_directives_and_inputs_before_first_package_build(t
         events.append(("preflight", item.telegram_message_id))
         return {"preflight_for": item.telegram_message_id}
 
+    def fake_prepare_effect(source, **kwargs):
+        events.append(("shared-effect", "once"))
+        return {
+            "path": str(tmp_path / "effect-prepared.wav"),
+            "sha256": "a" * 64,
+            "source_sha256": "b" * 64,
+            "format": "wav-pcm-s16le",
+            "sample_rate": 44100,
+            "channels": 2,
+            "duration_seconds": 1.0,
+            "gain_policy": "loudnorm-I-12-LRA7-TP-1-then-volume-0.8",
+            "_prepared_and_verified": True,
+        }
+
     def fake_prepare(payload, item, **kwargs):
         events.append(("build", item.telegram_message_id))
         assert kwargs["preflight"]["preflight_for"] == item.telegram_message_id
+        assert kwargs["prepared_effect_track"]["_prepared_and_verified"] is True
         return {"contract_version": 2, "item_id": item.telegram_message_id}
 
     monkeypatch.setattr(integration, "export_audio_directive", fake_export)
     monkeypatch.setattr(audio_package, "preflight_audio_package", fake_preflight)
+    monkeypatch.setattr(audio_package, "prepare_effect_track", fake_prepare_effect)
     monkeypatch.setattr(audio_package, "prepare_audio_package", fake_prepare)
+    monkeypatch.setattr(audio_package, "sha256_file", lambda path: "b" * 64)
 
     prepared = integration.prepare_audio_packages_for_items(
         items,
@@ -58,6 +75,7 @@ def test_batch_preflights_all_directives_and_inputs_before_first_package_build(t
     assert [event[0] for event in events] == [
         "export", "export", "export",
         "preflight", "preflight", "preflight",
+        "shared-effect",
         "build", "build", "build",
     ]
     assert [item.telegram_message_id for item, _ in prepared] == [
