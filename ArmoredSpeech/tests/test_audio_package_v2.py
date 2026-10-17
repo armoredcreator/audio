@@ -433,3 +433,89 @@ def test_audio_package_builder_reuses_shared_batch_effect_without_reencoding(tmp
     ).effect_track_path == shared_effect
 
 
+def test_batch_preflight_hashes_melody_model_and_index_only_once(tmp_path, monkeypatch):
+    original = tmp_path / "source.mp4"
+    original.write_bytes(b"synthetic immutable original")
+    source_wav = tmp_path / "source.wav"
+    _write_wav(source_wav, sample_rate=16000, channels=1)
+    effect_source = tmp_path / "ArmoredStudio" / "assets" / "efeitosonoro.wav"
+    effect_source.parent.mkdir(parents=True, exist_ok=True)
+    effect_source.write_bytes(b"effect asset bytes large enough for preflight" * 2)
+    model_dir = tmp_path / "ArmoredStudio" / "runtime" / "rvc" / "models" / "melody"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    model = model_dir / "melody.pth"
+    index = model_dir / "melody.index"
+    model.write_bytes(b"synthetic Melody model fingerprint")
+    index.write_bytes(b"synthetic Melody index fingerprint")
+    python_path = tmp_path / ".venv" / "Scripts" / "python.exe"
+    python_path.parent.mkdir(parents=True, exist_ok=True)
+    python_path.write_bytes(b"python placeholder")
+
+    item = Item("source-1", "telegram-asset-cache", "source1_telegram_asset_cache", original)
+    digest = _sha(original)
+    directive = {
+        "contract_version": 1,
+        "source_id": item.source_id,
+        "item_id": item.telegram_message_id,
+        "original_path": str(original),
+        "audio_artifact_path": str(source_wav),
+        "audio_class": "PT_BR_NARRATION",
+        "language": "pt-br",
+        "speech_detected": True,
+        "music_detected": False,
+        "confidence": 0.99,
+        "rvc_eligible": True,
+        "original_sha256_before": digest,
+        "original_sha256_after": digest,
+    }
+
+    from armored_core.audio import rvc
+
+    monkeypatch.setattr(audio_package, "_tool", lambda name, env_name: f"mock-{name}")
+    monkeypatch.setattr(audio_package, "_media_duration", lambda path, tool: 1.0)
+    monkeypatch.setattr(rvc, "MODELS_DIR", model_dir.parent)
+    monkeypatch.setattr(rvc, "resolver_rvc_python", lambda: python_path)
+    monkeypatch.setattr(rvc, "localizar_modelo", lambda voice: (model, index))
+
+    original_sha_function = audio_package.sha256_file
+    hash_counts: dict[Path, int] = {}
+
+    def counted_sha(path: str | Path) -> str:
+        resolved = Path(path).resolve()
+        hash_counts[resolved] = hash_counts.get(resolved, 0) + 1
+        return original_sha_function(path)
+
+    monkeypatch.setattr(audio_package, "sha256_file", counted_sha)
+    effect_hash = original_sha_function(effect_source)
+
+    first = audio_package.preflight_audio_package(
+        directive,
+        item,
+        workspace_root=tmp_path,
+        effect_source_path=effect_source,
+        effect_source_sha256=effect_hash,
+    )
+    fingerprint = {
+        key: first[key]
+        for key in (
+            "rvc_python_path", "rvc_model_path", "rvc_model_sha256",
+            "rvc_model_size", "rvc_model_mtime_ns", "rvc_model_inode",
+            "rvc_index_path", "rvc_index_sha256",
+            "rvc_index_size", "rvc_index_mtime_ns", "rvc_index_inode",
+        )
+    }
+    second = audio_package.preflight_audio_package(
+        directive,
+        item,
+        workspace_root=tmp_path,
+        effect_source_path=effect_source,
+        effect_source_sha256=effect_hash,
+        rvc_asset_fingerprint=fingerprint,
+    )
+
+    assert first["rvc_model_sha256"] == second["rvc_model_sha256"] == original_sha_function(model)
+    assert first["rvc_index_sha256"] == second["rvc_index_sha256"] == original_sha_function(index)
+    assert hash_counts[model.resolve()] == 1
+    assert hash_counts[index.resolve()] == 1
+
+
