@@ -9,6 +9,7 @@ description = "Shared Python environment for isolated ArmoredSpeech and ArmoredS
 requires-python = ">=3.11"
 dependencies = [
     "opencv-python-headless==4.10.0.84",
+    "imageio-ffmpeg==0.6.0",
 ]
 
 [tool.setuptools.packages.find]
