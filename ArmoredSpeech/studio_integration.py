@@ -130,17 +130,27 @@ def prepare_audio_packages_for_items(
 
     # Preflight all source WAVs, original hashes, executable availability, video
     # durations, effect asset, and Melody model/index before running RVC on any item.
-    preflights = [
-        preflight_audio_package(
+    preflights = []
+    rvc_asset_fingerprint = None
+    for item, directive_payload in directives:
+        preflight = preflight_audio_package(
             directive_payload,
             item,
             workspace_root=root,
             effect_source_path=effect_source_path,
             voice="melody",
             effect_source_sha256=effect_source_hash,
+            rvc_asset_fingerprint=rvc_asset_fingerprint,
         )
-        for item, directive_payload in directives
-    ]
+        preflights.append(preflight)
+        if preflight.get("rvc_model_path"):
+            rvc_asset_fingerprint = {
+                "rvc_python_path": preflight["rvc_python_path"],
+                "rvc_model_path": preflight["rvc_model_path"],
+                "rvc_model_sha256": preflight["rvc_model_sha256"],
+                "rvc_index_path": preflight["rvc_index_path"],
+                "rvc_index_sha256": preflight["rvc_index_sha256"],
+            }
 
     # The effect is the same project asset for the entire batch. Normalize and
     # apply the approved gain once; every per-item contract refers to this shared,
