@@ -81,9 +81,8 @@ def test_stale_or_missing_separation_receipt_is_not_trusted(tmp_path):
 def test_mixed_directive_uses_verified_stem_and_authorizes_rvc(tmp_path, monkeypatch):
     source = tmp_path / "source.mp4"
     source.write_bytes(b"immutable video")
-    sidecar = tmp_path / "source.wav"
-    _write_wav(sidecar, rate=16000, channels=1)
     vocal = tmp_path / "separated" / "vocals.wav"
+    _write_wav(vocal, rate=16000, channels=1)
     receipt = {
         "schema_version": 1,
         "status": "READY",
@@ -102,7 +101,7 @@ def test_mixed_directive_uses_verified_stem_and_authorizes_rvc(tmp_path, monkeyp
     item = SimpleNamespace(source_id="source-test", telegram_message_id="004", original_path=source)
     payload = {
         "audio_class": "PT_BR_NARRATION_WITH_MUSIC",
-        "audio_artifact_path": str(sidecar),
+        "audio_artifact_path": str(vocal),
         "language": "pt-br",
         "speech_detected": True,
         "music_detected": True,
