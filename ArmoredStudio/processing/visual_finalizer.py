@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-"""ArmoredStudio visual render + mux of the final ArmoredSpeech soundtrack.
+"""Visual-only renderer that executes the Speech audio graph in one final FFmpeg.
 
-No audio classification, extraction, RVC, track mixing, fades, gain, or timing
-filters live in this module. Speech supplies one complete timeline-aligned WAV.
-Studio transforms only video frames and maps the supplied audio stream unchanged
-into the final MP4 container.
+ArmoredStudio owns video crop/framing, VEO/Gemini/bar/banner corrections, and
+video encoding. The audio filter graph is generated and validated by ArmoredSpeech;
+this module attaches it to the visual graph, maps its final label, and does not
+classify audio or choose any audio-processing policy.
 """
 
 import json
@@ -24,8 +24,6 @@ VIDEO_PIX_FMT = "yuv420p"
 AUDIO_BITRATE = "192k"
 
 INTRO_DURATION = 2.0
-INTRO_WIDTH = 1080
-INTRO_HEIGHT = 1920
 STORY_WIDTH = 1080
 STORY_HEIGHT = 1920
 BLUR = "boxblur=6:2"
@@ -58,8 +56,10 @@ def _validate_file(path: Path, description: str) -> None:
 def _probe_video(video: Path) -> tuple[int, int, str]:
     ffprobe = resolve_executable("ffprobe", env_var="ARMORED_FFPROBE", project_root=PROJECT_ROOT)
     result = subprocess.run(
-        [str(ffprobe), "-v", "error", "-select_streams", "v:0",
-         "-show_entries", "stream=width,height,r_frame_rate", "-of", "json", str(video)],
+        [
+            str(ffprobe), "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height,r_frame_rate", "-of", "json", str(video),
+        ],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
         errors="replace", **_windows_hidden_kwargs(),
     )
@@ -72,112 +72,176 @@ def _probe_video(video: Path) -> tuple[int, int, str]:
     return int(stream["width"]), int(stream["height"]), stream.get("r_frame_rate", "30/1")
 
 
-def _video_plan_filters(plan: dict[str, Any] | None) -> list[str]:
-    plan = plan or {}
-    filters: list[str] = []
-    start = float(plan.get("video_start", 0) or 0)
-    if start > 0:
-        filters += [f"trim=start={start:g}", "setpts=PTS-STARTPTS"]
-    crop = plan.get("crop_final")
-    if crop:
-        x, y = int(crop.get("x", 0)), int(crop.get("y", 0))
-        width, height = int(crop.get("width", 0)), int(crop.get("height", 0))
-        if width <= 0 or height <= 0:
-            raise ValueError("crop_final inválido.")
-        filters.append(f"crop={width}:{height}:{x}:{y}")
-    return filters
-
-
-def _story_filters(width: int, height: int) -> list[str]:
-    if width <= 0 or height <= 0:
-        raise ValueError("Dimensões do vídeo inválidas.")
-    return [
-        f"scale={STORY_WIDTH}:{STORY_HEIGHT}:force_original_aspect_ratio=increase",
-        f"crop={STORY_WIDTH}:{STORY_HEIGHT}:(iw-{STORY_WIDTH})/2:(ih-{STORY_HEIGHT})/2",
-        "setsar=1",
-    ]
-
-
-def _plan_dimensions(plan: dict[str, Any] | None, width: int, height: int) -> tuple[int, int]:
+def _single_portrait_crop(
+    plan: dict[str, Any] | None,
+    source_width: int,
+    source_height: int,
+) -> tuple[int, int, int, int]:
+    """Combine planner safety crop + 9:16 framing into one source-frame crop."""
+    if source_width <= 0 or source_height <= 0:
+        raise ValueError("Dimensões do vídeo inválidas")
     crop = (plan or {}).get("crop_final")
-    return (int(crop.get("width", width)), int(crop.get("height", height))) if crop else (width, height)
+    if crop:
+        sx, sy = int(crop["x"]), int(crop["y"])
+        sw, sh = int(crop["width"]), int(crop["height"])
+    else:
+        sx, sy, sw, sh = 0, 0, source_width, source_height
+
+    if sx < 0 or sy < 0 or sw <= 0 or sh <= 0 or sx + sw > source_width or sy + sh > source_height:
+        raise ValueError("crop_final inválido ou fora do vídeo")
+
+    # Exact integer multiples of 9x16 yield a portrait source crop that can be
+    # scaled to 1080x1920 without a second crop. Even multiples also satisfy
+    # common yuv420p chroma alignment constraints.
+    units = min(sw // 9, sh // 16)
+    units -= units % 2
+    if units < 2:
+        raise ValueError("Área segura pequena demais para formar um crop 9:16")
+    width, height = 9 * units, 16 * units
+    x = sx + (sw - width) // 2
+    y = sy + (sh - height) // 2
+
+    # Prefer even origins while remaining inside the planner-approved safe area.
+    if x % 2:
+        x = x + 1 if x + width <= sx + sw else x - 1
+    if y % 2:
+        y = y + 1 if y + height <= sy + sh else y - 1
+    if x < sx or y < sy or x + width > sx + sw or y + height > sy + sh:
+        raise ValueError("Não foi possível alinhar o crop final dentro da região segura")
+    return x, y, width, height
 
 
 def _video_filter_graph(
-    video: Path, banner: Path, width: int, height: int, fps: str,
-    plan: dict[str, Any] | None, *, intro: bool, position: str,
+    source_width: int,
+    source_height: int,
+    fps: str,
+    plan: dict[str, Any] | None,
+    *,
+    intro: bool,
+    position: str,
 ) -> tuple[str, str]:
-    main_filters = _video_plan_filters(plan) + _story_filters(width, height) + [
-        f"eq=brightness={BRIGHTNESS}:contrast={CONTRAST}:saturation={SATURATION}:gamma={GAMMA}",
-        f"unsharp={UNSHARP}", "setpts=PTS-STARTPTS",
-    ]
-    main = "[0:v]" + ",".join(main_filters) + "[main_v]"
-    if not intro:
-        return main, "[main_v]"
-
-    intro_source = _video_plan_filters(plan) + [
-        f"trim=duration={INTRO_DURATION}", "setpts=PTS-STARTPTS",
-    ]
-    intro_graph = (
-        ";[0:v]" + ",".join(intro_source) + ","
-        f"scale={INTRO_WIDTH}:2133,"
-        f"crop={INTRO_WIDTH}:{INTRO_HEIGHT}:x=(iw-{INTRO_WIDTH})/2:y=(ih-{INTRO_HEIGHT})/2,"
-        f"{BLUR},{FADE_IN},{FADE_OUT}[intro_bg];"
-        f"[2:v]scale={INTRO_WIDTH}:{INTRO_HEIGHT}[banner];"
-        f"[intro_bg][banner]overlay=0:0,fps={fps},setpts=PTS-STARTPTS[intro_v0];"
-        f"[intro_v0]trim=duration={INTRO_DURATION},setpts=PTS-STARTPTS,"
-        f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-        f"crop={width}:{height}:(iw-{width})/2:(ih-{height})/2,"
-        "setsar=1,setpts=PTS-STARTPTS[intro_v]"
+    """Build one crop on the source, then branch the cropped frames for intro/main."""
+    plan = plan or {}
+    x, y, crop_width, crop_height = _single_portrait_crop(
+        plan, source_width, source_height
     )
-    pieces = "[intro_v][main_v]" if position == "inicio" else "[main_v][intro_v]"
-    return main + intro_graph + f";{pieces}concat=n=2:v=1:a=0[vout]", "[vout]"
+    video_start = float(plan.get("video_start", 0) or 0)
+    if video_start < 0:
+        raise ValueError("video_start cannot be negative")
+
+    source_filters = []
+    if video_start > 0:
+        source_filters.extend([f"trim=start={video_start:g}", "setpts=PTS-STARTPTS"])
+    source_filters.append(f"crop={crop_width}:{crop_height}:{x}:{y}")
+
+    common = "[0:v]" + ",".join(source_filters)
+    if intro:
+        common += ",split=2[main_src][intro_src]"
+    else:
+        common += "[main_src]"
+
+    main = (
+        ";[main_src]"
+        f"scale={STORY_WIDTH}:{STORY_HEIGHT},setsar=1,"
+        f"eq=brightness={BRIGHTNESS}:contrast={CONTRAST}:saturation={SATURATION}:gamma={GAMMA},"
+        f"unsharp={UNSHARP},setpts=PTS-STARTPTS[main_v]"
+    )
+    if not intro:
+        return common + main, "[main_v]"
+    if position not in {"inicio", "final"}:
+        raise ValueError("Intro position must be 'inicio' or 'final'")
+
+    intro_graph = (
+        f";[intro_src]trim=duration={INTRO_DURATION},setpts=PTS-STARTPTS,"
+        f"scale={STORY_WIDTH}:{STORY_HEIGHT},setsar=1,"
+        f"{BLUR},{FADE_IN},{FADE_OUT}[intro_bg];"
+        f"[3:v]scale={STORY_WIDTH}:{STORY_HEIGHT}[banner];"
+        "[intro_bg][banner]overlay=0:0,"
+        f"fps={fps},setpts=PTS-STARTPTS[intro_v0];"
+        f"[intro_v0]trim=duration={INTRO_DURATION},setpts=PTS-STARTPTS[intro_v]"
+    )
+    concat_inputs = (
+        "[intro_v][main_v]" if position == "inicio" else "[main_v][intro_v]"
+    )
+    return (
+        common + main + intro_graph
+        + f";{concat_inputs}concat=n=2:v=1:a=0[vout]",
+        "[vout]",
+    )
 
 
 def render_with_speech_audio(
     video,
-    final_audio_track,
+    voice_track,
+    effect_track,
     banner,
     output,
     *,
+    route: str,
+    audio_filter_graph: str,
+    audio_output_label: str,
+    video_duration_seconds: float,
     position: str = "final",
     intro: bool = True,
     plan: dict[str, Any] | None = None,
 ) -> Path:
-    """Render the visual timeline and mux one completed Speech soundtrack."""
-    video, final_audio_track, banner, output = map(Path, (video, final_audio_track, banner, output))
+    """Render visuals and Speech's audio graph in one final FFmpeg invocation."""
+    video, effect_track, banner, output = map(Path, (video, effect_track, banner, output))
+    voice = Path(voice_track) if voice_track is not None else None
     _validate_file(video, "Vídeo")
-    _validate_file(final_audio_track, "Trilha final preparada pelo ArmoredSpeech")
+    _validate_file(effect_track, "Efeito sonoro preparado pelo ArmoredSpeech")
+    if route == "RVC_MELODY":
+        if voice is None:
+            raise RuntimeError("Rota RVC_MELODY exige a trilha de voz preparada pelo Speech")
+        _validate_file(voice, "Trilha RVC preparada pelo ArmoredSpeech")
+    elif route != "EFFECT_ONLY" or voice is not None:
+        raise RuntimeError("Contrato de áudio Speech inválido para a renderização")
     if intro:
         _validate_file(banner, "Banner")
         if position not in {"inicio", "final"}:
             raise RuntimeError(f"Posição de intro inválida: {position}")
     if output.exists():
         raise FileExistsError(f"Studio nunca deve sobrescrever um resultado existente: {output}")
+    if not audio_filter_graph.strip() or len(audio_filter_graph) > 10000:
+        raise RuntimeError("Grafo de áudio do Speech ausente ou inválido")
+    if audio_output_label not in {"[main_a]", "[final_a]"}:
+        raise RuntimeError("Label de saída de áudio do Speech inválida")
+    if not (video_duration_seconds > 0):
+        raise RuntimeError("Duração de vídeo inválida para a trilha de silêncio")
 
     width, height, fps = _probe_video(video)
-    width, height = _plan_dimensions(plan, width, height)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    graph, video_map = _video_filter_graph(
-        video, banner, width, height, fps, plan, intro=intro, position=position
+    video_graph, video_output_label = _video_filter_graph(
+        width, height, fps, plan, intro=intro, position=position
     )
+    combined_graph = video_graph + ";" + audio_filter_graph
+    output.parent.mkdir(parents=True, exist_ok=True)
     ffmpeg = resolve_executable("ffmpeg", env_var="ARMORED_FFMPEG", project_root=PROJECT_ROOT)
-    command = [str(ffmpeg), "-nostdin", "-n", "-i", str(video), "-i", str(final_audio_track)]
+
+    command = [str(ffmpeg), "-nostdin", "-n", "-i", str(video)]
+    if voice is not None:
+        command += ["-i", str(voice)]
+    else:
+        # A mute route uses generated silence and never consumes the source
+        # video's original audio. This is an FFmpeg input, not a saved temp WAV.
+        command += [
+            "-f", "lavfi", "-t", f"{video_duration_seconds:.6f}",
+            "-i", "anullsrc=r=44100:cl=stereo",
+        ]
+    command += ["-stream_loop", "-1", "-i", str(effect_track)]
     if intro:
         command += ["-loop", "1", "-i", str(banner)]
     command += [
-        "-filter_complex", graph,
-        "-map", video_map,
-        # All audio processing is completed by ArmoredSpeech. Studio only muxes
-        # this stream into the MP4 and encodes the container's AAC audio stream.
-        "-map", "1:a:0",
+        "-filter_complex", combined_graph,
+        "-map", video_output_label,
+        "-map", audio_output_label,
         "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", VIDEO_CRF,
-        "-profile:v", VIDEO_PROFILE, "-level", VIDEO_LEVEL, "-pix_fmt", VIDEO_PIX_FMT,
+        "-profile:v", VIDEO_PROFILE, "-level:v", VIDEO_LEVEL, "-pix_fmt", VIDEO_PIX_FMT,
         "-g", "30", "-keyint_min", "30", "-sc_threshold", "0",
         "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-movflags", "+faststart", str(output),
     ]
     result = subprocess.run(command, **_windows_hidden_kwargs())
     if result.returncode != 0:
-        raise RuntimeError("Erro na renderização visual/mux do ArmoredStudio.")
+        output.unlink(missing_ok=True)
+        raise RuntimeError("Erro na renderização final de vídeo e mux do ArmoredStudio.")
     _validate_file(output, "Resultado final")
     return output
