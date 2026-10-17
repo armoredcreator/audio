@@ -325,12 +325,22 @@ def validate_audio_package(
         raise SpeechHandoffError("Speech audio filter graph is missing or invalid")
     try:
         audio_start = float(timeline.get("audio_start_seconds"))
+        video_start = float(timeline.get("video_start_seconds"))
+        main_duration = float(timeline.get("main_duration_seconds"))
         intro_enabled = timeline.get("intro_enabled")
         intro_duration = float(timeline.get("intro_duration_seconds"))
+        prepared_video_duration = float(payload.get("prepared_video_duration_seconds"))
     except (TypeError, ValueError) as exc:
-        raise SpeechHandoffError("Speech audio timeline metadata is invalid") from exc
-    if audio_start < 0 or not isinstance(intro_enabled, bool):
-        raise SpeechHandoffError("Speech audio timeline fields are invalid")
+        raise SpeechHandoffError("Speech audio/video timeline metadata is invalid") from exc
+    if (
+        audio_start < 0
+        or video_start < 0
+        or main_duration <= 0
+        or prepared_video_duration <= 0
+        or not isinstance(intro_enabled, bool)
+        or abs(main_duration - prepared_video_duration) > 0.02
+    ):
+        raise SpeechHandoffError("Speech audio/video timeline fields are invalid or inconsistent")
     position = timeline.get("intro_position")
     output_label = timeline.get("output_label")
     if intro_enabled:
