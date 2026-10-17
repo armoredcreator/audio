@@ -208,7 +208,9 @@ def test_v5_package_rejects_wrong_status_contract_or_identity(tmp_path, field, v
 
 def test_v5_package_rejects_mutated_track_hash(tmp_path):
     original, voice, _, _, payload = _fixture_payload(tmp_path)
-    changed = bytearray(voice.read_bytes())\n    changed[-1] ^= 1\n    voice.write_bytes(changed)
+    changed = bytearray(voice.read_bytes())
+    changed[-1] ^= 1
+    voice.write_bytes(changed)
     with pytest.raises(SpeechHandoffError, match="SHA-256 mismatch"):
         _validate(tmp_path, original, payload)
 
