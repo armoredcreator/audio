@@ -548,11 +548,19 @@ def test_shared_effect_sha256_is_cached_across_package_validation(tmp_path, monk
     payload_two["item_id"] = "telegram-2"
     payload_two["original_sha256_before"] = _sha(original_two)
     payload_two["original_sha256_after"] = _sha(original_two)
-    # A batch uses one already-prepared effect artifact but has a unique voice
-    # track and original hash per item.
-    payload_two["effect_track"] = dict(payload_one["effect_track"])
-    assert payload_two["voice_track"]["path"] != payload_one["voice_track"]["path"]
-    assert payload_two["effect_track"]["path"] == payload_one["effect_track"]["path"]
+    # A batch may reuse one completed final soundtrack only when identity/timeline
+    # contracts are intentionally identical; component tracks are not handed to Studio.
+    payload_one["final_audio_track"] = {
+        "path": str(effect_shared),
+        "sha256": _sha(effect_shared),
+        "format": "wav-pcm-s16le",
+        "sample_rate": 44100,
+        "channels": 2,
+        "duration_seconds": 1.0,
+        "composition_owner": "ArmoredSpeech",
+    }
+    payload_two["final_audio_track"] = dict(payload_one["final_audio_track"])
+    assert payload_two["final_audio_track"]["path"] == payload_one["final_audio_track"]["path"]
 
     import ArmoredStudio.speech_handoff as handoff_module
 
@@ -584,9 +592,8 @@ def test_shared_effect_sha256_is_cached_across_package_validation(tmp_path, monk
         track_hash_cache=cache,
     )
 
-    assert first.effect_sha256 == second.effect_sha256 == _sha(effect_shared)
+    assert first.final_audio_sha256 == second.final_audio_sha256 == _sha(effect_shared)
+    assert first.final_audio_track_path == second.final_audio_track_path == effect_shared
     assert counted[effect_shared.resolve()] == 1
-    assert counted[voice_one.resolve()] == 1
-    assert counted[voice_two.resolve()] == 1
     assert counted[original_one.resolve()] == 1
     assert counted[original_two.resolve()] == 1
