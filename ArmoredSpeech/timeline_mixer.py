@@ -10,7 +10,11 @@ this graph with its visual graph in the one final FFmpeg render invocation.
 import hashlib
 import json
 import math
+import wave
+from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 
 class AudioTimelineError(ValueError):
@@ -25,9 +29,56 @@ def visual_plan_digest(plan: dict[str, Any] | None) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def detect_voice_onset_seconds(
+    wav_path: Path,
+    *,
+    threshold_db: float = -20.0,
+    block_milliseconds: int = 20,
+) -> float:
+    """Find the first audible speech-like block in Speech's existing PCM WAV.
+
+    This replaces the old Studio banner-audio detector without running FFmpeg:
+    it examines 20 ms mono RMS windows and returns the first block above -20 dB.
+    A genuinely silent/unusable-audio sample returns zero; an invalid WAV fails
+    loudly so Speech cannot silently invent timing from unreadable media.
+    """
+    path = Path(wav_path).resolve(strict=True)
+    try:
+        with wave.open(str(path), "rb") as stream:
+            channels = stream.getnchannels()
+            rate = stream.getframerate()
+            width = stream.getsampwidth()
+            frames_total = stream.getnframes()
+            if channels < 1 or rate < 1 or width != 2:
+                raise AudioTimelineError("Banner timing requires readable 16-bit PCM WAV")
+            frames_per_block = max(1, int(round(rate * block_milliseconds / 1000.0)))
+            frame_offset = 0
+            while frame_offset < frames_total:
+                raw = stream.readframes(frames_per_block)
+                samples = np.frombuffer(raw, dtype="<i2")
+                if samples.size == 0:
+                    break
+                usable_frames = samples.size // channels
+                if usable_frames < frames_per_block:
+                    break
+                if channels > 1:
+                    samples = samples[:usable_frames * channels].reshape(-1, channels).mean(axis=1)
+                samples = samples.astype(np.float32) / 32768.0
+                rms = float(np.sqrt(np.mean(samples * samples)))
+                if rms >= 1e-5:
+                    db = 20.0 * math.log10(rms)
+                    if db > threshold_db:
+                        return round(frame_offset / rate, 6)
+                frame_offset += usable_frames
+    except (wave.Error, EOFError, OSError) as exc:
+        raise AudioTimelineError(f"Could not read Speech banner-timing WAV: {path}") from exc
+    return 0.0
+
+
 def build_audio_filter_graph(
     *,
     visual_plan: dict[str, Any] | None,
+    audio_start_seconds: float = 0.0,
     intro: bool,
     intro_position: str,
 ) -> dict[str, Any]:
@@ -42,11 +93,15 @@ def build_audio_filter_graph(
     """
     plan = visual_plan or {}
     try:
-        audio_start = float(plan.get("audio_start", 0) or 0)
+        audio_start = float(audio_start_seconds)
+        video_start = float(plan.get("video_start", 0) or 0)
     except (TypeError, ValueError) as exc:
-        raise AudioTimelineError("visual plan audio_start is invalid") from exc
-    if not math.isfinite(audio_start) or audio_start < 0:
-        raise AudioTimelineError("audio_start must be a finite non-negative number")
+        raise AudioTimelineError("Speech audio/video timeline is invalid") from exc
+    if (
+        not math.isfinite(audio_start) or audio_start < 0
+        or not math.isfinite(video_start) or video_start < 0
+    ):
+        raise AudioTimelineError("Audio/video start times must be finite and non-negative")
     if intro and intro_position not in {"inicio", "final"}:
         raise AudioTimelineError("intro_position must be 'inicio' or 'final'")
 
@@ -92,6 +147,7 @@ def build_audio_filter_graph(
         "output_label": output_label,
         "visual_plan_sha256": visual_plan_digest(plan),
         "audio_start_seconds": round(audio_start, 6),
+        "video_start_seconds": round(video_start, 6),
         "intro_enabled": bool(intro),
         "intro_position": intro_position if intro else None,
         "intro_duration_seconds": 2.0 if intro else 0.0,
@@ -100,4 +156,4 @@ def build_audio_filter_graph(
     }
 
 
-__all__ = ["AudioTimelineError", "build_audio_filter_graph", "visual_plan_digest"]
+__all__ = ["AudioTimelineError", "build_audio_filter_graph", "detect_voice_onset_seconds", "visual_plan_digest"]
