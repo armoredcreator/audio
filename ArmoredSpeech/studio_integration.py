@@ -81,11 +81,15 @@ def prepare_audio_packages_for_items(
     workspace_root: Path,
     package_root: Path,
     effect_source_path: Path,
+    visual_plans: dict[tuple[str, str], dict] | None = None,
+    intro: bool = True,
+    intro_position: str = "final",
 ) -> list[tuple[object, dict]]:
-    """Preflight the entire v1 registry, then create every Speech v2 package.
+    """Preflight the full decision batch and prepare final audio timelines in Speech.
 
-    This function deliberately does not call Studio. Its caller must validate
-    every returned v2 payload before making the first Studio process call.
+    The caller supplies visual plans produced by Studio's audio-free visual
+    preflight. This function never calls Studio or renders video. Every return
+    value contains one completed soundtrack, not separate tracks for Studio to mix.
     """
     import hashlib
     import re
@@ -184,6 +188,11 @@ def prepare_audio_packages_for_items(
             voice="melody",
             preflight=preflight,
             prepared_effect_track=shared_effect_track,
+            visual_plan=(visual_plans or {}).get(
+                (str(item.source_id), str(item.telegram_message_id)), {}
+            ),
+            intro=intro,
+            intro_position=intro_position,
         )
         prepared.append((item, package))
 
