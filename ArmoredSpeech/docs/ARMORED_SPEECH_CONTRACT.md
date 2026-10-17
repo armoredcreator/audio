@@ -55,6 +55,10 @@ A tabela experimental `armored_speech_results` é propriedade exclusiva do Armor
 - Se Studio falhar, preservar o WAV para retry.
 - Não gerar vídeo final nem publicar no Telegram nesta fase.
 
-## Estado real desta branch
+## Estado real desta branch e E2E v5
 
-O runner, o registro SQLite e o contrato de dados são experimentais. O classificador automático usa Whisper para idioma, Silero VAD para atividade de fala e AudioSet/AST para evidência de música; existe também um modo opcional de manifesto revisado. A classificação ainda precisa de benchmark e avaliação auditiva reproduzíveis em exemplos rotulados antes de declarar o ArmoredSpeech pronto ou portar o código para produção. A tabela SQLite desta branch é experimental e não é o schema real do ArmoredCreator.
+O runner, o registro SQLite e o contrato de dados continuam experimentais; a tabela SQLite desta branch não é o schema operacional do ArmoredCreator. O classificador automático usa Whisper para idioma, Silero VAD para atividade de fala e AudioSet/AST para evidência de música; existe também um modo opcional de manifesto revisado.
+
+Em 17/10/2026, o E2E real no Windows aprovou o contrato v5 para o item `source_teste/5`: `PT_BR_NARRATION` → `RVC_MELODY`, `STUDIO_SPEECH_BATCH=SUCCESS`, `ORIGINALS_INTACT=True` e renderização H.264/AAC. O hash do original antes/depois coincidiu com o manifesto (`c489fcaae803f36407c82dde3b93ff68077001ef5607909081a2c6555bee15a1`). O relatório fica em `storage/validation/speech-studio-v5-item5-20261017T185708Z.json`.
+
+O resultado comprova somente esse caminho de narração PT-BR. É necessário avaliar as classes sem RVC e fazer benchmark/classificação com exemplos rotulados antes de declarar o ArmoredSpeech pronto para produção. Não levar esta base nem o runner experimental para o repositório operacional por causa de um único E2E bem-sucedido.
