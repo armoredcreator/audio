@@ -43,6 +43,26 @@ Log: `storage/validation/speech-studio-v5-item5-20261017T185708Z.log`
 
 O resultado comprova o caminho PT-BR/RVC v5 para esse item e preservação do original. Ainda é preciso testar cada classe sem RVC, revisar todas as rotas e terminar a auditoria de dependências antes de remover os ativos legados. Nenhum teste desta branch publica no Hub.
 
+## Teste E2E do corpus completo (14 vídeos)
+
+O smoke E2E de um único item não substitui a validação do corpus. Para testar os 14 vídeos reais em um lote isolado, use:
+
+```powershell
+.\\.venv\\Scripts\\python.exe -m ArmoredSpeech.corpus_e2e_runner --root . --video-root .\\storage --expected-count 14 --render
+```
+
+O utilitário:
+
+- exige exatamente 14 MP4s elegíveis; se encontrar outra quantidade, mostra a lista e para **antes de copiar ou processar arquivos**;
+- pode receber uma lista explícita e revisada por `--inputs-json` quando a descoberta automática não corresponder aos 14 originais pretendidos;
+- cria cópias de trabalho byte-a-byte em um namespace novo, um SQLite experimental novo e sidecars WAV para esse lote;
+- classifica e prepara todos os itens via ArmoredSpeech; somente se os 14 estiverem `READY`, os hashes dos originais continuarem intactos e os ativos do projeto passarem no preflight, executa o render real do Studio;
+- não limpa nem sobrescreve execuções anteriores, não usa `storage/database/armoredcreator.db` e não publica no Hub.
+
+O comando sem `--render` prepara Speech para os 14 e grava um manifesto ainda não aprovado; ele **não** afirma que houve E2E Studio. Para a prova E2E completa, o comando acima inclui `--render`.
+
+A evidência fica em `storage/validation/corpus14_<batch-id>/`: `speech-report.json` e, quando o Studio roda, `studio-report.json`. Os MP4s finais ficam no namespace isolado `storage/Videos GRUPO_FONTE_corpus14_<batch-id>/`. Se algum item falhar durante Speech, o lote completo de render é bloqueado e o relatório identifica classe/status/erro; nenhuma saída Studio parcial é iniciada.
+
 ## Segurança e isolamento
 
 - Sem escrita/leitura do banco operacional pelo runner, sem publicação e sem integração automática no repositório principal.
