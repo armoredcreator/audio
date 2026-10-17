@@ -24,7 +24,7 @@ from ArmoredStudio.service import build as build_studio
 from ArmoredStudio.speech_handoff import validate_audio_package, SpeechHandoffError
 from ArmoredStudio.analysis.export_plan_validator import validar_plano_exportacao
 from .timeline_mixer import visual_plan_digest
-from .studio_integration import process_items_with_speech, prepare_audio_packages_for_items
+from .studio_integration import prepare_audio_packages_for_items
 
 
 class BatchManifestError(RuntimeError):
@@ -252,10 +252,9 @@ def run_complete_batch(
 
         studio = build_studio(root)
         if copy_only:
-            # Synthetic contract mode intentionally avoids FFmpeg and RVC.
-            results = process_items_with_speech(
-                studio, items, speech_database=speech_database,
-            )
+            # Synthetic copy-only mode tests the visual boundary without any
+            # audio handoff; it does not pretend to validate Speech processing.
+            results = [studio.process(item) for item in items]
         else:
             # First collect a complete, read-only visual plan for the batch.
             # Studio is not allowed to inspect/classify/extract/process audio.
