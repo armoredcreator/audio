@@ -537,9 +537,12 @@ def prepare_audio_package(
         ):
             raise AudioPackageError("Voice track must be canonical PCM WAV 44100 Hz stereo")
 
+        video_start_seconds = float((visual_plan or {}).get("video_start", 0) or 0)
+        main_duration_seconds = max(0.1, video_duration - video_start_seconds)
         audio_timeline = build_audio_filter_graph(
             visual_plan=visual_plan,
             audio_start_seconds=audio_start_seconds,
+            main_duration_seconds=main_duration_seconds,
             intro=intro,
             intro_position=intro_position,
         )
@@ -595,7 +598,7 @@ def prepare_audio_package(
                 "gain_policy": effect_gain_policy,
             },
             "audio_timeline": audio_timeline,
-            "prepared_video_duration_seconds": round(video_duration, 6),
+            "prepared_video_duration_seconds": round(main_duration_seconds, 6),
             "package_id": final_dir.name,
         }
         # Conversion intermediates are not part of the handoff contract. Keep
