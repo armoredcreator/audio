@@ -48,8 +48,13 @@ class Storage:
             if candidate > 1 and not configured and not configured_chat and not configured_key:
                 break
         if index is None:
-            match = __import__("re").fullmatch(r"source(\d+)", value, __import__("re").IGNORECASE)
-            index = int(match.group(1)) if match else 1
+            # Preserve numbered production source roots (source1, source2, ...)
+            # while allowing isolated lab namespaces such as source_teste to map
+            # naturally to storage/Videos GRUPO_FONTE_teste.
+            match = __import__("re").fullmatch(
+                r"source([A-Za-z0-9_-]+)", value, __import__("re").IGNORECASE
+            )
+            index = match.group(1) if match else "1"
         return self.storage / f"Videos GRUPO_FONTE_{index}"
 
     def _source_for_content_id(
