@@ -395,7 +395,7 @@ def prepare_audio_package(
     The output directory must be new. The returned handoff exposes only the
     completed final_audio_track; voice/effect WAVs remain Speech-owned intermediates.
     """
-    from .timeline_mixer import build_audio_filter_graph
+    from .timeline_mixer import build_audio_filter_graph, render_final_audio_track
 
     root = Path(workspace_root).resolve(strict=True)
     final_dir = Path(output_dir).expanduser().resolve()
@@ -546,30 +546,31 @@ def prepare_audio_package(
             intro=intro,
             intro_position=intro_position,
         )
-        voice_track = None
         if rvc_allowed and voice_meta is not None:
             voice_track = {
-                "path": str(final_dir / "voice.wav"),
+                "path": str(voice_output),
                 "sha256": sha256_file(voice_output),
                 "format": "wav-pcm-s16le",
                 "sample_rate": voice_meta.sample_rate,
                 "channels": voice_meta.channels,
                 "duration_seconds": round(voice_meta.duration_seconds, 6),
             }
+        else:
+            voice_track = None
+
         if prepared_effect_track is not None:
             effect_track_path = str(effect_output)
             effect_hash = str(prepared_effect_track["sha256"])
             effect_source_hash = str(prepared_effect_track["source_sha256"])
             effect_gain_policy = str(prepared_effect_track["gain_policy"])
         else:
-            effect_track_path = str(final_dir / "effect.wav")
+            effect_track_path = str(effect_output)
             effect_hash = sha256_file(effect_output)
             effect_source_hash = str(preflight["effect_source_sha256"])
             effect_gain_policy = "loudnorm-I-12-LRA7-TP-1-then-volume-0.8"
 
-        # Declare the exact renderer inputs here so Studio does not make
-        # a route decision. It only translates this validated declarative plan
-        # into FFmpeg input arguments.
+        # This input recipe and the filter graph are executed inside Speech.
+        # Studio must never receive voice/effect components or an audio graph.
         audio_inputs = []
         if voice_track is not None:
             audio_inputs.append({
@@ -592,8 +593,39 @@ def prepare_audio_package(
             "sha256": effect_hash,
         })
 
+        expected_final_duration = main_duration_seconds + (2.0 if intro else 0.0)
+        final_audio_stage_path = stage / "final_audio.m4a"
+        final_audio = render_final_audio_track(
+            audio_inputs=audio_inputs,
+            filter_graph=audio_timeline["filter_graph"],
+            output_label=audio_timeline["output_label"],
+            output_path=final_audio_stage_path,
+            workspace_root=root,
+            ffmpeg=ffmpeg,
+            ffprobe=ffprobe,
+            expected_duration_seconds=expected_final_duration,
+        )
+        audio_timeline_metadata = {
+            key: value for key, value in audio_timeline.items()
+            if key not in {"filter_graph", "output_label"}
+        }
+        audio_timeline_metadata["final_audio_duration_seconds"] = final_audio[
+            "duration_seconds"
+        ]
+        final_audio_track = {
+            "path": str(final_dir / "final_audio.m4a"),
+            "sha256": final_audio["sha256"],
+            "format": final_audio["format"],
+            "codec": final_audio["codec"],
+            "sample_rate": final_audio["sample_rate"],
+            "channels": final_audio["channels"],
+            "duration_seconds": final_audio["duration_seconds"],
+            "composition_owner": "ArmoredSpeech",
+            "size_bytes": final_audio["size_bytes"],
+        }
+
         package = {
-            "contract_version": 3,
+            "contract_version": 4,
             "status": "READY",
             "source_id": str(item.source_id),
             "item_id": str(item.telegram_message_id),
@@ -601,6 +633,8 @@ def prepare_audio_package(
             "original_path": str(original),
             "original_sha256_before": original_hash,
             "original_sha256_after": original_hash,
+            # Decision fields are evidence/debug metadata only. Studio consumes
+            # the single final track and never dispatches on class/route.
             "audio_class": payload["audio_class"],
             "language": payload.get("language"),
             "speech_detected": payload.get("speech_detected") is True,
@@ -611,32 +645,25 @@ def prepare_audio_package(
             "rvc_model": rvc_model,
             "rvc_model_sha256": preflight.get("rvc_model_sha256") if rvc_allowed else None,
             "rvc_index_sha256": preflight.get("rvc_index_sha256") if rvc_allowed else None,
-            "voice_track": voice_track,
-            "effect_track": {
-                "path": effect_track_path,
-                "sha256": effect_hash,
-                "source_sha256": effect_source_hash,
-                "format": "wav-pcm-s16le",
-                "sample_rate": effect_meta.sample_rate,
-                "channels": effect_meta.channels,
-                "duration_seconds": round(effect_meta.duration_seconds, 6),
-                "gain_policy": effect_gain_policy,
-            },
-            "audio_inputs": audio_inputs,
-            "audio_timeline": audio_timeline,
+            "final_audio_track": final_audio_track,
+            "audio_timeline": audio_timeline_metadata,
             "prepared_video_duration_seconds": round(main_duration_seconds, 6),
             "package_id": final_dir.name,
+            "effect_source_sha256": effect_source_hash,
+            "effect_gain_policy": effect_gain_policy,
         }
-        # Conversion intermediates are not part of the handoff contract. Keep
-        # only validated final tracks and manifest after a successful build.
+
+        # Only the final Speech-owned audio artifact crosses into the Studio
+        # workspace contract. Component/intermediate WAVs are discarded now.
+        voice_output.unlink(missing_ok=True)
+        if _inside(effect_output, stage):
+            effect_output.unlink(missing_ok=True)
         rvc_input.unlink(missing_ok=True)
         rvc_raw.unlink(missing_ok=True)
         (stage / "package.json").write_text(
             json.dumps(package, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-        # The package declares final_dir paths, so the directory is atomically
-        # promoted only after all tracks, hashes and metadata validate.
         stage.replace(final_dir)
         return package
     except Exception:
