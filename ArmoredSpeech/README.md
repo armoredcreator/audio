@@ -38,3 +38,13 @@ Use uma saída que ainda não exista. O validador real precisa dos modelos/índi
 ## Limites
 
 Este é o laboratório isolado `armoredcreator/audio`. Não publica no Hub e não altera o repositório operacional. CI verde não substitui E2E real das classes de áudio e inspeção audiovisual.
+
+## Evidência E2E v5 (17/10/2026)
+
+O teste real Windows do item `source_teste/5` passou com `STUDIO_SPEECH_BATCH=SUCCESS`, `MODE=REAL_STUDIO`, `ORIGINALS_INTACT=True` e código de saída 0. A decisão Speech foi `PT_BR_NARRATION` → `RVC_MELODY`; o pacote validado continha `voice.wav`, `effect.wav` e `package.json`. O vídeo final H.264/AAC foi produzido e o original manteve o SHA-256 declarado no manifesto: `c489fcaae803f36407c82dde3b93ff68077001ef5607909081a2c6555bee15a1`.
+
+Evidências locais:
+- Relatório: `storage/validation/speech-studio-v5-item5-20261017T185708Z.json`
+- Log: `storage/validation/speech-studio-v5-item5-20261017T185708Z.log`
+
+Este E2E valida apenas o caminho PT-BR elegível para Melody no item de teste. Antes de remover ativos legados ou integrar no repositório operacional, ainda é preciso validar E2E as classes sem RVC e finalizar a auditoria de dependências. Os ativos antigos permanecem preservados.
