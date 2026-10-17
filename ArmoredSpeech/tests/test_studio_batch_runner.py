@@ -306,7 +306,7 @@ def test_real_runner_validates_entire_v4_batch_before_first_studio_call(tmp_path
     events = []
 
     def fake_prepare(items, **kwargs):
-        packages = [(item, _fake_v2_package(tmp_path, item)) for item in items]
+        packages = [(item, _fake_v4_package(tmp_path, item)) for item in items]
         events.append(("all-packages-prepared", len(packages)))
         return packages
 
@@ -354,7 +354,7 @@ def test_real_runner_blocks_all_studio_calls_if_any_v4_package_is_invalid(tmp_pa
 
     def fake_prepare(items, **kwargs):
         packages = [
-            (item, _fake_v2_package(tmp_path, item, corrupt_effect_hash=(position == 2)))
+            (item, _fake_v4_package(tmp_path, item, corrupt_effect_hash=(position == 2)))
             for position, item in enumerate(items, start=1)
         ]
         events.append(("all-packages-prepared", len(packages)))
