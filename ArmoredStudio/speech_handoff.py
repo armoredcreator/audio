@@ -138,6 +138,7 @@ class ValidatedAudioPackage:
     route: str
     rvc_eligible: bool
     original_sha256: str
+    video_duration_seconds: float
     visual_plan_sha256: str
     audio_timeline: dict[str, Any]
     audio_filter_graph: str
@@ -299,6 +300,13 @@ def validate_audio_package(
     if not _valid_hex_digest(effect_data.get("source_sha256")):
         raise SpeechHandoffError("Speech effect source SHA-256 is missing or invalid")
 
+    try:
+        video_duration_seconds = float(payload.get("prepared_video_duration_seconds"))
+    except (TypeError, ValueError) as exc:
+        raise SpeechHandoffError("Speech prepared video duration is invalid") from exc
+    if not video_duration_seconds > 0:
+        raise SpeechHandoffError("Speech prepared video duration must be positive")
+
     timeline = payload.get("audio_timeline")
     if not isinstance(timeline, dict):
         raise SpeechHandoffError("Speech audio timeline recipe missing")
@@ -354,6 +362,7 @@ def validate_audio_package(
         route=str(route),
         rvc_eligible=rvc_eligible,
         original_sha256=actual_original_hash,
+        video_duration_seconds=video_duration_seconds,
         visual_plan_sha256=plan_hash.lower(),
         audio_timeline=dict(timeline),
         audio_filter_graph=graph,
