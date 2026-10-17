@@ -127,6 +127,7 @@ def prepare_route_validation_manifest(
             f"{_safe_token(source_id, limit=48)}_routecheck_{stamp}_"
             f"{_safe_token(item_id, limit=24)}"
         )
+        prepared["route_validation_audio_class"] = audio_class
         selected_items.append(prepared)
 
     if not selected_items:
@@ -178,13 +179,8 @@ def main() -> int:
     print("SOURCE_AUDIO_CLASS_COUNTS=" + json.dumps(counts, ensure_ascii=False, sort_keys=True))
     for item in selected:
         print(
-            "SELECTED_CLASS="
-            + str(next(
-                cls for cls in ROUTE_CLASSES
-                if str(item.get("telegram_message_id")) == str(item.get("telegram_message_id"))
-            ))
-            if False else
-            f"SELECTED_ITEM={item['telegram_message_id']} SOURCE={item['source_id']} "
+            f"SELECTED_CLASS={item['route_validation_audio_class']} "
+            f"ITEM={item['telegram_message_id']} SOURCE={item['source_id']} "
             f"CONTENT_ID={item['content_id']}"
         )
     print("MISSING_CLASSES=" + (",".join(missing) if missing else "none"))
