@@ -5,9 +5,11 @@ import json
 import sqlite3
 import wave
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import ArmoredSpeech.studio_batch_runner as runner_module
 from ArmoredSpeech.studio_batch_runner import BatchManifestError, run_complete_batch
 
 
@@ -210,3 +212,146 @@ def test_runner_preserves_an_existing_result_and_blocks_the_whole_batch(tmp_path
     second_item = manifest["items"][1]
     second_output = Path(second_item["workspace"]) / "telegram-2_demo-2.mp4"
     assert not second_output.exists()
+
+
+def _write_v2_wav(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(2)
+        wav.setsampwidth(2)
+        wav.setframerate(44100)
+        wav.writeframes(b"\\x00\\x00" * 44100 * 2)
+
+
+def _fake_v2_package(root: Path, item, *, corrupt_effect_hash: bool = False) -> dict:
+    original = Path(item.original_path)
+    output_dir = root / "storage" / "validation" / "fake-packages" / str(item.telegram_message_id)
+    voice = output_dir / "voice.wav"
+    effect = output_dir / "effect.wav"
+    _write_v2_wav(voice)
+    _write_v2_wav(effect)
+    digest = _sha(original)
+    effect_hash = _sha(effect)
+    if corrupt_effect_hash:
+        effect_hash = "0" * 64
+    return {
+        "contract_version": 2,
+        "status": "READY",
+        "source_id": str(item.source_id),
+        "item_id": str(item.telegram_message_id),
+        "content_id": str(item.content_id),
+        "original_path": str(original),
+        "original_sha256_before": digest,
+        "original_sha256_after": digest,
+        "audio_class": "MUSIC_ONLY",
+        "language": "unknown",
+        "speech_detected": False,
+        "music_detected": True,
+        "confidence": 0.99,
+        "route": "EFFECT_ONLY",
+        "rvc_eligible": False,
+        "rvc_model": None,
+        "rvc_model_sha256": None,
+        "rvc_index_sha256": None,
+        "voice_track": {
+            "path": str(voice),
+            "sha256": _sha(voice),
+            "format": "wav-pcm-s16le",
+            "sample_rate": 44100,
+            "channels": 2,
+            "duration_seconds": 1.0,
+        },
+        "effect_track": {
+            "path": str(effect),
+            "sha256": effect_hash,
+            "source_sha256": "e" * 64,
+            "format": "wav-pcm-s16le",
+            "sample_rate": 44100,
+            "channels": 2,
+            "duration_seconds": 1.0,
+            "gain_policy": "loudnorm-I-12-LRA7-TP-1-then-volume-0.8",
+        },
+    }
+
+
+def test_real_runner_validates_entire_v2_batch_before_first_studio_call(tmp_path, monkeypatch):
+    manifest_path, database, _ = _fixture(tmp_path, item_count=2)
+    report_path = tmp_path / "storage" / "validation" / "v2-report.json"
+    events = []
+
+    def fake_prepare(items, **kwargs):
+        packages = [(item, _fake_v2_package(tmp_path, item)) for item in items]
+        events.append(("all-packages-prepared", len(packages)))
+        return packages
+
+    class FakeStudio:
+        def process(self, item, *, speech_payload=None):
+            events.append(("studio", str(item.telegram_message_id)))
+            destination = runner_module.Storage(tmp_path).result(
+                item.content_id,
+                item.affiliate_url,
+                item.affiliate_name,
+                source_id=item.source_id,
+            )
+            destination.write_bytes(b"synthetic rendered video")
+            return SimpleNamespace(result_path=destination)
+
+    monkeypatch.setattr(runner_module, "prepare_audio_packages_for_items", fake_prepare)
+    monkeypatch.setattr(runner_module, "build_studio", lambda _root: FakeStudio())
+
+    report = run_complete_batch(
+        root=tmp_path,
+        manifest_path=manifest_path,
+        speech_database=database,
+        report_path=report_path,
+        copy_only=False,
+    )
+
+    assert report["status"] == "SUCCESS"
+    assert report["audio_contract_version"] == 2
+    assert len(report["audio_packages"]) == 2
+    assert len(report["processed"]) == 2
+    assert events == [
+        ("all-packages-prepared", 2),
+        ("studio", "telegram-1"),
+        ("studio", "telegram-2"),
+    ]
+
+
+def test_real_runner_blocks_all_studio_calls_if_any_v2_package_is_invalid(tmp_path, monkeypatch):
+    manifest_path, database, _ = _fixture(tmp_path, item_count=2)
+    report_path = tmp_path / "storage" / "validation" / "v2-report-failed.json"
+    events = []
+
+    def fake_prepare(items, **kwargs):
+        packages = [
+            (item, _fake_v2_package(tmp_path, item, corrupt_effect_hash=(position == 2)))
+            for position, item in enumerate(items, start=1)
+        ]
+        events.append(("all-packages-prepared", len(packages)))
+        return packages
+
+    class FakeStudio:
+        def process(self, item, *, speech_payload=None):
+            events.append(("studio", str(item.telegram_message_id)))
+            raise AssertionError("No Studio call is allowed when any v2 package is invalid")
+
+    monkeypatch.setattr(runner_module, "prepare_audio_packages_for_items", fake_prepare)
+    monkeypatch.setattr(runner_module, "build_studio", lambda _root: FakeStudio())
+
+    with pytest.raises(BatchManifestError, match="Pacote Speech v2 inválido"):
+        run_complete_batch(
+            root=tmp_path,
+            manifest_path=manifest_path,
+            speech_database=database,
+            report_path=report_path,
+            copy_only=False,
+        )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "FAILED"
+    assert report["processed"] == []
+    assert events == [("all-packages-prepared", 2)]
+    for item in json.loads(manifest_path.read_text(encoding="utf-8"))["items"]:
+        output = Path(item["workspace"]) / f"{item['telegram_message_id']}_demo.mp4"
+        assert not output.exists()
