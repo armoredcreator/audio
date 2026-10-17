@@ -13,15 +13,10 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SPEECH_ROOT = Path(__file__).resolve().parent
 SHARED_ENV_DIR = REPO_ROOT / ".venv"
-_configured_rvc_root = os.getenv("ARMORED_RVC_ROOT", "").strip()
-# Single owner path: RVC code, routing and assets belong to ArmoredSpeech.
-# ARMORED_RVC_ROOT remains an explicit deployment override; there is no
-# implicit fallback into ArmoredStudio.
-RVC_ROOT = (
-    Path(_configured_rvc_root).expanduser().resolve()
-    if _configured_rvc_root
-    else SPEECH_ROOT / "runtime" / "rvc"
-).resolve()
+# Single canonical owner: no runtime override or fallback can silently keep
+# loading model/index assets from ArmoredStudio. Local assets must be migrated
+# to ArmoredSpeech/runtime/rvc before the real RVC phase is enabled.
+RVC_ROOT = (SPEECH_ROOT / "runtime" / "rvc").resolve()
 MODELS_DIR = RVC_ROOT / "models"
 BASE_DIR = SPEECH_ROOT
 
