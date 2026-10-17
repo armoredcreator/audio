@@ -289,7 +289,7 @@ def test_real_runner_validates_entire_v3_batch_before_first_studio_call(tmp_path
 
     class FakeStudio:
         def analyze_visual(self, item):
-            return SimpleNamespace(plan={"video_start": 0.0})
+            return SimpleNamespace(plan={"crop_final": None, "video_start": 0.0, "acoes": []})
 
         def process(self, item, *, speech_payload=None, visual_analysis=None):
             events.append(("studio", str(item.telegram_message_id)))
