@@ -9,6 +9,8 @@ single-pass Studio renderer.
 
 from pathlib import Path
 
+from .studio_bridge import export_audio_directive
+
 
 def prepare_audio_packages_for_items(
     items,
