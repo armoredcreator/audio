@@ -80,6 +80,6 @@ O ambiente operacional é somente `.venv` na raiz, por meio de `ArmoredSpeech/se
 
 ## Estado atual
 
-A branch inclui `ArmoredSpeech/studio_batch_runner.py`, um executor de laboratório que exige manifesto aprovado com `phase_status=COMPLETE`, carrega objetos `armored_core.models.Item`, confere caminhos e SHA-256, pré-valida todas as diretivas READY antes da primeira chamada e chama a fronteira pública do Studio. O modo `--copy-only` valida a integração do serviço/contrato sem alegar renderização real. A primeira execução da CI encontrou um erro de configuração no modo de cópia (a variável `ARMORED_STUDIO_ALLOW_COPY` também precisa estar habilitada); esse erro está sendo corrigido e a suíte precisa passar novamente.
+A branch inclui `ArmoredSpeech/studio_batch_runner.py`, um executor de laboratório que exige manifesto aprovado com `phase_status=COMPLETE`, carrega objetos `armored_core.models.Item`, confere caminhos e SHA-256, pré-valida todas as diretivas READY antes da primeira chamada e chama a fronteira pública do Studio. O modo `--copy-only` valida a integração do serviço/contrato sem alegar renderização real. A correção do modo de cópia foi aplicada e a CI passou em 17/10/2026: compilação concluída e `pytest` com 67 testes aprovados. A validação local no Windows e o ensaio de vídeo real ainda estão pendentes.
 
 O teste real de vídeo continua bloqueado até confirmar os assets oficiais `banner.png` e `efeitosonoro.wav`, FFmpeg, modelo/índice Melody no laboratório e um subconjunto aprovado do corpus. Não executar Hub, Telegram, Shopee nem publicação.
