@@ -237,49 +237,67 @@ Foi movida a implementação de baixo nível do motor RVC para `armored_core/aud
 A extração manteve a facade v1 e o caminho do ambiente/modelos. Em commits posteriores nesta mesma branch, Speech passou a ter um produtor de pacote v2 que usa o motor compartilhado para Melody, gera silêncio determinístico para rotas não elegíveis e prepara a faixa de efeito uma vez por lote. O Studio tem validação v2 e um caminho de render que não reclassifica nem executa RVC/ganhos duplicados. Nenhum modelo, índice, asset ou arquivo de vídeo foi movido. O CI mais recente passou em compilação e **102 testes automatizados** após a adaptação do workspace `source_teste`. Isso não substitui o E2E real no Windows com Melody, ainda pendente.
 
 
-## 15. Implementação do pacote v2 e portões do lote — 17/10/2026
+## 15. Migração arquitetural v3 — propriedade de áudio no Speech
 
-O código experimental agora inclui:
+A fronteira agora é: **ArmoredSpeech decide e descreve todo o processamento de áudio; ArmoredStudio executa somente as edições visuais e a renderização final**.
 
-- `ArmoredSpeech/audio_package.py`: preflight por item, conversão Melody elegível, faixa silenciosa para outras rotas, artefatos WAV PCM 44,1 kHz estéreo e metadados SHA-256/duração/formato.
-- `ArmoredSpeech/studio_integration.py`: carrega todas as decisões READY, valida todo o conjunto antes de iniciar conversões, prepara um único efeito comum para o lote, e só retorna pacotes depois que todos foram preparados e conferidos.
-- `ArmoredStudio/speech_handoff.py`: contrato v2 valida versão/estado/identidade, original e hashes, rota, elegibilidade, faixas legíveis, metadados e efeito ganho.
-- `ArmoredStudio/unified.py` e `ArmoredStudio/processing/finalizer.py`: caminho v2 consome faixas preparadas; não chama RVC nem aplica loudness/volume novamente. O plano temporal continua aparando apenas a voz; o efeito mantém o início da parte principal.
-- `ArmoredSpeech/studio_batch_runner.py`: pre-valida todos os pacotes e os hashes antes da primeira chamada ao Studio; se um pacote não passar, a lista de itens processados permanece vazia.
-- `armored_core/audio/rvc.py`: conversor comum reaproveitado e usado por Speech; a antiga entrada do Studio ficou como facade de compatibilidade para o caminho v1.
+### Donos dos módulos
 
-Para reduzir I/O em lotes extensos, a faixa de efeito é preparada uma vez por lote; a identidade/size/mtime de faixas compartilhadas alimentam um cache SHA-256 durante a validação; e o hash completo do modelo/índice Melody é conferido no preflight e no fechamento do lote, sem re-hash do modelo/índice por vídeo. Cada conversão ainda compara rapidamente o caminho e os metadados de arquivo antes de aceitar a saída.
+- `ArmoredSpeech/audio_intelligence.py`: classificação e decisão de idioma/rota.
+- `ArmoredSpeech/rvc_engine.py`: execução do RVC Melody e localização do motor/modelo/index. O default é `ArmoredSpeech/runtime/rvc`; não há fallback implícito para a pasta antiga do Studio.
+- `ArmoredSpeech/audio_package.py`: extração/preparação de WAV, RVC elegível, preparação do efeito e validação dos recursos.
+- `ArmoredSpeech/timeline_mixer.py`: onset de voz quando necessário, corte temporal, fades, mixagem, concatenação e grafo de áudio final. O Speech também declara os inputs FFmpeg que esse grafo exige.
+- `ArmoredSpeech/studio_integration.py` e `ArmoredSpeech/studio_batch_runner.py`: preflight de lote completo e geração/validação de todos os contratos antes da primeira renderização.
+- `ArmoredStudio/unified.py`: análise visual, validação do contrato e coordenação da renderização. Não importa classificador de áudio nem motor RVC.
+- `ArmoredStudio/processing/visual_finalizer.py`: um crop 9:16 na fonte; depois divide os mesmos frames já cortados para intro/principal, aplica filtros de imagem/banner e combina o grafo visual com o grafo de áudio fornecido pelo Speech em **uma única chamada FFmpeg final**.
 
-**Validação CI mais recente:** compileall passou e 102 testes passaram em 0,78 s no GitHub Actions: [run 39029584892](https://github.com/armoredcreator/audio/actions/runs/39029584892).
+O contrato v3 inclui `audio_inputs` declarativos. A validação no limite Studio confere que as entradas correspondem aos artefatos/hash/rota aprovados pelo Speech. O renderizador não escolhe entre voz e silêncio: apenas converte descritores permitidos em argumentos de entrada FFmpeg e usa o grafo de áudio fornecido. Em rota sem RVC, a fonte de silêncio já vem declarada pelo Speech; o áudio original do vídeo nunca entra na mixagem.
 
-**Limite essencial:** os testes incluem WAVs sintéticos, stubs e o contrato/runner de laboratório. Não houve conversão real RVC nem renderização FFmpeg real no Windows usando o pacote v2 nesta etapa. A aprovação histórica em Windows vale para o caminho v1 anterior; o caminho v2 precisa repetir o E2E com o vídeo isolado de referência, comparar áudio/imagem/duração e validar SHA-256 antes/depois. A PR continua draft, sem merge, e nenhuma mudança foi portada ao repositório operacional.
+### Sobre “um único FFmpeg”
 
+O objetivo é **um único crop canônico e uma única invocação FFmpeg para o render final do MP4**, combinando vídeo e áudio. O Speech ainda pode invocar FFmpeg em etapas de preparação que são pré-requisito para o RVC (por exemplo, extrair/normalizar um WAV); isso não é uma segunda renderização de vídeo nem uma segunda mixagem final. O RVC em si é inferência do modelo, não um filtro FFmpeg.
 
-## 16. Preparar o E2E v2 real no Windows com o corpus `Videos GRUPO_FONTE_teste`
+### Módulos legados
 
-A pasta de corpus local para teste contém MP4s com nomes descritivos como `1_ruido.mp4`, `2_narração_pt.mp4`, `3_musica.mp4`, `4_musica_narração_pt_gemini2.mp4` e amostras `*_barras.mp4`. Os nomes ajudam a selecionar/interpretar casos, mas o resultado deve vir da análise do `ModelProcessor`, não do nome do arquivo.
+A árvore atual não contém mais `ArmoredStudio/analysis/audio_intelligence.py`, `ArmoredStudio/processing/rvc.py` nem o finalizador audiovisual antigo `ArmoredStudio/processing/finalizer.py`. `ArmoredStudio/speech_handoff.py` permanece como fronteira de validação do contrato, não como motor de áudio. Não reintroduzir fachadas de áudio no Studio.
 
-O caminho de teste escolhido segue a estrutura por fonte do ArmoredCreator:
+### Validação automatizada atual
 
-- As entradas do corpus ficam organizadas por pasta de item, por exemplo `storage/Videos GRUPO_FONTE_teste/2/2_narração_pt.mp4`, e não são movidas, renomeadas nem sobrescritas.
-- Quando a entrada tem a forma `storage/Videos GRUPO_FONTE_teste/<ID>/<nome_descritivo>.mp4` (por exemplo, `.../2/2_narração_pt.mp4`), o helper reutiliza a identidade numérica da pasta e a mesma pasta de item, sem apagar nem mover a entrada. Cria somente se ainda não existirem `<ID>_finallinkoriginal.mp4` e `<ID>_finallinkoriginal.wav`; se já existirem, bloqueia em vez de sobrescrever.
-- O nome canônico da saída desta fixture de laboratório é `<ID>_finaldomeulinknovo.mp4`; o item `2` deve manter, portanto, `storage/Videos GRUPO_FONTE_teste/2/2_finaldomeulinknovo.mp4`. Studio usa o mesmo contrato `Storage` para o caminho de trabalho `<ID>_.mp4`. A URL usada no manifesto é de teste e termina no sufixo canônico, não no ID, para evitar nomes duplicados como `<ID>_<ID>.mp4`.
-- Para uma entrada que não esteja dentro de uma pasta numérica sob o root da fonte, o helper mantém o fallback isolado de item temporário `v2smoke_real_*`; esse fallback não substitui o caminho principal do corpus numerado.
-- O relatório/manifesto e o SQLite de laboratório ficam separados em `storage/validation/` e `storage/database/armored_speech_lab_*.sqlite3`; o banco operacional `armoredcreator.db` não é aberto.
-- O alias de laboratório `source_teste` mapeia para `Videos GRUPO_FONTE_teste`; `source1`, `source2`, etc. continuam mapeando para as pastas numeradas usuais.
+A branch passou em compilação e **79 testes automatizados**: [GitHub Actions — execução 39039829421](https://github.com/armoredcreator/audio/actions/runs/39039829421). O teste histórico no Windows comprovou a versão anterior do handoff; o contrato v3 atual ainda precisa de um E2E real no Windows depois da migração dos ativos Melody para o caminho de Speech.
 
-O modo `--real-video` aceita qualquer classificação de áudio resolvida suportada, exceto `UNKNOWN`. Somente narração PT-BR limpa com evidência explícita de ausência de música pode entrar na rota Melody; demais classes devem seguir a rota segura sem RVC. A classificação inconclusiva bloqueia a preparação.
+## 16. Migrar ativos locais para ArmoredSpeech e validar a arquitetura v3
 
-PowerShell, a partir da raiz do AudioLab, para o primeiro teste integrado use a amostra identificada como narração PT-BR:
+Os pesos/modelos RVC e o efeito sonoro ainda podem estar no caminho local antigo. Antes de uma conversão real com o novo motor, atualize a branch de laboratório. O script abaixo copia modelos/index e efeito, compara SHA-256 e **não apaga nem sobrescreve o conjunto antigo**:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\ArmoredSpeech\scripts\migrate_audio_assets.ps1
+```
+
+O script espera encontrar:
+- origem: `ArmoredStudio/runtime/rvc/models/` e `ArmoredStudio/assets/efeitosonoro.wav`;
+- destino: `ArmoredSpeech/runtime/rvc/models/` e `ArmoredSpeech/assets/efeitosonoro.wav`.
+
+Se já existir um destino com conteúdo divergente, ele interrompe sem sobrescrever. Os pesos locais ficam ignorados pelo Git em `ArmoredSpeech/runtime/rvc/`.
+
+Verifique depois:
+
+```powershell
+Test-Path '.\ArmoredSpeech\runtime\rvc\models\melody'
+Test-Path '.\ArmoredSpeech\assets\efeitosonoro.wav'
+```
+
+### E2E v3 de laboratório
+
+O item `2` já tem artefatos canônicos da execução anterior. Não reexecute o helper nesse item; ele deve bloquear para não sobrescrever. Use a amostra numerada `5`, que no inventário anterior tinha apenas o vídeo de referência, para uma nova execução isolada:
 
 ```powershell
 .\.venv\Scripts\python.exe -m ArmoredSpeech.prepare_v2_smoke_fixture `
   --root . `
   --test-source-id source_teste `
-  --real-video '.\storage\Videos GRUPO_FONTE_teste\2\2_narração_pt.mp4'
+  --real-video '.\storage\Videos GRUPO_FONTE_teste\5\5_narração_pt_gemini1.mp4'
 ```
 
-O comando imprime `MANIFEST_PATH`, `SPEECH_DATABASE` e hashes/decisão. Use os caminhos exatos retornados:
+Se a preparação imprimir `SPEECH_V2_REAL_VIDEO_FIXTURE=READY`, use exatamente os valores `MANIFEST_PATH` e `SPEECH_DATABASE` retornados:
 
 ```powershell
 .\.venv\Scripts\python.exe -m ArmoredSpeech.studio_batch_runner `
@@ -288,20 +306,20 @@ O comando imprime `MANIFEST_PATH`, `SPEECH_DATABASE` e hashes/decisão. Use os c
   --speech-database 'COLE_SPEECH_DATABASE'
 ```
 
-**Não acrescente `--copy-only` ao teste real.** O runner exigirá FFmpeg, banner, efeito sonoro e, quando elegível, modelo/índice Melody existentes. Para a amostra numerada `2`, ele renderiza no workspace `Videos GRUPO_FONTE_teste/2/` com saída `2_finaldomeulinknovo.mp4`; não envia nada ao Hub.
+Sem `--copy-only`. Conferir o relatório, confirmar que a rota foi decidida pelo Speech, abrir o MP4 final e validar voz/efeito, imagem, duração e SHA-256 dos originais. O render deve terminar com `STUDIO_SPEECH_BATCH=SUCCESS` e `ORIGINALS_INTACT=True`. Esse E2E v3, ainda não executado, é o portão necessário para considerar a nova fronteira aprovada.
 
-Depois de aprovar o primeiro caso, os outros MP4s podem ser executados individualmente apontando para seus caminhos dentro das pastas numeradas (por exemplo, `...\3\3_musica.mp4`). Não varrer recursivamente a pasta para tratar cópias de trabalho e resultados renderizados como entradas novas: somente os MP4s originais dentro das pastas `1` a `14` são corpus de entrada.
+### Evidência histórica v2 no Windows — não substitui o E2E v3
 
-### Evidência E2E real no Windows — caso 2
+Em 17/10/2026, o usuário executou o contrato anterior com `storage/Videos GRUPO_FONTE_teste/2/2_narração_pt.mp4`, assistiu à saída e confirmou áudio/imagem corretos:
+- `STUDIO_SPEECH_BATCH=SUCCESS`, `MODE=REAL_STUDIO`, `ITEMS=1`, `ORIGINALS_INTACT=True`, contrato v2;
+- classificação `PT_BR_NARRATION`, idioma `pt-br`, confiança `0.9934035043882937`, rota `RVC_MELODY`;
+- SHA-256 do original confirmado: `0e58fcd53135e437778ee1abd787f985a5b6ebe70c638072a232eeded31f9d05`;
+- saída aprovada: `storage/Videos GRUPO_FONTE_teste/2/2_finaldomeulinknovo.mp4`.
 
-Em 17/10/2026, o usuário executou Speech → pacote v2 → Studio com o corpus numerado `2/2_narração_pt.mp4` e conferiu o resultado visual/auditivo.
+Essa evidência fica como referência de qualidade/armazenamento para o caminho anterior. Como o contrato de renderização foi refatorado desde então, **ela não será usada como prova de E2E v3**.
 
-- Resultado do runner: `STUDIO_SPEECH_BATCH=SUCCESS`, `MODE=REAL_STUDIO`, `ITEMS=1`, `ORIGINALS_INTACT=True`, `audio_contract_version=2`.
-- Classificação Speech: `PT_BR_NARRATION`, idioma `pt-br`, confiança `0.9934035043882937`, rota `RVC_MELODY`, `music_detected=false`.
-- Workspace canônico: `storage/Videos GRUPO_FONTE_teste/2/`.
-- Original de teste: `2_finallinkoriginal.mp4`; WAV Speech: `2_finallinkoriginal.wav`; saída canônica: `2_finaldomeulinknovo.mp4`.
-- SHA-256 esperado e confirmado para o original: `0e58fcd53135e437778ee1abd787f985a5b6ebe70c638072a232eeded31f9d05`.
-- Relatório confirmado pelo usuário: `storage/validation/speech-studio-speech-v2-real-smoke-20261017T124415123639Z-1b40f0-20261017T124615Z.json`.
-- O usuário assistiu ao MP4 de saída e confirmou áudio e imagem corretos.
+## 17. Desativar definitivamente os ativos antigos do Studio — somente após o E2E v3
 
-Este E2E valida um caso real da rota Melody e o contrato de armazenamento numerado. Ainda não aprova todas as classes de áudio nem autoriza mesclar a PR. Próximas verificações do corpus: música isolada, sem áudio, ruído, fala com música e amostras com barras; confirmar rotas sem RVC e comportamento visual para cada tipo relevante. Os testes automatizados seguem usando stubs para alguns caminhos e não substituem essas verificações reais.
+Depois de o E2E v3 passar, comparar SHA-256 dos modelos/index e do efeito no caminho novo, confirmar que não existem imports/referências produtivas para `ArmoredStudio/runtime/rvc` ou o efeito antigo, rodar a suíte completa e só então remover os binários legados do Studio. Não apagar os modelos nem o efeito do novo caminho Speech. O banner e demais assets exclusivamente visuais continuam pertencendo ao Studio.
+
+A PR `#5` permanece draft e não está mesclada. Nenhuma alteração desta branch foi portada aos repositórios de produção ou bases congeladas; nenhum caminho de teste publica no Hub.
