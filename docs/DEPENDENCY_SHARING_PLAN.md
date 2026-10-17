@@ -1,53 +1,53 @@
-# Plano incremental de compartilhamento de dependências
+# Ambiente Python único do ArmoredAudioLab
 
-**Repositório/branch:** `armoredcreator/audio`, `test/armoredstudio-speech-integration-20261015`.
+**Branch de trabalho:** `test/armoredstudio-speech-integration-20261015`
 
-## Objetivo
+## Decisão final
 
-Reduzir instalações Python duplicadas entre o ambiente principal do AudioLab, ArmoredSpeech e RVC/ArmoredStudio sem quebrar a conversão Melody já validada. Esta alteração não toca no ArmoredCreator de produção, em `armoredcreator-test` ou em `armoredcreator-testbase`.
+O ambiente operacional único é `.venv` na raiz do repositório. ArmoredSpeech, ArmoredStudio e RVC Melody devem executar com este interpretador:
 
-## Evidência inicial fornecida pelo teste local (16/10/2026)
+`C:\Users\Administrador\Downloads\ArmoredAudioLab\.venv\Scripts\python.exe`
 
-| Biblioteca | `.venv` raiz | RVC `env311` | Situação |
-|---|---:|---:|---|
-| Python | 3.11.9 | 3.11.9 | Compatível |
-| NumPy (auditoria inicial) | 2.4.6 | 1.23.5 | Depois testado no `.venv` com 1.23.5 |
-| PyTorch | 2.14.1 | 2.14.1+cpu | Aparente coincidência; conferir build CPU e dependências |
-| SciPy | Ausente | 1.10.1 | Presente apenas no RVC |
-| Fairseq | Ausente | 0.12.3.1 | Presente apenas no RVC; build validado localmente |
-| rvc-python | Ausente | 0.1.5 | Presente apenas no RVC |
-| librosa | Ausente | 0.11.0 | Presente apenas no RVC |
-| numba | Ausente | 0.68.0 | Presente apenas no RVC |
-| transformers | 4.57.6 | Ausente | Presente apenas na raiz |
-| faster-whisper | 1.2.1 | Ausente | Presente apenas na raiz |
-| silero-vad | 6.2.3 | Ausente | Presente apenas na raiz |
-| onnxruntime | 1.31.0 | Ausente | Presente apenas na raiz |
+O RVC não deve criar nem selecionar `ArmoredStudio/runtime/rvc/env311` ou o ambiente RVC legado. O executor `ArmoredStudio/processing/rvc.py` resolve somente o ambiente compartilhado na raiz. O script antigo de migração para `env311` foi aposentado/removido deste branch para evitar recriá-lo por engano.
 
-O usuário depois testou NumPy 1.23.5 no `.venv` da raiz: 45 testes passaram (1 ignorado), `pip check` informou `No broken requirements found`, e a validação real de Speech passou em 5/5 vídeos com `ORIGINAL_HASHES_UNCHANGED=True`. Isso autoriza compartilhar a versão nos casos testados, mas não aprova ainda todo o corpus.
+## Validações locais concluídas em 16/10/2026
 
-## Estratégia
+- Python compartilhado: 3.11.9.
+- Speech unit tests: **45 passed, 1 skipped**.
+- Validação real de Speech: **5/5 arquivos passaram**; hashes dos vídeos originais inalterados.
+- RVC/Fairseq: import real passou com `fairseq 0.12.3.1`, `torch 2.14.1+cpu` em runtime e `torchaudio 2.11.0+cpu`.
+- Dependências de RVC adicionadas à raiz nas versões registradas no ambiente de referência, usando instalação sem resolução transitiva. A comparação informou que os pacotes existentes na raiz não foram removidos nem alterados durante essa instalação.
+- Conversão real com o modelo `melody.pth` e índice `added_IVF890_Flat_nprobe_1_melody_v2.index` foi executada pelo Python da raiz. O usuário escutou e aprovou o resultado.
+- O áudio de entrada, o modelo, o índice e o inventário do antigo ambiente RVC permaneceram inalterados durante essa validação.
 
-1. Auditar as distribuições instaladas em `.venv`, `ArmoredSpeech/runtime/venv` (se existir) e `ArmoredStudio/runtime/rvc/env311` (se existir).
-2. Comparar nome e versão normalizados. O sufixo `+cpu` só é normalizado para comparação de Torch/Torchaudio; isso não substitui um teste de importação/conversão.
-3. Compartilhar apenas dependências com versões compatíveis e um mesmo interpretador. Manter os arquivos `requirements-*.txt` organizados por ferramenta, mesmo quando forem instalados no mesmo ambiente.
-4. NumPy 1.23.5 já passou a suíte unitária e os cinco casos reais de Speech; mantê-lo no `.venv` enquanto preparamos o teste RVC. A conversão Melody ainda precisa ser executada pelo interpretador da raiz para concluir essa etapa.
-5. Instalar dependências RVC na raiz e testar: imports, `pip check`, e conversão real do WAV de amostra, comparando o SHA-256 do original antes/depois.
-6. Só após a conversão real pelo interpretador da raiz ser aprovada, remover o ambiente transitório `ArmoredStudio/runtime/rvc/env311`. Modelos e índices Melody permanecem em `ArmoredStudio/runtime/rvc/models`.
+Esses resultados comprovam a conversão de amostra e os casos reais de Speech informados. Não significam que todo o corpus de Studio ou todo o pipeline de publicação foi testado.
 
-## Limites importantes
+## Operação
 
-- Dois ambientes virtuais não compartilham automaticamente os pacotes um do outro. Se uma ferramenta continuar usando seu próprio ambiente, as distribuições presentes nos dois ambientes permanecem duplicadas.
-- Não alterar NumPy, Torch ou Fairseq automaticamente apenas para produzir uma única versão.
-- A distribuição local/validada de Fairseq 0.12.3.1 é diferente da versão solicitada nos metadados públicos do `rvc-python`; não deixar o resolvedor pip substituir silenciosamente esse pacote.
-- `ArmoredSpeech/runtime/venv` não deve ser apagado sem confirmar que existe e que nenhuma rotina ativa depende dele.
-- Não remover arquivos, modelos, índices, WAVs originais, assets, bancos de dados ou resultados deste processo.
-
-## Auditoria
-
-Executar na raiz do AudioLab:
+No PowerShell, a partir da raiz do AudioLab:
 
 ```powershell
+.\.venv\Scripts\python.exe -m pytest -q
 .\scripts\audit_shared_dependencies.ps1
+.\.venv\Scripts\python.exe .\ArmoredSpeech\tests\validate_real_audio.py
 ```
 
-O comando só consulta os ambientes. O CSV é gravado no diretório temporário do usuário; não altera pacotes nem apaga ambientes.
+Para converter um WAV com Melody:
+
+```powershell
+.\.venv\Scripts\python.exe .\ArmoredStudio\processing\rvc.py .\audio_original.wav .\storage\validation\melody_output.wav melody
+```
+
+Escolha sempre uma saída nova para não sobrescrever os originais.
+
+## Regras de dependências
+
+- Não usar `pip install --upgrade` para o Torch, TorchAudio, NumPy ou Fairseq.
+- O Fairseq usado é a distribuição local validada `0.12.3.1`; não deixar um resolvedor substituir por uma versão upstream.
+- Instalações novas devem fixar versões, usar `--no-deps` quando necessário e conferir `pip freeze` antes/depois.
+- `pip` e `setuptools` são ferramentas do ambiente; suas versões/metadados diferiam da referência, mas não foram substituídas na unificação. O Torch runtime foi confirmado como `2.14.1+cpu` nos dois ambientes.
+- A validação completa do corpus, a integração completa do Studio e o pipeline de produção continuam sujeitos aos seus próprios testes; não executar Hub/publicação como parte dessa validação.
+
+## Dados e arquivos
+
+Não apagar modelos ou índices sob `ArmoredStudio/runtime/rvc/models`, vídeos, WAVs originais, assets, credenciais ou resultados de teste ao limpar ambientes. O único ambiente operacional é `.venv` na raiz.
