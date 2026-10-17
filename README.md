@@ -1,32 +1,29 @@
 # ArmoredCreator Audio Lab
 
-Laboratório isolado para validar ArmoredSpeech e ArmoredStudio de ponta a ponta antes de qualquer integração no ArmoredCreator.
+Laboratório isolado para validar ArmoredSpeech e ArmoredStudio antes de qualquer integração no ArmoredCreator.
 
-- Implementação e documentação de Speech: [ArmoredSpeech/](ArmoredSpeech/README.md).
-- Status de portabilidade e integração de Studio: [docs/ARMOREDSTUDIO_PORT_STATUS.md](docs/ARMOREDSTUDIO_PORT_STATUS.md).
-- Esta branch de teste não integra nem altera o ArmoredCreator de produção, `armoredcreator-test` ou `armoredcreator-testbase`.
-- Plano para reduzir duplicações Python com segurança: [docs/DEPENDENCY_SHARING_PLAN.md](docs/DEPENDENCY_SHARING_PLAN.md). A auditoria inicial é somente leitura.
-- ArmoredSpeech passa a usar o `.venv` da raiz; as dependências exclusivas do RVC continuam em fase de consolidação.
-- Vídeos de teste, ambientes virtuais, bancos de dados locais, credenciais, assets privados e resultados gerados não devem ser enviados ao Git sem uma decisão explícita.
+- Implementação e documentação do Speech: [ArmoredSpeech/](ArmoredSpeech/README.md).
+- Status de portabilidade do Studio: [docs/ARMOREDSTUDIO_PORT_STATUS.md](docs/ARMOREDSTUDIO_PORT_STATUS.md).
+- Plano e evidências da unificação de dependências: [docs/DEPENDENCY_SHARING_PLAN.md](docs/DEPENDENCY_SHARING_PLAN.md).
+- **Um único ambiente operacional:** `.venv` na raiz para ArmoredSpeech, ArmoredStudio e RVC Melody.
+- O executor RVC usa somente o Python compartilhado da raiz; não depende de `runtime/rvc/env311`.
+- Vídeos, ambientes virtuais, bancos locais, credenciais, assets privados e resultados gerados não devem ser enviados ao Git sem aprovação explícita.
 
 ## Ordem oficial do pipeline
 
 **ArmoredSync completo → ArmoredVision completo → ArmoredStock completo → ArmoredIA → ArmoredSpeech completo → ArmoredStudio → ArmoredHub.**
 
-Sync, Vision e Stock devem concluir suas fases históricas na ordem acima. IA vem antes de Speech; Speech deve concluir seu lote aprovado antes do início do processamento de Studio. Hub é a última etapa e não faz parte dos testes isolados atuais.
+Sync, Vision e Stock devem concluir suas fases históricas na ordem acima. IA vem antes de Speech; Speech deve concluir o lote aprovado antes de Studio. Hub é a última etapa e não participa dos testes isolados atuais.
 
-## Corpus local para testes Speech + Studio
+## Corpus local
 
-O corpus de teste preparado pelo usuário fica em:
+O corpus fica em `C:\Users\Administrador\Downloads\ArmoredAudioLab\storage`. Os testes devem preservar os originais, usar saídas separadas e registrar os resultados por caso. Não presumir que todo o corpus foi aprovado só porque os casos de referência passaram.
 
-`C:\Users\Administrador\Downloads\ArmoredAudioLab\storage`
+## Estado da validação (16/10/2026)
 
-Ele contém vídeos destinados tanto aos testes de ArmoredSpeech quanto aos testes visuais de ArmoredStudio: VEO 1, VEO 2, Gemini e barras pretas de diferentes tamanhos. O diretório é local e não deve ser versionado. Os testes devem usar cópias/workspace isolados, preservar os originais e registrar resultados por caso; não presumir que todos os casos já passaram.
+- Speech: 45 testes aprovados, 1 ignorado.
+- Speech real: 5/5 vídeos de referência passaram; hashes originais intactos.
+- RVC: imports de Fairseq e RVCInference passaram no ambiente raiz.
+- Melody: conversão real executada pelo Python da raiz, arquivo de saída não vazio e áudio escutado/aprovado pelo usuário; original, modelo, índice e inventário do RVC anterior permaneceram inalterados.
 
-Os assets oficiais do Studio e o ambiente/modelo/índice RVC serão transferidos para o laboratório separadamente pelo usuário. Até essa transferência e validação, não declarar o teste real de ponta a ponta concluído.
-
-## Estado
-
-O CI mais recente validou testes automatizados sintéticos; isso não equivale a renderização real. A integração Speech → Studio ainda precisa ser ligada ao chamador/orquestrador do laboratório e validada com o corpus local, os assets oficiais e RVC.
-
-Nenhum vídeo real foi processado nesta etapa. Nenhuma publicação foi executada. Não promover nem copiar alterações para o ArmoredCreator de produção sem auditoria e aprovação explícita.
+A validação completa do corpus de Studio e o pipeline de publicação continuam fora do escopo desta aprovação isolada. Não publicar no Hub ou promover mudanças ao ArmoredCreator de produção sem auditoria e aprovação.
