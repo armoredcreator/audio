@@ -182,13 +182,16 @@ class UnifiedStudio:
         ffmpeg = os.getenv("ARMORED_FFMPEG", "ffmpeg")
         if not shutil.which(ffmpeg):
             raise RuntimeError("FFmpeg não encontrado")
-        from .processing.visual_finalizer import render_video_with_speech_track
+        from .processing.visual_finalizer import render_video_with_speech_tracks
 
-        render_video_with_speech_track(
+        render_video_with_speech_tracks(
             source,
-            package.final_audio_track_path,
+            package.voice_track_path,
+            package.effect_track_path,
             banner,
             output,
+            audio_filter_graph=package.audio_filter_graph,
+            audio_output_label=package.audio_output_label,
             position=str(package.audio_timeline.get("intro_position") or "final"),
             intro=intro,
             plan=analysis.plan,
