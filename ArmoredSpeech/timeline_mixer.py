@@ -120,7 +120,13 @@ def build_audio_filter_graph(
         voice_filters.append(f"atrim=start={audio_start:g}:duration={main_duration:g}")
     else:
         voice_filters.append(f"atrim=duration={main_duration:g}")
-    voice_filters.append("asetpts=PTS-STARTPTS")
+    # RVC output can be slightly shorter than the visual timeline, especially
+    # after an audio-start trim. Pad then trim to the exact main-video duration.
+    voice_filters.extend([
+        f"apad=whole_dur={main_duration:g}",
+        f"atrim=duration={main_duration:g}",
+        "asetpts=PTS-STARTPTS",
+    ])
     graph = "[1:a]" + ",".join(voice_filters) + "[voice_main]"
 
     if intro:
