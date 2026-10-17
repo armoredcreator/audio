@@ -519,3 +519,59 @@ def test_batch_preflight_hashes_melody_model_and_index_only_once(tmp_path, monke
     assert hash_counts[index.resolve()] == 1
 
 
+
+def test_shared_effect_sha256_is_cached_across_package_validation(tmp_path, monkeypatch):
+    item_one = tmp_path / "item-one"
+    item_two = tmp_path / "item-two"
+    item_one.mkdir()
+    item_two.mkdir()
+    original_one, voice_one, effect_shared, payload_one = _package(item_one)
+    original_two, voice_two, _, payload_two = _package(item_two)
+    payload_one["original_path"] = str(original_one)
+    payload_two["original_path"] = str(original_two)
+    payload_two["source_id"] = "source-1"
+    payload_two["item_id"] = "telegram-2"
+    payload_two["original_sha256_before"] = _sha(original_two)
+    payload_two["original_sha256_after"] = _sha(original_two)
+    # A batch uses one already-prepared effect artifact but has a unique voice
+    # track and original hash per item.
+    payload_two["effect_track"] = dict(payload_one["effect_track"])
+    assert payload_two["voice_track"]["path"] != payload_one["voice_track"]["path"]
+    assert payload_two["effect_track"]["path"] == payload_one["effect_track"]["path"]
+
+    import ArmoredStudio.speech_handoff as handoff_module
+
+    real_sha = handoff_module.sha256_file
+    counted: dict[Path, int] = {}
+
+    def count_sha(path: Path) -> str:
+        resolved = Path(path).resolve()
+        counted[resolved] = counted.get(resolved, 0) + 1
+        return real_sha(path)
+
+    monkeypatch.setattr(handoff_module, "sha256_file", count_sha)
+    cache: dict[tuple[str, int, int, int, int], str] = {}
+
+    first = handoff_module.validate_audio_package(
+        payload_one,
+        workspace_root=tmp_path,
+        expected_source_id="source-1",
+        expected_item_id="telegram-1",
+        expected_original_path=original_one,
+        track_hash_cache=cache,
+    )
+    second = handoff_module.validate_audio_package(
+        payload_two,
+        workspace_root=tmp_path,
+        expected_source_id="source-1",
+        expected_item_id="telegram-2",
+        expected_original_path=original_two,
+        track_hash_cache=cache,
+    )
+
+    assert first.effect_sha256 == second.effect_sha256 == _sha(effect_shared)
+    assert counted[effect_shared.resolve()] == 1
+    assert counted[voice_one.resolve()] == 1
+    assert counted[voice_two.resolve()] == 1
+    assert counted[original_one.resolve()] == 1
+    assert counted[original_two.resolve()] == 1
