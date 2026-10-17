@@ -90,7 +90,12 @@ def prepare_audio_packages_for_items(
     import hashlib
     import re
 
-    from .audio_package import preflight_audio_package, prepare_audio_package
+    from .audio_package import (
+        preflight_audio_package,
+        prepare_audio_package,
+        prepare_effect_track,
+        sha256_file,
+    )
 
     root = Path(workspace_root).resolve(strict=True)
     package_root = Path(package_root).expanduser().resolve()
@@ -99,6 +104,13 @@ def prepare_audio_packages_for_items(
     except ValueError as exc:
         raise RuntimeError("Audio package root must stay inside the lab root") from exc
     effect_source_path = Path(effect_source_path).expanduser().resolve(strict=True)
+    if not items:
+        raise RuntimeError("Speech audio package batch cannot be empty")
+    try:
+        effect_source_path.relative_to(root)
+    except ValueError as exc:
+        raise RuntimeError("Effect asset must stay inside the lab root") from exc
+    effect_source_hash = sha256_file(effect_source_path)
 
     # Read/validate all persisted decisions before spending CPU on any RVC run.
     directives = []
@@ -125,9 +137,20 @@ def prepare_audio_packages_for_items(
             workspace_root=root,
             effect_source_path=effect_source_path,
             voice="melody",
+            effect_source_sha256=effect_source_hash,
         )
         for item, directive_payload in directives
     ]
+
+    # The effect is the same project asset for the entire batch. Normalize and
+    # apply the approved gain once; every per-item contract refers to this shared,
+    # immutable track and the Studio validator caches its SHA-256 by file identity.
+    shared_effect_track = prepare_effect_track(
+        effect_source_path,
+        workspace_root=root,
+        output_path=package_root / "_shared" / "effect.wav",
+        preflight=preflights[0],
+    )
 
     prepared: list[tuple[object, dict]] = []
     for (item, directive_payload), preflight in zip(directives, preflights, strict=True):
@@ -144,7 +167,10 @@ def prepare_audio_packages_for_items(
             output_dir=output_dir,
             voice="melody",
             preflight=preflight,
+            prepared_effect_track=shared_effect_track,
         )
         prepared.append((item, package))
 
+    if sha256_file(effect_source_path).lower() != effect_source_hash.lower():
+        raise RuntimeError("Project sound-effect asset changed during whole-batch Speech preparation")
     return prepared
