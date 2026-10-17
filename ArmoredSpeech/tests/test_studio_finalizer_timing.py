@@ -1,82 +1,105 @@
 from __future__ import annotations
 
-from ArmoredStudio.processing.finalizer import criar_filtro
+from pathlib import Path
+from types import SimpleNamespace
+
+from ArmoredStudio.processing import visual_finalizer
 
 
-def _graph(*, audio_start: float) -> str:
-    return criar_filtro(
+def test_studio_visual_graph_has_no_audio_processing():
+    graph, label = visual_finalizer._video_filter_graph(
+        Path("input.mp4"),
+        Path("banner.png"),
+        1080,
+        1920,
+        "30/1",
+        {"audio_start": 1.25, "video_start": 0.0},
+        intro=True,
         position="final",
-        largura=1080,
-        altura=1920,
-        fps="30/1",
-        plan={"audio_start": audio_start},
     )
 
-
-def test_audio_start_trims_only_voice_and_keeps_main_effect_at_zero():
-    graph = _graph(audio_start=1.25)
-
-    # Current behavior: the visual plan trims/re-times the voice input only.
-    assert "[1:a]atrim=start=1.25,asetpts=PTS-STARTPTS,volume=1.0[voice]" in graph
-    # The main effect has its established normalization/gain, but is not trimmed
-    # by audio_start. Its timeline begins at the start of the main segment.
-    assert "[2:a]loudnorm=I=-12:LRA=7:TP=-1,volume=0.8[music]" in graph
-    assert graph.count("atrim=start=1.25") == 1
-
-
-def test_intro_effect_keeps_its_own_fade_and_two_second_window():
-    graph = _graph(audio_start=1.25)
-
-    # The intro is a distinct timeline segment; do not propagate audio_start
-    # into its dedicated effect fade/trim.
-    assert (
-        "[2:a]afade=t=in:st=0:d=0.4,afade=t=out:st=1.5:d=0.5,"
-        "loudnorm=I=-12:LRA=7:TP=-1,volume=0.8,"
-        "atrim=duration=2.0,asetpts=PTS-STARTPTS[intro_a]"
-    ) in graph
-
-
-def test_zero_audio_start_does_not_introduce_a_temporal_trim():
-    graph = _graph(audio_start=0.0)
-
-    assert "atrim=start=0" not in graph
-    assert "[1:a]volume=1.0[voice]" in graph
-    assert "[2:a]loudnorm=I=-12:LRA=7:TP=-1,volume=0.8[music]" in graph
-
-
-def test_v2_prepared_tracks_trim_only_voice_and_do_not_repeat_gain_or_normalization():
-    graph = criar_filtro(
-        position="final",
-        largura=1080,
-        altura=1920,
-        fps="30/1",
-        plan={"audio_start": 1.25},
-        audio_tracks_prepared=True,
-    )
-
-    assert "[1:a]atrim=start=1.25,asetpts=PTS-STARTPTS,anull[voice]" in graph
-    assert "[2:a]anull[music]" in graph
-    assert graph.count("atrim=start=1.25") == 1
+    assert label == "[vout]"
+    assert "concat=n=2:v=1:a=0[vout]" in graph
+    assert "atrim=" not in graph
+    assert "amix=" not in graph
     assert "loudnorm=" not in graph
-    assert "volume=0.8" not in graph
-    assert (
-        "[2:a]afade=t=in:st=0:d=0.4,afade=t=out:st=1.5:d=0.5,"
-        "atrim=duration=2.0,asetpts=PTS-STARTPTS[intro_a]"
-    ) in graph
+    assert "volume=" not in graph
+    assert "afade=" not in graph
 
 
-def test_v2_prepared_tracks_keep_voice_untrimmed_when_audio_start_is_zero():
-    graph = criar_filtro(
-        position="final",
-        largura=1080,
-        altura=1920,
-        fps="30/1",
-        plan={"audio_start": 0.0},
-        audio_tracks_prepared=True,
+def test_visual_plan_trims_video_only():
+    graph, _ = visual_finalizer._video_filter_graph(
+        Path("input.mp4"),
+        Path("banner.png"),
+        1080,
+        1920,
+        "30/1",
+        {"audio_start": 1.25, "video_start": 0.75},
+        intro=True,
+        position="inicio",
     )
 
-    assert "[1:a]anull[voice]" in graph
-    assert "[2:a]anull[music]" in graph
-    assert "atrim=start=0" not in graph
+    assert graph.count("trim=start=0.75") == 2
+    assert "atrim=start=1.25" not in graph
+    assert "audio_start" not in graph
+    assert "concat=n=2:v=1:a=0[vout]" in graph
+
+
+def test_no_intro_visual_graph_does_not_reference_banner_or_audio(tmp_path):
+    graph, label = visual_finalizer._video_filter_graph(
+        Path("input.mp4"),
+        Path("unused-banner.png"),
+        1080,
+        1920,
+        "30/1",
+        {"video_start": 0.0},
+        intro=False,
+        position="final",
+    )
+
+    assert label == "[main_v]"
+    assert "[2:v]" not in graph
+    assert "concat=" not in graph
+    assert "amix=" not in graph
+    assert "atrim=" not in graph
+
+
+def test_final_render_maps_one_speech_soundtrack_without_audio_filters(tmp_path, monkeypatch):
+    video = tmp_path / "input.mp4"
+    audio = tmp_path / "final_audio.wav"
+    banner = tmp_path / "banner.png"
+    output = tmp_path / "result.mp4"
+    for path in (video, audio, banner):
+        path.write_bytes(b"test-input")
+
+    captured = {}
+
+    monkeypatch.setattr(visual_finalizer, "_probe_video", lambda path: (1080, 1920, "30/1"))
+    monkeypatch.setattr(visual_finalizer, "resolve_executable", lambda *args, **kwargs: Path("ffmpeg"))
+
+    def fake_run(command, **kwargs):
+        captured["command"] = list(command)
+        Path(command[-1]).write_bytes(b"rendered-video")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(visual_finalizer.subprocess, "run", fake_run)
+
+    result = visual_finalizer.render_with_speech_audio(
+        video, audio, banner, output,
+        position="final",
+        intro=True,
+        plan={"audio_start": 0.5, "video_start": 0.0},
+    )
+
+    command = captured["command"]
+    graph = command[command.index("-filter_complex") + 1]
+    assert result == output
+    assert command[command.index("-map") + 1] == "[vout]"
+    second_map_index = command.index("-map", command.index("-map") + 1)
+    assert command[second_map_index + 1] == "1:a:0"
+    assert "atrim=" not in graph
+    assert "amix=" not in graph
     assert "loudnorm=" not in graph
-    assert "volume=0.8" not in graph
+    assert "volume=" not in graph
+    assert "afade=" not in graph
+    assert "-stream_loop" not in command
