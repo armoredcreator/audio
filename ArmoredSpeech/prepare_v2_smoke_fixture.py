@@ -304,7 +304,8 @@ def create_smoke_fixture(
     return {
         "batch_id": batch_id,
         "manifest_path": str(manifest_path),
-        "speech_database_copy": str(database_copy),
+        "speech_database": str(database_path),
+        "speech_database_copy": str(database_path),
         "original_copy": str(original_copy),
         "wav_copy": str(wav_copy),
         "source_original": str(source_original),
@@ -321,7 +322,6 @@ def create_smoke_fixture(
 
 def create_real_video_smoke_fixture(
     root: Path,
-    speech_database: Path,
     *,
     source_video: Path,
     test_source_id: str = "source1",
@@ -337,7 +337,6 @@ def create_real_video_smoke_fixture(
     from .registry import record_result
 
     root = Path(root).resolve(strict=True)
-    database = _validate_database_path(root, speech_database)
     video = Path(source_video).expanduser()
     if not video.is_absolute():
         video = root / video
@@ -411,14 +410,15 @@ def create_real_video_smoke_fixture(
         if sha256_file(original_copy).lower() != source_hash.lower():
             raise SmokeFixtureError("The copied original MP4 changed during Speech processing")
 
-        database_copy = run_dir / "speech_experimental_real_smoke.sqlite3"
-        source_connection = _readonly_connection(database)
-        target_connection = sqlite3.connect(database_copy)
-        target_connection.row_factory = sqlite3.Row
+        database_dir = root / "storage" / "database"
+        database_dir.mkdir(parents=True, exist_ok=True)
+        database_path = database_dir / f"armored_speech_lab_{stamp}_{suffix}.sqlite3"
+        from .registry import connect as connect_registry
+
+        connection = connect_registry(database_path)
         try:
-            source_connection.backup(target_connection)
             record_result(
-                target_connection,
+                connection,
                 source_id=test_source_id,
                 item_id=test_item_id,
                 video_path=original_copy,
@@ -429,8 +429,7 @@ def create_real_video_smoke_fixture(
                 original_sha256_after=source_hash,
             )
         finally:
-            source_connection.close()
-            target_connection.close()
+            connection.close()
 
         manifest = {
             "schema_version": 1,
@@ -489,8 +488,8 @@ def main(argv: list[str] | None = None) -> int:
         description="Prepare an isolated Speech v2 RVC smoke fixture without modifying the source DB or originals."
     )
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--speech-database", type=Path, required=True,
-                        help="path to the experimental ArmoredSpeech SQLite database inside the AudioLab")
+    parser.add_argument("--speech-database", type=Path,
+                        help="existing experimental ArmoredSpeech SQLite database (required for --list-ready or row-based fixture mode; omitted for --real-video)")
     parser.add_argument("--list-ready", action="store_true",
                         help="list existing READY clean-PT-BR rows eligible for Melody")
     parser.add_argument("--limit", type=int, default=20)
@@ -504,18 +503,20 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         root = Path(args.root).expanduser().resolve(strict=True)
-        database = _validate_database_path(root, args.speech_database)
         if args.real_video:
             if args.list_ready or args.source_id or args.item_id:
                 raise SmokeFixtureError("--real-video cannot be combined with --list-ready, --source-id, or --item-id")
             fixture = create_real_video_smoke_fixture(
-                root, database, source_video=args.real_video, test_source_id=args.test_source_id
+                root, source_video=args.real_video, test_source_id=args.test_source_id
             )
             print("SPEECH_V2_REAL_VIDEO_FIXTURE=READY")
             for key, value in fixture.items():
                 print(f"{key.upper()}={value}")
-            print("NEXT_COMMAND=PowerShell: run ArmoredSpeech.studio_batch_runner with MANIFEST_PATH and SPEECH_DATABASE_COPY")
+            print("NEXT_COMMAND=PowerShell: run ArmoredSpeech.studio_batch_runner with MANIFEST_PATH and SPEECH_DATABASE")
             return 0
+        if args.speech_database is None:
+            raise SmokeFixtureError("--speech-database is required unless --real-video is selected")
+        database = _validate_database_path(root, args.speech_database)
         if args.list_ready or (not args.source_id and not args.item_id):
             candidates = list_ready_candidates(root, database, limit=args.limit)
             if not candidates:
