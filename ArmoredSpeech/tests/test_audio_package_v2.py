@@ -428,6 +428,8 @@ def test_audio_package_builder_reuses_shared_batch_effect_without_reencoding(tmp
     assert "EFFECT_TRACK_PREPARATION_FAILED" not in events
     assert events.count("RVC_MELODY") == 1
     assert _sha(original) == original_hash
-    assert _validate(tmp_path, original, package).effect_track_path == shared_effect
+    assert _validate(
+        tmp_path, original, package, expected_item_id="telegram-shared"
+    ).effect_track_path == shared_effect
 
 
