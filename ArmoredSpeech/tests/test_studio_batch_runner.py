@@ -339,7 +339,7 @@ def test_real_runner_blocks_all_studio_calls_if_any_v3_package_is_invalid(tmp_pa
 
     class FakeStudio:
         def analyze_visual(self, item):
-            return SimpleNamespace(plan={"audio_start": 0.0})
+            return SimpleNamespace(plan={"crop_final": None, "video_start": 0.0, "acoes": []})
 
         def process(self, item, *, speech_payload=None, visual_analysis=None):
             events.append(("studio", str(item.telegram_message_id)))
