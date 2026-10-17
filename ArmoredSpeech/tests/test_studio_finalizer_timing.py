@@ -75,7 +75,7 @@ def test_final_output_uses_one_ffmpeg_call_with_speech_graph_and_visual_graph(tm
 
     captured = {"calls": 0}
     plan = {"video_start": 0.0}
-    audio = build_audio_filter_graph(visual_plan=plan, audio_start_seconds=0.5, intro=True, intro_position="final")
+    audio = build_audio_filter_graph(visual_plan=plan, audio_start_seconds=0.5, main_duration_seconds=3.0, intro=True, intro_position="final")
 
     monkeypatch.setattr(visual_finalizer, "_probe_video", lambda path: (1080, 1920, "30/1"))
     monkeypatch.setattr(visual_finalizer, "resolve_executable", lambda *args, **kwargs: Path("ffmpeg"))
