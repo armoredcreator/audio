@@ -194,7 +194,7 @@ def prepare_audio_packages_for_items(
         # The full Melody/index hashes are checked once at the end of the
         # complete Speech batch. Per-item checks above use path/size/mtime/inode
         # so large model files aren't re-read for every video.
-        from armored_core.audio.rvc import localizar_modelo, resolver_rvc_python
+        from .rvc_engine import localizar_modelo, resolver_rvc_python
 
         if str(resolver_rvc_python().resolve(strict=True)) != rvc_asset_fingerprint["rvc_python_path"]:
             raise RuntimeError("RVC Python environment changed during whole-batch Speech preparation")
