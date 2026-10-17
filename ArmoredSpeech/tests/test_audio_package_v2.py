@@ -58,6 +58,8 @@ def _package(tmp_path: Path, **overrides):
         "route": "RVC_MELODY",
         "rvc_eligible": True,
         "rvc_model": "melody",
+        "rvc_model_sha256": "c" * 64,
+        "rvc_index_sha256": "d" * 64,
         "voice_track": {
             "path": str(voice),
             "sha256": _sha(voice),
@@ -80,6 +82,34 @@ def _package(tmp_path: Path, **overrides):
     payload.update(overrides)
     return original, voice, effect, payload
 
+
+
+def _preflight(root: Path, original: Path, source_wav: Path, effect: Path, *, rvc_allowed: bool):
+    model = root / "test-models" / "melody.pth"
+    index = root / "test-models" / "melody.index"
+    model_hash = index_hash = None
+    model_path = index_path = None
+    if rvc_allowed:
+        model.parent.mkdir(parents=True, exist_ok=True)
+        model.write_bytes(b"synthetic-model-fingerprint")
+        index.write_bytes(b"synthetic-index-fingerprint")
+        model_hash = _sha(model)
+        index_hash = _sha(index)
+        model_path, index_path = str(model), str(index)
+    return {
+        "original_sha256": _sha(original),
+        "source_wav_sha256": _sha(source_wav),
+        "effect_source_path": str(effect.resolve()),
+        "effect_source_sha256": _sha(effect),
+        "rvc_allowed": rvc_allowed,
+        "video_duration_seconds": 1.0,
+        "ffmpeg": "mock-ffmpeg",
+        "ffprobe": "mock-ffprobe",
+        "rvc_model_path": model_path,
+        "rvc_model_sha256": model_hash,
+        "rvc_index_path": index_path,
+        "rvc_index_sha256": index_hash,
+    }
 
 def _validate(
     root: Path,
@@ -193,6 +223,13 @@ def test_audio_package_builder_prepares_tracks_without_changing_original(tmp_pat
         fake_write_wave(destination)
         return Path(destination)
     monkeypatch.setattr(rvc, "converter_voz", fake_convert)
+    preflight = _preflight(
+        tmp_path, original, source_wav, effect_source, rvc_allowed=True
+    )
+    monkeypatch.setattr(
+        rvc, "localizar_modelo",
+        lambda voice: (Path(preflight["rvc_model_path"]), Path(preflight["rvc_index_path"])),
+    )
 
     output_dir = tmp_path / "storage" / "validation" / "batch1" / "source1" / "telegram1"
     package = audio_package.prepare_audio_package(
@@ -201,6 +238,7 @@ def test_audio_package_builder_prepares_tracks_without_changing_original(tmp_pat
         workspace_root=tmp_path,
         effect_source_path=effect_source,
         output_dir=output_dir,
+        preflight=preflight,
     )
 
     assert package["route"] == "RVC_MELODY"
@@ -250,6 +288,9 @@ def test_audio_package_builder_routes_unapproved_audio_to_silence_plus_effect(tm
     def forbidden_rvc(*args, **kwargs):
         raise AssertionError("RVC must not run for MUSIC_ONLY")
     monkeypatch.setattr(rvc, "converter_voz", forbidden_rvc)
+    preflight = _preflight(
+        tmp_path, original, source_wav, effect_source, rvc_allowed=False
+    )
 
     package = audio_package.prepare_audio_package(
         directive,
@@ -257,6 +298,7 @@ def test_audio_package_builder_routes_unapproved_audio_to_silence_plus_effect(tm
         workspace_root=tmp_path,
         effect_source_path=effect_source,
         output_dir=tmp_path / "storage" / "validation" / "batch2" / "source1" / "telegram2",
+        preflight=preflight,
     )
 
     assert package["route"] == "EFFECT_ONLY"
