@@ -386,6 +386,7 @@ def prepare_audio_package(
     preflight: dict[str, Any] | None = None,
     prepared_effect_track: dict[str, Any] | None = None,
     visual_plan: dict[str, Any] | None = None,
+    audio_start_seconds: float = 0.0,
     intro: bool = True,
     intro_position: str = "final",
 ) -> dict[str, Any]:
@@ -538,6 +539,7 @@ def prepare_audio_package(
 
         audio_timeline = build_audio_filter_graph(
             visual_plan=visual_plan,
+            audio_start_seconds=audio_start_seconds,
             intro=intro,
             intro_position=intro_position,
         )
