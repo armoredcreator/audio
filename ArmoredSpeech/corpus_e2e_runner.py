@@ -99,7 +99,7 @@ def _is_generated_or_evidence(path: Path, root: Path, scan_root: Path) -> bool:
     if re.search(r"videos grupo_fonte_corpus\d+_", "\\".join(path.parts), re.IGNORECASE):
         return True
     name = path.name.casefold()
-    if "finaldomeulinknovo" in name or path.stem.endswith("_"):
+    if name.endswith("_finaldomeulinknovo.mp4") or re.fullmatch(r"\d+_\.mp4", name):
         return True
     return False
 
