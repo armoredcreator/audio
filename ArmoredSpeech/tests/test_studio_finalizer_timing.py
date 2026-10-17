@@ -32,7 +32,6 @@ def test_visual_plan_video_start_and_crop_are_applied_once_before_the_branch():
         1080,
         "30/1",
         {
-            "video_start": 0.0,
             "video_start": 0.75,
             "crop_final": {"x": 0, "y": 0, "width": 1920, "height": 1080},
         },
