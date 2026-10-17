@@ -168,7 +168,7 @@ def _validate_v1_directive(payload: dict[str, Any], *, root: Path, item) -> tupl
         audio_class == "PT_BR_NARRATION"
         and language in {"pt", "pt-br"}
         and payload.get("speech_detected") is True
-        and payload.get("music_detected") is not True
+        and payload.get("music_detected") is False
         and declared_rvc
     )
     if declared_rvc and not rvc_allowed:
