@@ -75,6 +75,7 @@ A execução sem `--copy-only` tenta análise visual/áudio e processamento real
 - Nunca infere conclusão olhando somente para o número de registros READY no SQLite.
 - Não acessa o banco do Coordinator nem inicia integrações externas.
 - Não aceita originais fora do root ou fora do workspace declarado.
+- Recusa destinos Studio já existentes antes da primeira chamada, preservando resultados anteriores.
 - Recalcula hash dos originais antes e depois; saída precisa existir, ser não vazia e permanecer no root.
 - Preflight bloqueia o lote inteiro se faltar decisão READY/artefato em qualquer item.
 - Não apaga fontes, WAVs Speech, modelo, índice nem assets.
