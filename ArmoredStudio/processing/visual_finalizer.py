@@ -177,6 +177,7 @@ def render_video_with_speech_tracks(
     *,
     audio_filter_graph: str,
     audio_output_label: str,
+    audio_render_options: dict[str, Any],
     position: str = "final",
     intro: bool = True,
     plan: dict[str, Any] | None = None,
@@ -197,6 +198,16 @@ def render_video_with_speech_tracks(
         raise RuntimeError("ArmoredSpeech não forneceu o grafo de áudio")
     if audio_output_label not in {"[main_a]", "[final_a]"}:
         raise RuntimeError("Rótulo de saída de áudio do ArmoredSpeech inválido")
+    if (
+        not isinstance(audio_render_options, dict)
+        or audio_render_options.get("codec") != "aac"
+        or not isinstance(audio_render_options.get("bitrate"), str)
+        or not audio_render_options["bitrate"].endswith("k")
+        or audio_render_options.get("sample_rate") != 44100
+        or audio_render_options.get("channels") != 2
+        or audio_render_options.get("effect_input_loop") is not True
+    ):
+        raise RuntimeError("Opções de renderização de áudio do Speech inválidas")
     if intro:
         _validate_file(banner, "Banner")
         if position not in {"inicio", "final"}:
@@ -219,8 +230,10 @@ def render_video_with_speech_tracks(
         str(ffmpeg), "-nostdin", "-n",
         "-i", str(video),
         "-i", str(voice_track),
-        "-stream_loop", "-1", "-i", str(effect_track),
     ]
+    if audio_render_options["effect_input_loop"]:
+        command += ["-stream_loop", "-1"]
+    command += ["-i", str(effect_track)]
     # Input order: video 0, Speech voice/silence 1, Speech effect 2,
     # optional visual banner 3. The Speech graph references [1:a] and [2:a].
     if intro:
@@ -232,8 +245,11 @@ def render_video_with_speech_tracks(
         "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", VIDEO_CRF,
         "-profile:v", VIDEO_PROFILE, "-level:v", VIDEO_LEVEL, "-pix_fmt", VIDEO_PIX_FMT,
         "-g", "30", "-keyint_min", "30", "-sc_threshold", "0",
-        # Audio processing comes from the Speech-authored graph in this same render.
-        "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+        # These final audio encoding/input settings are specified by Speech.
+        "-c:a", str(audio_render_options["codec"]),
+        "-b:a", str(audio_render_options["bitrate"]),
+        "-ar", str(audio_render_options["sample_rate"]),
+        "-ac", str(audio_render_options["channels"]),
         "-shortest", "-movflags", "+faststart", str(output),
     ]
     result = subprocess.run(command, **_windows_hidden_kwargs())
