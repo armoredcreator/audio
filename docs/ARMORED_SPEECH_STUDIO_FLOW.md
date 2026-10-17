@@ -1,115 +1,131 @@
-# ArmoredSpeech → ArmoredStudio — fluxo canônico do laboratório
+# ArmoredSpeech → ArmoredStudio — arquitetura de áudio e edição visual
 
-**Repositório:** armoredcreator/audio  
-**Branch:** design/speech-studio-audio-timeline-20261017  
+**Repositório:** `armoredcreator/audio`  
+**Branch:** `design/speech-studio-audio-timeline-20261017`  
 **PR:** #5, draft e não mesclada.  
-**Escopo:** laboratório isolado; sem publicação no Hub nem alteração no banco operacional.
+**Escopo:** laboratório isolado; sem publicação no Hub nem alteração do banco operacional.
 
-## 1. Objetivo e separação real de responsabilidades
+## 1. Separação real de responsabilidades
 
-A regra é **ArmoredSpeech possui o áudio; ArmoredStudio possui a edição visual e a saída de vídeo**.
+A regra é **ArmoredSpeech possui todo o processamento de áudio; ArmoredStudio possui toda a edição visual e a renderização do vídeo**.
 
-### ArmoredSpeech é dono de todo o trabalho de áudio
-- Extrair/preparar o áudio e classificar fala, idioma, música, ruído e silêncio.
-- Persistir/validar a decisão na base isolada do Speech.
+### ArmoredSpeech — proprietário do áudio
+- Extrair e preparar áudio; classificar fala, idioma, música, ruído e silêncio.
+- Persistir/validar decisões na base isolada do Speech.
 - Decidir a elegibilidade de RVC e executar Melody somente para narração PT-BR limpa.
-- Produzir a voz convertida ou declarar explicitamente a entrada de silêncio para rotas não RVC.
-- Preparar o efeito do projeto, aplicando normalização/ganho uma única vez.
-- Construir o grafo completo de áudio: corte temporal da voz, mixagem, fades/intro e concatenação.
-- Emitir o contrato v3 com identidade, hashes, metadados, inputs permitidos e grafo de áudio.
+- Preparar a voz ou o silêncio de rota segura; preparar o efeito sonoro e aplicar ganho/normalização uma única vez.
+- Definir cortes temporais, sincronização, fades e intro sonora; mixar a trilha completa.
+- Executar seu próprio FFmpeg para produzir e validar **um arquivo final AAC/M4A**, com codec, taxa de amostragem, canais, duração, hash e metadados.
+- Entregar o contrato v4 contendo somente a trilha final e os dados de integridade/timeline necessários ao mux.
 
-### ArmoredStudio é dono da edição visual e do vídeo final
-- Analisar imagem/vídeo; detectar barras, VEO/Gemini e banner.
-- Criar/validar o plano visual e realizar o crop/framing.
-- Validar estruturalmente o contrato v3, sem tomar decisões de áudio.
-- Unir o grafo visual ao grafo de áudio entregue pelo Speech e executar **uma única chamada final do FFmpeg**.
-- Validar a saída e comprovar que o original permanece intacto.
+### ArmoredStudio — proprietário da imagem e do vídeo
+- Analisar imagem/vídeo; detectar barras, banner visual e marcas VEO/Gemini.
+- Consolidar um plano visual e validar o enquadramento.
+- Aplicar um único crop da fonte, gerar a introdução visual quando configurada e aplicar os filtros de imagem.
+- Validar estruturalmente o arquivo AAC/M4A final e o contrato, sem classificar áudio ou decidir a rota.
+- Executar uma única chamada FFmpeg final por vídeo para renderizar a imagem e muxar a trilha AAC por cópia de stream (`-c:a copy`).
 
-O preflight visual é somente leitura; não autoriza o Studio a extrair, classificar ou processar áudio. Todos os pacotes do lote precisam estar prontos e validados antes do primeiro render.
+O Studio não recebe WAVs de voz/efeito separados, não recebe um grafo de filtros de áudio, não gera silêncio, não chama RVC, não aplica volume/ganho/fade, não mixa faixas e não recodifica a trilha sonora.
 
-## 2. Simplificação: um crop e um render
+## 2. Plano de timeline sem misturar as responsabilidades
 
-- O finalizador visual calcula um único crop da fonte para a região segura e formato 9:16.
-- Esse crop é aplicado uma vez antes de dividir os frames entre corpo e introdução.
-- O FFmpeg final recebe vídeo, banner visual quando necessário e os inputs de áudio descritos por Speech.
-- O grafo de áudio chega definido pelo Speech; Studio não inventa rota nem aplica ATRIM, AMIX, AFADE, loudnorm, volume, silêncio ou RVC por decisão própria.
-- A renderização combina áudio e imagem no mesmo filter_complex, em uma chamada final.
+O Studio executa primeiro uma pré-análise visual somente de leitura. O plano visual — incluindo o início de vídeo e o retângulo seguro — é fornecido ao Speech como dado temporal. Quando há banner visual, o Speech também mede o início da fala a partir do WAV; o runner concilia e valida o plano temporal antes do render.
 
-Isso não elimina a extração/transcodificação de WAV nem a execução de RVC dentro do Speech. São passos de preparação de áudio e pertencem ao Speech. A simplificação elimina o segundo render final e crops repetidos da fonte.
+Speech usa esses dados apenas para preparar a trilha sonora sincronizada, sem editar pixels ou recortar frames. O handoff v4 inclui o hash do plano visual que serviu para a timeline. Se o plano aplicado no render divergir desse hash, o Studio bloqueia a execução.
 
-## 3. Contrato v3 e rotas
+## 3. Simplificação: um crop e um FFmpeg final no Studio
 
-O pacote v3 inclui identidade, decisão Speech, hashes do original/voz/efeito, rota, inputs permitidos, metadados técnicos e grafo de áudio com hash. Studio valida o contrato, os arquivos e os hashes antes do render.
+- O crop de segurança do planner e o enquadramento 9:16 são consolidados num único retângulo nas coordenadas da fonte.
+- O crop é aplicado uma vez antes de dividir os frames para a cena principal e a introdução visual.
+- Speech realiza previamente as operações de áudio necessárias e valida a duração final AAC/M4A.
+- O FFmpeg do Studio recebe o vídeo, a trilha AAC/M4A final e, quando necessária, a imagem do banner. O grafo final é visual; o áudio é mapeado diretamente e copiado para o MP4 sem processamento ou recodificação.
+- A chamada final do Studio não contém `atrim`, `amix`, `afade`, `loudnorm`, `volume`, silêncio gerado ou entrada RVC.
 
-- RVC_MELODY: apenas para PT_BR_NARRATION, idioma pt/pt-br, fala detectada, music_detected=false, elegibilidade explícita e Melody identificado.
-- EFFECT_ONLY: Speech declara a entrada de silêncio e o efeito. Não roda conversão RVC.
-- Música + fala, música isolada, ruído, ausência de áudio, fala estrangeira e narração não utilizável não podem forçar Melody.
-- UNKNOWN, decisão incompleta, pacote inconsistente, hash incorreto ou caminho externo bloqueiam o lote.
-- O Studio não recupera o original, não executa RVC nem inventa uma nova rota quando o áudio está inelegível.
+Isso significa **um render FFmpeg final por vídeo no Studio**, não um único processo FFmpeg para todo o programa: Speech ainda usa FFmpeg nas etapas próprias de extração, preparação, efeito e composição de áudio, além da execução independente do motor RVC.
 
-## 4. Propriedade dos módulos e ativos
+## 4. Contrato v4
 
-- ArmoredSpeech/audio_intelligence.py, model_processor.py, media.py: análise e preparação de áudio.
-- ArmoredSpeech/rvc_engine.py: único ponto de execução da conversão RVC.
-- ArmoredSpeech/audio_package.py: preparação e validação das faixas.
-- ArmoredSpeech/timeline_mixer.py: política e grafo de filtros de áudio; não executa FFmpeg.
-- ArmoredSpeech/studio_integration.py e studio_batch_runner.py: preparação Speech e handoff do lote.
-- ArmoredStudio/speech_handoff.py: validação estrutural do contrato, sem classificador/conversor.
-- ArmoredStudio/unified.py: análise visual e orquestração da renderização.
-- ArmoredStudio/processing/visual_finalizer.py: crop único e render de vídeo + áudio numa chamada final FFmpeg.
-- ArmoredStudio/assets/fetch_official_assets.py: somente banner visual.
+O contrato v4 em `ArmoredStudio/speech_handoff.py` valida:
+- identidade de fonte/item e caminho do original;
+- SHA-256 do original antes/depois;
+- caminho contido no laboratório e hash da trilha final;
+- formato AAC/M4A, codec AAC, 44,1 kHz estéreo, tamanho e duração;
+- hash do plano visual e consistência da duração da timeline/intro.
 
-Os módulos legados ArmoredStudio/analysis/audio_intelligence.py, ArmoredStudio/processing/rvc.py e ArmoredStudio/processing/finalizer.py não fazem parte do caminho ativo desta branch e não devem ser recriados como fallback.
+O contrato **não contém faixas de voz/efeito separadas nem o grafo de áudio**. O Studio não valida elegibilidade de Melody nem toma decisões por classe/rota; esses controles ficam no Speech. Os campos de classe/rota no manifesto do runner são dados de auditoria, não uma instrução para o Studio processar áudio.
 
-O caminho canônico dos modelos/índices RVC é ArmoredSpeech/runtime/rvc/models/<voz>/; o efeito é ArmoredSpeech/assets/efeitosonoro.wav. O engine não faz fallback para Studio.
+## 5. Módulos e ativos
 
-Após atualizar a branch local, execute na raiz do laboratório:
+- `ArmoredSpeech/audio_intelligence.py`, `model_processor.py`, `media.py`: análise e preparação de áudio.
+- `ArmoredSpeech/rvc_engine.py`: único motor de conversão RVC; usa a `.venv` da raiz.
+- `ArmoredSpeech/audio_package.py`: preparação das faixas internas e publicação do AAC/M4A final.
+- `ArmoredSpeech/timeline_mixer.py`: política de timeline, composição de áudio e validação do arquivo final.
+- `ArmoredSpeech/studio_integration.py` e `studio_batch_runner.py`: preflight do lote Speech, validação e handoff.
+- `ArmoredStudio/speech_handoff.py`: validador mínimo do contrato de áudio final.
+- `ArmoredStudio/unified.py`: orquestração e análise visual.
+- `ArmoredStudio/processing/visual_finalizer.py`: crop único, filtros de imagem, encode de vídeo e mux AAC por cópia de stream.
+- `ArmoredStudio/assets/banner.png`: asset visual de Studio.
+
+Os módulos de áudio legados `ArmoredStudio/analysis/audio_intelligence.py`, `ArmoredStudio/processing/rvc.py` e `ArmoredStudio/processing/finalizer.py` não estão no caminho ativo desta branch e não devem ser recriados como fallback.
+
+O modelo/índice RVC passam a morar em `ArmoredSpeech/runtime/rvc/models/<voz>/`; o efeito em `ArmoredSpeech/assets/efeitosonoro.wav`. O motor Speech não faz fallback para os diretórios antigos do Studio.
+
+## 6. Migrar localmente os ativos antes do E2E v4
+
+Na raiz de `ArmoredAudioLab`, depois de atualizar a branch por fast-forward seguro, execute:
 
 ```powershell
 .\ArmoredSpeech\scripts\migrate_audio_assets.ps1
 ```
 
-O script copia e confere SHA-256 dos modelos/índices e do efeito a partir dos ativos locais antigos no Studio; não apaga a origem. Destinos com conteúdo divergente bloqueiam sem sobrescrita. Só remova os ativos antigos em Studio após o E2E v3 real passar. O banner continua sendo visual de Studio.
+O script copia os modelos/índices RVC e o efeito antigo para os novos diretórios do Speech e verifica SHA-256. Não apaga nem altera a origem. Se o destino já existir com conteúdo diferente, bloqueia em vez de sobrescrever.
 
-## 5. Estado da validação
+Confirme que existem pelo menos:
+- `ArmoredSpeech\runtime\rvc\models\melody\*.pth`
+- o índice Melody, se usado no ambiente local;
+- `ArmoredSpeech\assets\efeitosonoro.wav`.
 
-### E2E antigo aprovado pelo usuário
+**Não apague os ativos antigos do Studio até o E2E real com contrato v4 passar.** O banner visual continua pertencendo ao Studio.
 
-Em 17/10/2026, a versão anterior produziu 2_finaldomeulinknovo.mp4 a partir do item 2 com Melody. O usuário assistiu e aprovou áudio/imagem; o hash SHA-256 do original foi preservado. Essa execução usava o contrato antigo e não prova a nova arquitetura v3.
+## 7. Evidências e estado da validação
 
-### Fixture atual para o próximo E2E v3
+### E2E anterior aprovado pelo usuário — contrato antigo
 
-Entrada: storage/Videos GRUPO_FONTE_teste/5/5_narração_pt_gemini1.mp4.
+Em 17/10/2026, o usuário executou Speech → Studio com `storage/Videos GRUPO_FONTE_teste/2/2_narração_pt.mp4`. O runner reportou `STUDIO_SPEECH_BATCH=SUCCESS`, `MODE=REAL_STUDIO`, `ITEMS=1`, `ORIGINALS_INTACT=True`. O usuário assistiu ao vídeo final `2_finaldomeulinknovo.mp4` e confirmou áudio/imagem corretos; os hashes do original e da cópia conferiram.
 
-- AUDIO_CLASS=PT_BR_NARRATION
-- LANGUAGE=pt-br
-- CONFIDENCE=0.9828158873485948
-- RVC_ELIGIBLE=true
-- MUSIC_DETECTED=false
-- TEST_ITEM_ID=5
-- SHA-256 do MP4 de referência: c489fcaae803f36407c82dde3b93ff68077001ef5607909081a2c6555bee15a1
+Essa evidência confirma o pipeline anterior e a convenção de Storage; **não prova ainda o novo contrato v4**, pois aquela versão entregava componentes/grafo de áudio ao render final do Studio.
 
-Manifesto isolado: storage/validation/speech-v2-real-smoke-20261017T151136454023Z-62a58b/manifest.json
+### Validação automatizada da separação v4
 
-SQLite isolado: storage/database/armored_speech_lab_20261017T151136454023Z_62a58b.sqlite3
+- CI passou na compilação e em **79 testes automatizados**: https://github.com/armoredcreator/audio/actions/runs/39048256296.
+- Os testes cobrem a fronteira de arquivo AAC final, integridade/hash, validação temporal, bloqueio de mismatch entre plano visual e Speech, um crop e um único FFmpeg visual com `-c:a copy`.
+- Esses testes não substituem o E2E real no Windows com os ativos RVC migrados para Speech.
 
-A preparação foi executada antes de sincronizar todas as mudanças mais recentes. **Não execute o runner com a cópia local antiga**: atualize a branch, migre/verifique os ativos para Speech e só então use o manifesto/SQLite acima no runner atualizado. O runner deve bloquear, sem sobrescrever, se houver destino canônico preexistente.
+### Próximo E2E real proposto
 
-Após renderizar, confirmar relatório SUCCESS, MODE=REAL_STUDIO, contrato v3, rota, saída canônica, áudio/imagem/crop/intro, sincronização/duração e hash do original antes/depois.
+Foi preparado anteriormente um fixture de narração PT-BR do item 5:
 
-## 6. Próxima ordem de trabalho
+- Entrada descritiva: `storage/Videos GRUPO_FONTE_teste/5/5_narração_pt_gemini1.mp4`
+- `TEST_ITEM_ID=5`
+- SHA-256 do vídeo de referência: `c489fcaae803f36407c82dde3b93ff68077001ef5607909081a2c6555bee15a1`
+- Manifesto: `storage/validation/speech-v2-real-smoke-20261017T151136454023Z-62a58b/manifest.json`
+- SQLite isolado: `storage/database/armored_speech_lab_20261017T151136454023Z_62a58b.sqlite3`
+
+Esses arquivos foram preparados antes da última refatoração; a preparação de áudio v4 será refeita pelo runner ao consumir esse manifesto. Primeiro atualizar o checkout e migrar/verificar os ativos, depois executar o runner v4 atualizado. O runner deve preparar e validar todos os AAC/M4A do lote antes da primeira renderização.
+
+Após o render, verificar relatório `SUCCESS`, contrato `4`, codec/duração do AAC, saída canônica esperada `5_finaldomeulinknovo.mp4`, imagem/crop/intro, sincronia, áudio e SHA-256 do original antes/depois. O usuário deve assistir ao resultado antes de aprovar essa arquitetura em produção.
+
+## 8. Ordem de trabalho e segurança
 
 1. Atualizar localmente a branch por fast-forward seguro.
-2. Copiar/verificar os ativos RVC e efeito para ArmoredSpeech.
-3. Executar o E2E v3 com o fixture do item 5 e assistir ao MP4 final.
-4. Validar rotas não-RVC usando itens 1, 3, 4 e 6, sem reutilizar artefatos canônicos de outros itens.
-5. Auditar referências legadas e confirmar CI verde.
-6. Só depois remover os ativos locais legados de RVC/efeito em Studio; nunca apagá-los antes do E2E v3.
-7. Limpar pacotes/relatórios/WAVs temporários de maneira seletiva, preservando corpus, ativos em Speech e resultados aprovados até finalizar a validação.
+2. Executar `ArmoredSpeech/scripts/migrate_audio_assets.ps1` e conferir os novos caminhos.
+3. Executar o E2E real com contrato v4 e inspecionar o MP4.
+4. Validar as rotas sem RVC (música, silêncio, ruído, fala com música e vídeos com barras), ainda sem publicar no Hub.
+5. Auditar referências e módulos legados; manter só o que tem chamadores/testes válidos.
+6. Somente após os E2Es passarem, remover definitivamente os ativos RVC/efeito legados do diretório do Studio e limpar os intermediários temporários do Storage.
+7. Revisar a PR; ela permanece draft e não mesclada até a aprovação completa.
 
-## 7. Segurança
-
-- Nenhuma execução publica no Hub.
-- Preparador/runner usa SQLite isolado e não abre o banco operacional.
-- Originais do corpus, modelos e índices não podem ser alterados durante o teste.
-- A PR permanece draft/não mesclada até o E2E v3 real do Windows e as rotas seguras passarem.
+- Nenhum teste publica no Hub.
+- O fixture/runner usa SQLite isolado; não abre o banco operacional.
+- Os originais do corpus, o modelo/índice Melody e o efeito devem permanecer intactos durante a migração.
+- `armoredcreator-testbase`, `armoredcreator-test` e o repositório operacional permanecem intocados.
