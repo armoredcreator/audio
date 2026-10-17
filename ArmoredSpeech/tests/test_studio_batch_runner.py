@@ -283,6 +283,17 @@ def _fake_v2_package(root: Path, item, *, corrupt_effect_hash: bool = False) -> 
             "duration_seconds": 1.0,
             "gain_policy": "loudnorm-I-12-LRA7-TP-1-then-volume-0.8",
         },
+        "audio_inputs": [
+            {
+                "kind": "lavfi", "role": "silence",
+                "source": "anullsrc=r=44100:cl=stereo",
+                "duration_seconds": 1.0,
+            },
+            {
+                "kind": "loop_file", "role": "effect",
+                "path": str(effect), "sha256": effect_hash,
+            },
+        ],
         "audio_timeline": build_audio_filter_graph(
             visual_plan=plan, main_duration_seconds=1.0, intro=True, intro_position="final"
         ),
