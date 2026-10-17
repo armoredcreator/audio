@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-"""Visual-only renderer that muxes Speech's completed AAC track by stream copy.
+"""Single-pass audiovisual renderer using separate visual/audio filter owners.
 
-ArmoredStudio owns video crop/framing, VEO/Gemini/bar/banner corrections and
-video encoding. It accepts one final AAC/M4A file from ArmoredSpeech, maps that
-track directly, and never extracts, mixes, filters, normalizes, or re-encodes audio.
+ArmoredStudio builds the one-crop visual graph. ArmoredSpeech builds the audio
+graph and prepares voice/effect inputs. This module joins the two graphs and
+invokes FFmpeg once for the final audiovisual render.
 """
 
 import json
@@ -153,7 +153,7 @@ def _video_filter_graph(
         f";[intro_src]trim=duration={INTRO_DURATION},setpts=PTS-STARTPTS,"
         f"scale={STORY_WIDTH}:{STORY_HEIGHT},setsar=1,"
         f"{BLUR},{FADE_IN},{FADE_OUT}[intro_bg];"
-        f"[2:v]scale={STORY_WIDTH}:{STORY_HEIGHT}[banner];"
+        f"[3:v]scale={STORY_WIDTH}:{STORY_HEIGHT}[banner];"
         "[intro_bg][banner]overlay=0:0,"
         f"fps={fps},setpts=PTS-STARTPTS[intro_v0];"
         f"[intro_v0]trim=duration={INTRO_DURATION},setpts=PTS-STARTPTS[intro_v]"
@@ -168,24 +168,35 @@ def _video_filter_graph(
     )
 
 
-def render_video_with_speech_track(
+def render_video_with_speech_tracks(
     video,
-    final_audio_track,
+    voice_track,
+    effect_track,
     banner,
     output,
     *,
+    audio_filter_graph: str,
+    audio_output_label: str,
     position: str = "final",
     intro: bool = True,
     plan: dict[str, Any] | None = None,
 ) -> Path:
-    """Render the visual graph and stream-copy the completed Speech AAC track."""
-    video, final_audio_track, banner, output = map(
-        Path, (video, final_audio_track, banner, output)
+    """Render visuals and Speech's audio graph in one final FFmpeg invocation.
+
+    Studio builds only the visual graph/crop. Speech supplies voice/effect inputs
+    and the filter subgraph that decides how those inputs are combined/timed.
+    The graphs are joined mechanically; no Studio audio policies are introduced.
+    """
+    video, voice_track, effect_track, banner, output = map(
+        Path, (video, voice_track, effect_track, banner, output)
     )
     _validate_file(video, "Vídeo")
-    _validate_file(final_audio_track, "Trilha final preparada pelo ArmoredSpeech")
-    if final_audio_track.suffix.lower() != ".m4a":
-        raise RuntimeError("Studio aceita somente a trilha final AAC/M4A do ArmoredSpeech")
+    _validate_file(voice_track, "Trilha de voz/silêncio do ArmoredSpeech")
+    _validate_file(effect_track, "Efeito sonoro preparado pelo ArmoredSpeech")
+    if not isinstance(audio_filter_graph, str) or not audio_filter_graph:
+        raise RuntimeError("ArmoredSpeech não forneceu o grafo de áudio")
+    if audio_output_label not in {"[main_a]", "[final_a]"}:
+        raise RuntimeError("Rótulo de saída de áudio do ArmoredSpeech inválido")
     if intro:
         _validate_file(banner, "Banner")
         if position not in {"inicio", "final"}:
@@ -193,13 +204,13 @@ def render_video_with_speech_track(
     if output.exists():
         raise FileExistsError(f"Studio nunca deve sobrescrever um resultado existente: {output}")
 
-    # Keep the full source dimensions here. The canonical crop planner below
-    # combines crop_final and 9:16 framing into one crop in source coordinates.
     width, height, fps = _probe_video(video)
     output.parent.mkdir(parents=True, exist_ok=True)
-    graph, video_map = _video_filter_graph(
+    visual_graph, video_map = _video_filter_graph(
         width, height, fps, plan, intro=intro, position=position
     )
+    # Each domain builds its own graph. This module joins them for one render.
+    graph = visual_graph + ";" + audio_filter_graph
 
     ffmpeg = resolve_executable(
         "ffmpeg", env_var="ARMORED_FFMPEG", project_root=PROJECT_ROOT
@@ -207,26 +218,27 @@ def render_video_with_speech_track(
     command = [
         str(ffmpeg), "-nostdin", "-n",
         "-i", str(video),
-        "-i", str(final_audio_track),
+        "-i", str(voice_track),
+        "-stream_loop", "-1", "-i", str(effect_track),
     ]
-    # Video is input 0, Speech's final AAC track is input 1, and the optional
-    # visual-only banner is input 2. There are no component tracks or audio graph.
+    # Input order: video 0, Speech voice/silence 1, Speech effect 2,
+    # optional visual banner 3. The Speech graph references [1:a] and [2:a].
     if intro:
         command += ["-loop", "1", "-i", str(banner)]
     command += [
         "-filter_complex", graph,
         "-map", video_map,
-        "-map", "1:a:0",
+        "-map", audio_output_label,
         "-c:v", "libx264", "-preset", VIDEO_PRESET, "-crf", VIDEO_CRF,
         "-profile:v", VIDEO_PROFILE, "-level:v", VIDEO_LEVEL, "-pix_fmt", VIDEO_PIX_FMT,
         "-g", "30", "-keyint_min", "30", "-sc_threshold", "0",
-        # AAC is already completely prepared by Speech: copy without re-encoding.
-        "-c:a", "copy",
-        "-movflags", "+faststart", str(output),
+        # Audio processing comes from the Speech-authored graph in this same render.
+        "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+        "-shortest", "-movflags", "+faststart", str(output),
     ]
     result = subprocess.run(command, **_windows_hidden_kwargs())
     if result.returncode != 0:
         output.unlink(missing_ok=True)
-        raise RuntimeError("Erro na renderização visual/mux do ArmoredStudio.")
+        raise RuntimeError("Erro na renderização audiovisual única do ArmoredStudio.")
     _validate_file(output, "Resultado final")
     return output
