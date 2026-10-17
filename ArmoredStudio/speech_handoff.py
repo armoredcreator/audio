@@ -125,17 +125,23 @@ def validate_handoff(
 
 @dataclass(frozen=True, slots=True)
 class ValidatedAudioPackage:
-    """Minimal validated v3 handoff: one completed Speech-owned soundtrack."""
+    """Validated Speech-owned audio recipe for the single final FFmpeg render."""
     source_id: str
     item_id: str
     original_path: Path
-    final_audio_track_path: Path
+    voice_track_path: Path | None
+    voice_sha256: str | None
+    effect_track_path: Path
+    effect_sha256: str
     audio_class: str
+    language: str
     route: str
+    rvc_eligible: bool
     original_sha256: str
-    final_audio_sha256: str
     visual_plan_sha256: str
-    timeline: dict[str, Any]
+    audio_timeline: dict[str, Any]
+    audio_filter_graph: str
+    audio_filter_graph_sha256: str
 
 
 def _validate_audio_track(raw, *, workspace, label, track_hash_cache=None):
@@ -178,6 +184,16 @@ def _validate_audio_track(raw, *, workspace, label, track_hash_cache=None):
     return path, digest, raw
 
 
+def _valid_hex_digest(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    try:
+        int(value, 16)
+        return True
+    except ValueError:
+        return False
+
+
 def validate_audio_package(
     payload: dict[str, Any],
     *,
@@ -187,16 +203,16 @@ def validate_audio_package(
     expected_original_path: Path | None = None,
     track_hash_cache: dict[tuple[str, int, int, int, int], str] | None = None,
 ) -> ValidatedAudioPackage:
-    """Validate the final Speech soundtrack without duplicating audio decisions.
+    """Validate Speech's decision, prepared inputs, and audio graph recipe.
 
-    Studio checks identity, containment, original integrity, WAV format/hash and
-    timeline-plan correspondence. It deliberately does not classify audio, make
-    an RVC decision, inspect RVC assets, or receive separate voice/effect tracks.
+    Studio does not classify audio or choose the route. It validates the
+    producer's explicit route and artifacts before using the supplied audio
+    graph in the final FFmpeg render.
     """
     if not isinstance(payload, dict) or payload.get("contract_version") != 3:
-        raise SpeechHandoffError("Studio requires ArmoredSpeech final-audio contract v3")
+        raise SpeechHandoffError("Studio requires ArmoredSpeech audio-render contract v3")
     if payload.get("status") != "READY":
-        raise SpeechHandoffError("Speech final-audio package is not READY")
+        raise SpeechHandoffError("Speech audio package is not READY")
     if (
         str(payload.get("source_id")) != expected_source_id
         or str(payload.get("item_id")) != expected_item_id
@@ -224,23 +240,82 @@ def validate_audio_package(
     ):
         raise SpeechHandoffError("Speech original SHA-256 evidence is missing or inconsistent")
 
-    track, track_hash, track_data = _validate_audio_track(
-        payload.get("final_audio_track"),
+    audio_class = str(payload.get("audio_class") or "")
+    supported_classes = {
+        "PT_BR_NARRATION", "PT_BR_NARRATION_WITH_MUSIC", "MUSIC_ONLY",
+        "NO_AUDIO", "NOISE", "NO_USABLE_NARRATION", "FOREIGN_SPEECH",
+    }
+    if audio_class not in supported_classes:
+        raise SpeechHandoffError("Speech audio class is missing or unsupported")
+    language = str(payload.get("language") or "").strip().lower().replace("_", "-")
+    route = payload.get("route")
+    rvc_eligible = payload.get("rvc_eligible") is True
+    model = payload.get("rvc_model")
+
+    voice_path = None
+    voice_hash = None
+    if route == "RVC_MELODY":
+        safe_rvc = (
+            audio_class == "PT_BR_NARRATION"
+            and language in {"pt", "pt-br"}
+            and payload.get("speech_detected") is True
+            and payload.get("music_detected") is False
+            and rvc_eligible
+            and str(model).strip().lower() == "melody"
+            and _valid_hex_digest(payload.get("rvc_model_sha256"))
+            and (
+                payload.get("rvc_index_sha256") is None
+                or _valid_hex_digest(payload.get("rvc_index_sha256"))
+            )
+        )
+        if not safe_rvc:
+            raise SpeechHandoffError("Speech RVC_MELODY handoff is unsafe or inconsistent")
+        voice_path, voice_hash, _ = _validate_audio_track(
+            payload.get("voice_track"),
+            workspace=workspace,
+            label="Speech RVC voice track",
+            track_hash_cache=track_hash_cache,
+        )
+    elif route == "EFFECT_ONLY":
+        if (
+            rvc_eligible
+            or model is not None
+            or payload.get("rvc_model_sha256") is not None
+            or payload.get("rvc_index_sha256") is not None
+            or payload.get("voice_track") is not None
+        ):
+            raise SpeechHandoffError("Speech EFFECT_ONLY handoff conflicts with RVC metadata")
+    else:
+        raise SpeechHandoffError("Speech audio route is unsupported")
+
+    effect_path, effect_hash, effect_data = _validate_audio_track(
+        payload.get("effect_track"),
         workspace=workspace,
-        label="Final Speech soundtrack",
+        label="Speech project effect track",
         track_hash_cache=track_hash_cache,
     )
-    if track_data.get("composition_owner") != "ArmoredSpeech":
-        raise SpeechHandoffError("Final soundtrack must be composed by ArmoredSpeech")
+    if effect_data.get("gain_policy") != "loudnorm-I-12-LRA7-TP-1-then-volume-0.8":
+        raise SpeechHandoffError("Speech effect gain policy is missing or incompatible")
+    if not _valid_hex_digest(effect_data.get("source_sha256")):
+        raise SpeechHandoffError("Speech effect source SHA-256 is missing or invalid")
 
-    timeline = payload.get("timeline")
+    timeline = payload.get("audio_timeline")
     if not isinstance(timeline, dict):
-        raise SpeechHandoffError("Speech final-audio timeline metadata missing")
+        raise SpeechHandoffError("Speech audio timeline recipe missing")
     plan_hash = timeline.get("visual_plan_sha256")
-    if not isinstance(plan_hash, str) or len(plan_hash) != 64:
+    graph = timeline.get("filter_graph")
+    graph_hash = timeline.get("filter_graph_sha256")
+    if not _valid_hex_digest(plan_hash):
         raise SpeechHandoffError("Visual plan SHA-256 is missing or invalid")
+    if (
+        not isinstance(graph, str)
+        or not graph.strip()
+        or len(graph) > 10000
+        or not _valid_hex_digest(graph_hash)
+        or hashlib.sha256(graph.encode("utf-8")).hexdigest() != graph_hash.lower()
+    ):
+        raise SpeechHandoffError("Speech audio filter graph is missing or invalid")
     try:
-        int(plan_hash, 16)
         audio_start = float(timeline.get("audio_start_seconds"))
         intro_enabled = timeline.get("intro_enabled")
         intro_duration = float(timeline.get("intro_duration_seconds"))
@@ -249,26 +324,38 @@ def validate_audio_package(
     if audio_start < 0 or not isinstance(intro_enabled, bool):
         raise SpeechHandoffError("Speech audio timeline fields are invalid")
     position = timeline.get("intro_position")
+    output_label = timeline.get("output_label")
     if intro_enabled:
         if position not in {"inicio", "final"} or abs(intro_duration - 2.0) > 0.01:
             raise SpeechHandoffError("Speech intro timeline policy is invalid")
-    elif position is not None or abs(intro_duration) > 0.01:
+        if output_label != "[final_a]" or "[intro_a]" not in graph or "concat=n=2:v=0:a=1[final_a]" not in graph:
+            raise SpeechHandoffError("Speech intro graph is inconsistent with its timeline metadata")
+    elif position is not None or abs(intro_duration) > 0.01 or output_label != "[main_a]":
         raise SpeechHandoffError("Speech no-intro timeline metadata is inconsistent")
-
-    audio_class = str(payload.get("audio_class") or "")
-    route = str(payload.get("route") or "")
-    if not audio_class or not route:
-        raise SpeechHandoffError("Speech audio decision metadata is missing")
+    if "[1:a]" not in graph or "[2:a]" not in graph:
+        raise SpeechHandoffError("Speech audio graph does not use the declared renderer input contract")
+    if any(token in graph for token in ("[0:v]", "[3:v]", "movie=", "amovie=")):
+        raise SpeechHandoffError("Speech audio graph contains a visual or external-media input")
+    if timeline.get("composition_owner") != "ArmoredSpeech":
+        raise SpeechHandoffError("Audio timeline policy must be produced by ArmoredSpeech")
+    if timeline.get("effect_gain_policy") != effect_data.get("gain_policy"):
+        raise SpeechHandoffError("Audio graph effect policy differs from the prepared effect track")
 
     return ValidatedAudioPackage(
         source_id=expected_source_id,
         item_id=expected_item_id,
         original_path=original,
-        final_audio_track_path=track,
+        voice_track_path=voice_path,
+        voice_sha256=voice_hash,
+        effect_track_path=effect_path,
+        effect_sha256=effect_hash,
         audio_class=audio_class,
-        route=route,
+        language=language,
+        route=str(route),
+        rvc_eligible=rvc_eligible,
         original_sha256=actual_original_hash,
-        final_audio_sha256=track_hash,
         visual_plan_sha256=plan_hash.lower(),
-        timeline=dict(timeline),
+        audio_timeline=dict(timeline),
+        audio_filter_graph=graph,
+        audio_filter_graph_sha256=graph_hash.lower(),
     )
