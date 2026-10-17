@@ -220,3 +220,10 @@ Esta foi uma auditoria estática do código remoto; não executei testes nem ren
 3. Teste que o Studio não reclassifica, não chama RVC e não mistura novamente quando recebe contrato v2.
 4. Testes temporais para `audio_start = 0` e `audio_start > 0`.
 5. Compatibilidade v1 temporária, mutuamente exclusiva com v2 por item, para impedir RVC/mixagem duplicados.
+
+
+## 13. Decisão da fronteira temporal
+
+A decisão técnica específica sobre `audio_start`, a semântica da faixa de voz e do efeito e a estrutura proposta do pacote v2 está em [ADR — áudio Speech → Studio e alinhamento temporal](ADR_SPEECH_AUDIO_TIMELINE.md). Essa decisão é uma especificação para orientar a implementação, **não uma declaração de que o contrato v2 já foi codificado ou testado**.
+
+A implementação deve preservar o corte apenas na faixa de voz e manter o efeito iniciando no começo da parte principal. Speech prepara e valida as faixas e define a política/ganhos; Studio aplica apenas o plano temporal e compõe as faixas uma vez no render final. A responsabilidade de mover essa composição inteiramente para Speech só poderia ser reconsiderada se a ordem de fases mudasse, permitindo que Speech conhecesse o plano visual previamente. Essa mudança de ordem não é proposta aqui.
