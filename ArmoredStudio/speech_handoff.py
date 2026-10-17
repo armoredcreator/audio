@@ -254,7 +254,7 @@ def validate_audio_package(
         audio_class == "PT_BR_NARRATION"
         and language in {"pt", "pt-br"}
         and payload.get("speech_detected") is True
-        and payload.get("music_detected") is not True
+        and payload.get("music_detected") is False
         and rvc_eligible
     )
     if route == "RVC_MELODY":
