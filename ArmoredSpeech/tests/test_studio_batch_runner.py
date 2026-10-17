@@ -240,7 +240,7 @@ def _fake_v2_package(root: Path, item, *, corrupt_effect_hash: bool = False) -> 
     effect_hash = _sha(effect)
     if corrupt_effect_hash:
         effect_hash = "0" * 64
-    plan = {"video_start": 0.0}
+    plan = {"crop_final": None, "video_start": 0.0, "acoes": []}
     return {
         "contract_version": 3,
         "status": "READY",
