@@ -79,8 +79,18 @@ function Copy-VerifiedTreeWithoutOverwrite {
 if ($env:ARMORED_RVC_ROOT) {
     $ConfiguredRoot = [System.IO.Path]::GetFullPath($env:ARMORED_RVC_ROOT)
     $ExpectedLegacyRoot = [System.IO.Path]::GetFullPath($LegacyRvcRoot)
-    if (-not $ConfiguredRoot.Equals($ExpectedLegacyRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "ARMORED_RVC_ROOT aponta para outro local. Migração bloqueada para evitar copiar o conjunto errado: $ConfiguredRoot"
+    $ExpectedSpeechRoot = [System.IO.Path]::GetFullPath($SpeechRvcRoot)
+
+    # ARMORED_RVC_ROOT describes the runtime location, not the source folder.
+    # Both known canonical roots are safe during the copy-only migration:
+    # legacy Studio root is the explicit source; Speech root is the final owner.
+    # Any third/custom path remains blocked so the script cannot guess assets.
+    $IsCanonicalRoot = (
+        $ConfiguredRoot.Equals($ExpectedLegacyRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $ConfiguredRoot.Equals($ExpectedSpeechRoot, [System.StringComparison]::OrdinalIgnoreCase)
+    )
+    if (-not $IsCanonicalRoot) {
+        throw "ARMORED_RVC_ROOT não corresponde a nenhuma raiz canônica. Migração bloqueada: $ConfiguredRoot. Permitidos: $ExpectedLegacyRoot ou $ExpectedSpeechRoot"
     }
 }
 
