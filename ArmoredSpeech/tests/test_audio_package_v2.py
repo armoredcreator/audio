@@ -194,7 +194,8 @@ def test_v4_package_rejects_wrong_status_contract_or_identity(tmp_path, field, v
 
 def test_v4_package_rejects_mutated_final_track_hash(tmp_path):
     original, final_audio, _, payload = _package(tmp_path)
-    final_audio.write_bytes(final_audio.read_bytes() + b"tampered")
+    unchanged_size = final_audio.read_bytes()
+    final_audio.write_bytes(bytes([unchanged_size[0] ^ 1]) + unchanged_size[1:])
 
     with pytest.raises(SpeechHandoffError, match="SHA-256 mismatch"):
         _validate(tmp_path, original, payload)
