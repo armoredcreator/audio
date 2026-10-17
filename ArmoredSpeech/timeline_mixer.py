@@ -79,6 +79,7 @@ def build_audio_filter_graph(
     *,
     visual_plan: dict[str, Any] | None,
     audio_start_seconds: float = 0.0,
+    main_duration_seconds: float,
     intro: bool,
     intro_position: str,
 ) -> dict[str, Any]:
@@ -95,13 +96,15 @@ def build_audio_filter_graph(
     try:
         audio_start = float(audio_start_seconds)
         video_start = float(plan.get("video_start", 0) or 0)
+        main_duration = float(main_duration_seconds)
     except (TypeError, ValueError) as exc:
         raise AudioTimelineError("Speech audio/video timeline is invalid") from exc
     if (
         not math.isfinite(audio_start) or audio_start < 0
         or not math.isfinite(video_start) or video_start < 0
+        or not math.isfinite(main_duration) or main_duration <= 0
     ):
-        raise AudioTimelineError("Audio/video start times must be finite and non-negative")
+        raise AudioTimelineError("Audio/video start and main duration must be finite and valid")
     if intro and intro_position not in {"inicio", "final"}:
         raise AudioTimelineError("intro_position must be 'inicio' or 'final'")
 
@@ -112,9 +115,10 @@ def build_audio_filter_graph(
         "aformat=sample_fmts=s16:channel_layouts=stereo",
     ]
     if audio_start > 0:
-        voice_filters.extend([f"atrim=start={audio_start:g}", "asetpts=PTS-STARTPTS"])
+        voice_filters.append(f"atrim=start={audio_start:g}:duration={main_duration:g}")
     else:
-        voice_filters.append("asetpts=PTS-STARTPTS")
+        voice_filters.append(f"atrim=duration={main_duration:g}")
+    voice_filters.append("asetpts=PTS-STARTPTS")
     graph = "[1:a]" + ",".join(voice_filters) + "[voice_main]"
 
     if intro:
@@ -148,6 +152,7 @@ def build_audio_filter_graph(
         "visual_plan_sha256": visual_plan_digest(plan),
         "audio_start_seconds": round(audio_start, 6),
         "video_start_seconds": round(video_start, 6),
+        "main_duration_seconds": round(main_duration, 6),
         "intro_enabled": bool(intro),
         "intro_position": intro_position if intro else None,
         "intro_duration_seconds": 2.0 if intro else 0.0,
