@@ -234,7 +234,7 @@ Speech prepara e valida as faixas e aplica a política/ganho do efeito. Studio m
 
 Foi movida a implementação de baixo nível do motor RVC para `armored_core/audio/rvc.py`. `ArmoredStudio/processing/rvc.py` foi reduzido a uma facade de compatibilidade que reexporta a interface pública anterior. O caminho de modelo/índice continua apontando para o diretório existente `ArmoredStudio/runtime/rvc`, e a resolução do ambiente continua usando a `.venv` da raiz.
 
-A extração manteve a facade v1 e o caminho do ambiente/modelos. Em commits posteriores nesta mesma branch, Speech passou a ter um produtor de pacote v2 que usa o motor compartilhado para Melody, gera silêncio determinístico para rotas não elegíveis e prepara a faixa de efeito uma vez por lote. O Studio tem validação v2 e um caminho de render que não reclassifica nem executa RVC/ganhos duplicados. Nenhum modelo, índice, asset ou arquivo de vídeo foi movido. O CI atual passou em compilação e **96 testes automatizados**. Isso não substitui o E2E real no Windows com Melody, ainda pendente.
+A extração manteve a facade v1 e o caminho do ambiente/modelos. Em commits posteriores nesta mesma branch, Speech passou a ter um produtor de pacote v2 que usa o motor compartilhado para Melody, gera silêncio determinístico para rotas não elegíveis e prepara a faixa de efeito uma vez por lote. O Studio tem validação v2 e um caminho de render que não reclassifica nem executa RVC/ganhos duplicados. Nenhum modelo, índice, asset ou arquivo de vídeo foi movido. O CI atual passou em compilação e **98 testes automatizados**. Isso não substitui o E2E real no Windows com Melody, ainda pendente.
 
 
 ## 15. Implementação do pacote v2 e portões do lote — 17/10/2026
@@ -250,7 +250,7 @@ O código experimental agora inclui:
 
 Para reduzir I/O em lotes extensos, a faixa de efeito é preparada uma vez por lote; a identidade/size/mtime de faixas compartilhadas alimentam um cache SHA-256 durante a validação; e o hash completo do modelo/índice Melody é conferido no preflight e no fechamento do lote, sem re-hash do modelo/índice por vídeo. Cada conversão ainda compara rapidamente o caminho e os metadados de arquivo antes de aceitar a saída.
 
-**Validação CI mais recente:** compileall passou e 96 testes passaram em 0,57 s no GitHub Actions: [run 39026559315](https://github.com/armoredcreator/audio/actions/runs/39026559315).
+**Validação CI mais recente:** compileall passou e 98 testes passaram em 0,73 s no GitHub Actions: [run 39026971257](https://github.com/armoredcreator/audio/actions/runs/39026971257).
 
 **Limite essencial:** os testes incluem WAVs sintéticos, stubs e o contrato/runner de laboratório. Não houve conversão real RVC nem renderização FFmpeg real no Windows usando o pacote v2 nesta etapa. A aprovação histórica em Windows vale para o caminho v1 anterior; o caminho v2 precisa repetir o E2E com o vídeo isolado de referência, comparar áudio/imagem/duração e validar SHA-256 antes/depois. A PR continua draft, sem merge, e nenhuma mudança foi portada ao repositório operacional.
 
