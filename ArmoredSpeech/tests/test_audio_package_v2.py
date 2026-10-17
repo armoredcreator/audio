@@ -253,8 +253,9 @@ def test_audio_package_builder_prepares_tracks_without_changing_original(tmp_pat
     )
 
     assert package["route"] == "RVC_MELODY"
-    assert package["voice_track"]["path"] == str(output_dir / "voice.wav")
-    assert package["effect_track"]["path"] == str(output_dir / "effect.wav")
+    assert package["contract_version"] == 3
+    assert package["final_audio_track"]["path"] == str(output_dir / "final_audio.wav")
+    assert package["final_audio_track"]["composition_owner"] == "ArmoredSpeech"
     assert (output_dir / "package.json").is_file()
     assert not (output_dir / "rvc_input.wav").exists()
     assert not (output_dir / "rvc_raw.wav").exists()
@@ -435,15 +436,16 @@ def test_audio_package_builder_reuses_shared_batch_effect_without_reencoding(tmp
     )
 
     assert package["route"] == "RVC_MELODY"
-    assert package["effect_track"]["path"] == str(shared_effect)
-    assert package["effect_track"]["sha256"] == _sha(shared_effect)
+    assert package["contract_version"] == 3
+    assert package["final_audio_track"]["path"] == str(output_dir / "final_audio.wav")
+    assert package["final_audio_track"]["composition_owner"] == "ArmoredSpeech"
     assert not (output_dir / "effect.wav").exists()
     assert "EFFECT_TRACK_PREPARATION_FAILED" not in events
     assert events.count("RVC_MELODY") == 1
     assert _sha(original) == original_hash
     assert _validate(
         tmp_path, original, package, expected_item_id="telegram-shared"
-    ).effect_track_path == shared_effect
+    ).final_audio_track_path == Path(package["final_audio_track"]["path"])
 
 
 def test_batch_preflight_hashes_melody_model_and_index_only_once(tmp_path, monkeypatch):
