@@ -241,7 +241,7 @@ def _write_v2_wav(path: Path) -> None:
         wav.writeframes(bytes(44100 * 2 * 2))
 
 
-def _fake_v2_package(root: Path, item, *, corrupt_effect_hash: bool = False) -> dict:
+def _fake_v4_package(root: Path, item, *, corrupt_effect_hash: bool = False) -> dict:
     from ArmoredSpeech.timeline_mixer import visual_plan_digest
 
     original = Path(item.original_path)
