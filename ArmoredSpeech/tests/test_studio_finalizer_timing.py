@@ -42,3 +42,41 @@ def test_zero_audio_start_does_not_introduce_a_temporal_trim():
     assert "atrim=start=0" not in graph
     assert "[1:a]volume=1.0[voice]" in graph
     assert "[2:a]loudnorm=I=-12:LRA=7:TP=-1,volume=0.8[music]" in graph
+
+
+def test_v2_prepared_tracks_trim_only_voice_and_do_not_repeat_gain_or_normalization():
+    graph = criar_filtro(
+        position="final",
+        largura=1080,
+        altura=1920,
+        fps="30/1",
+        plan={"audio_start": 1.25},
+        audio_tracks_prepared=True,
+    )
+
+    assert "[1:a]atrim=start=1.25,asetpts=PTS-STARTPTS,anull[voice]" in graph
+    assert "[2:a]anull[music]" in graph
+    assert graph.count("atrim=start=1.25") == 1
+    assert "loudnorm=" not in graph
+    assert "volume=0.8" not in graph
+    assert (
+        "[2:a]afade=t=in:st=0:d=0.4,afade=t=out:st=1.5:d=0.5,"
+        "atrim=duration=2.0,asetpts=PTS-STARTPTS[intro_a]"
+    ) in graph
+
+
+def test_v2_prepared_tracks_keep_voice_untrimmed_when_audio_start_is_zero():
+    graph = criar_filtro(
+        position="final",
+        largura=1080,
+        altura=1920,
+        fps="30/1",
+        plan={"audio_start": 0.0},
+        audio_tracks_prepared=True,
+    )
+
+    assert "[1:a]anull[voice]" in graph
+    assert "[2:a]anull[music]" in graph
+    assert "atrim=start=0" not in graph
+    assert "loudnorm=" not in graph
+    assert "volume=0.8" not in graph
