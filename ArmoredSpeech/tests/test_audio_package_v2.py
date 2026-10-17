@@ -91,15 +91,8 @@ def _package(tmp_path: Path, **overrides):
 
 
 def _mock_final_timeline(monkeypatch) -> None:
-    from ArmoredSpeech import timeline_mixer
-
-    monkeypatch.setenv("ARMORED_FFMPEG", "mock-ffmpeg")
-    monkeypatch.setattr(timeline_mixer.shutil, "which", lambda _: "mock-ffmpeg")
-    monkeypatch.setattr(
-        timeline_mixer,
-        "_run",
-        lambda command: _write_wav(Path(command[-1]), sample_rate=44100, channels=2),
-    )
+    # Speech no longer runs a separate FFmpeg to build the final mixed WAV.
+    return None
 
 
 def _preflight(root: Path, original: Path, source_wav: Path, effect: Path, *, rvc_allowed: bool):
@@ -278,8 +271,10 @@ def test_audio_package_builder_prepares_tracks_without_changing_original(tmp_pat
 
     assert package["route"] == "RVC_MELODY"
     assert package["contract_version"] == 3
-    assert package["final_audio_track"]["path"] == str(output_dir / "final_audio.wav")
-    assert package["final_audio_track"]["composition_owner"] == "ArmoredSpeech"
+    assert package["voice_track"]["path"] == str(output_dir / "voice.wav")
+    assert package["effect_track"]["path"] == str(output_dir / "effect.wav")
+    assert package["audio_timeline"]["composition_owner"] == "ArmoredSpeech"
+    assert (output_dir / "voice.wav").is_file()
     assert (output_dir / "package.json").is_file()
     assert not (output_dir / "rvc_input.wav").exists()
     assert not (output_dir / "rvc_raw.wav").exists()
@@ -461,15 +456,16 @@ def test_audio_package_builder_reuses_shared_batch_effect_without_reencoding(tmp
 
     assert package["route"] == "RVC_MELODY"
     assert package["contract_version"] == 3
-    assert package["final_audio_track"]["path"] == str(output_dir / "final_audio.wav")
-    assert package["final_audio_track"]["composition_owner"] == "ArmoredSpeech"
+    assert package["voice_track"]["path"] == str(output_dir / "voice.wav")
+    assert package["effect_track"]["path"] == str(shared_effect)
+    assert package["audio_timeline"]["composition_owner"] == "ArmoredSpeech"
     assert not (output_dir / "effect.wav").exists()
     assert "EFFECT_TRACK_PREPARATION_FAILED" not in events
     assert events.count("RVC_MELODY") == 1
     assert _sha(original) == original_hash
     assert _validate(
         tmp_path, original, package, expected_item_id="telegram-shared"
-    ).final_audio_track_path == Path(package["final_audio_track"]["path"])
+    ).effect_track_path == shared_effect
 
 
 def test_batch_preflight_hashes_melody_model_and_index_only_once(tmp_path, monkeypatch):
