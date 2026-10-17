@@ -240,7 +240,7 @@ def _fake_v2_package(root: Path, item, *, corrupt_effect_hash: bool = False) -> 
     effect_hash = _sha(effect)
     if corrupt_effect_hash:
         effect_hash = "0" * 64
-    plan = {"audio_start": 0.0}
+    plan = {"video_start": 0.0}
     return {
         "contract_version": 3,
         "status": "READY",
@@ -289,7 +289,7 @@ def test_real_runner_validates_entire_v3_batch_before_first_studio_call(tmp_path
 
     class FakeStudio:
         def analyze_visual(self, item):
-            return SimpleNamespace(plan={"audio_start": 0.0})
+            return SimpleNamespace(plan={"video_start": 0.0})
 
         def process(self, item, *, speech_payload=None, visual_analysis=None):
             events.append(("studio", str(item.telegram_message_id)))
