@@ -212,7 +212,7 @@ def run_complete_batch(
         "phase": "ARMORED_SPEECH_TO_STUDIO",
         "status": "RUNNING",
         "mode": "COPY_ONLY_TEST" if copy_only else "REAL_STUDIO",
-        "audio_contract_version": 1 if copy_only else 2,
+        "audio_contract_version": 0 if copy_only else 3,
         "expected_item_count": manifest["expected_item_count"],
         "audio_packages": [],
         "processed": [],
@@ -254,22 +254,41 @@ def run_complete_batch(
                 studio, items, speech_database=speech_database,
             )
         else:
-            # Prepare the complete Speech v2 package batch before calling Studio.
+            # First collect a complete, read-only visual plan for the batch.
+            # Studio is not allowed to inspect/classify/extract/process audio.
+            visual_analyses = {}
+            visual_plans = {}
+            for item in items:
+                identity = (str(item.source_id), str(item.telegram_message_id))
+                visual = studio.analyze_visual(item)
+                visual_analyses[identity] = visual
+                visual_plans[identity] = visual.plan
+
+            # Speech now owns RVC, effect gain, timeline trimming/fades/mixing,
+            # and emits one complete soundtrack for each item before any render.
             safe_batch = re.sub(r"[^A-Za-z0-9_.-]+", "_", manifest["batch_id"]).strip("._-") or "batch"
             package_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-            package_root = root / "storage" / "validation" / "speech-audio-v2" / f"{safe_batch}-{package_stamp}"
-            effect_source = Path(os.getenv("ARMORED_STUDIO_MUSIC", str(root / "ArmoredStudio" / "assets" / "efeitosonoro.wav")))
+            package_root = root / "storage" / "validation" / "speech-audio-v3" / f"{safe_batch}-{package_stamp}"
+            configured_effect = os.getenv("ARMORED_SPEECH_EFFECT", "").strip()
+            if configured_effect:
+                effect_source = Path(configured_effect).expanduser()
+            else:
+                speech_asset = root / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
+                legacy_asset = root / "ArmoredStudio" / "assets" / "efeitosonoro.wav"
+                effect_source = speech_asset if speech_asset.is_file() else legacy_asset
+            intro = os.getenv("ARMORED_STUDIO_INTRO", "1") != "0"
+            intro_position = os.getenv("ARMORED_STUDIO_INTRO_POSITION", "final")
             prepared = prepare_audio_packages_for_items(
                 items,
                 speech_database=speech_database,
                 workspace_root=root,
                 package_root=package_root,
                 effect_source_path=effect_source,
+                visual_plans=visual_plans,
+                intro=intro,
+                intro_position=intro_position,
             )
             validated_payloads = []
-            # Reuse the track digests across whole-batch preflight and subsequent
-            # Studio calls. Voice WAVs are unique per item; the shared effect WAV
-            # is verified once unless its file identity/size/mtime changes.
             track_hash_cache: dict[tuple[str, int, int, int, int], str] = {}
             for item, payload in prepared:
                 try:
@@ -283,29 +302,24 @@ def run_complete_batch(
                     )
                 except SpeechHandoffError as exc:
                     raise BatchManifestError(
-                        f"Pacote Speech v2 inválido antes do início do Studio: {exc}"
+                        f"Pacote final de áudio do Speech inválido antes do Studio: {exc}"
                     ) from exc
                 report["audio_packages"].append({
                     "source_id": str(item.source_id),
                     "item_id": str(item.telegram_message_id),
+                    "audio_class": validated.audio_class,
                     "route": validated.route,
-                    "voice_track_path": str(validated.voice_track_path),
-                    "voice_track_sha256": validated.voice_sha256,
-                    "effect_track_path": str(validated.effect_track_path),
-                    "effect_track_sha256": validated.effect_sha256,
+                    "final_audio_track_path": str(validated.final_audio_track_path),
+                    "final_audio_track_sha256": validated.final_audio_sha256,
+                    "visual_plan_sha256": validated.visual_plan_sha256,
                     "original_sha256": validated.original_sha256,
                 })
                 validated_payloads.append((item, payload))
 
-            # Share the validated track-hash cache with the real Studio engine,
-            # so its mandatory per-item revalidation doesn't re-hash the common
-            # effect WAV unnecessarily. Fake Studio objects used by tests may
-            # not expose the engine attribute.
             if hasattr(studio, "engine"):
                 studio.engine._audio_track_hash_cache = track_hash_cache
 
-            # Recheck the originals after package preparation and before the
-            # first render; this is the phase boundary for v2.
+            # Recheck originals and timeline-plan correspondence before the first render.
             changed_before_studio = [
                 (str(item.source_id), str(item.telegram_message_id))
                 for item in items
@@ -316,9 +330,13 @@ def run_complete_batch(
             if changed_before_studio:
                 raise RuntimeError(f"Original mudou durante Speech; Studio bloqueado: {changed_before_studio}")
 
-            # No Studio item starts until every package is READY and validated.
+            # All soundtracks are prepared/validated before any Studio render begins.
             results = [
-                studio.process(item, speech_payload=payload)
+                studio.process(
+                    item,
+                    speech_payload=payload,
+                    visual_analysis=visual_analyses[(str(item.source_id), str(item.telegram_message_id))],
+                )
                 for item, payload in validated_payloads
             ]
 
