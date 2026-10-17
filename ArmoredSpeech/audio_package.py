@@ -385,13 +385,17 @@ def prepare_audio_package(
     voice: str = "melody",
     preflight: dict[str, Any] | None = None,
     prepared_effect_track: dict[str, Any] | None = None,
+    visual_plan: dict[str, Any] | None = None,
+    intro: bool = True,
+    intro_position: str = "final",
 ) -> dict[str, Any]:
-    """Prepare and validate all audio tracks before the Studio phase begins.
+    """Prepare component tracks and the complete timeline soundtrack in Speech.
 
-    The output directory must be new. A failed attempt leaves no partially
-    published package; a successfully returned package is retained through
-    Studio completion for safe retry/audit.
+    The output directory must be new. The returned handoff exposes only the
+    completed final_audio_track; voice/effect WAVs remain Speech-owned intermediates.
     """
+    from .timeline_mixer import prepare_final_audio_track
+
     root = Path(workspace_root).resolve(strict=True)
     final_dir = Path(output_dir).expanduser().resolve()
     try:
@@ -534,8 +538,21 @@ def prepare_audio_package(
         if effect_meta.sample_rate != 44100 or effect_meta.channels != 2:
             raise AudioPackageError("Effect track must be canonical PCM WAV 44100 Hz stereo")
 
+        final_audio = prepare_final_audio_track(
+            voice_output,
+            effect_output,
+            stage / "final_audio.wav",
+            workspace_root=root,
+            visual_plan=visual_plan,
+            intro=intro,
+            intro_position=intro_position,
+        )
+        # The package directory is atomically renamed from stage to final_dir
+        # after all checks, so publish the eventual canonical path in the handoff.
+        final_audio["path"] = str(final_dir / "final_audio.wav")
+
         package = {
-            "contract_version": 2,
+            "contract_version": 3,
             "status": "READY",
             "source_id": str(item.source_id),
             "item_id": str(item.telegram_message_id),
@@ -553,30 +570,23 @@ def prepare_audio_package(
             "rvc_model": rvc_model,
             "rvc_model_sha256": preflight.get("rvc_model_sha256") if rvc_allowed else None,
             "rvc_index_sha256": preflight.get("rvc_index_sha256") if rvc_allowed else None,
-            "voice_track": {
-                "path": str(final_dir / "voice.wav"),
-                "sha256": sha256_file(voice_output),
-                "format": "wav-pcm-s16le",
-                "sample_rate": voice_meta.sample_rate,
-                "channels": voice_meta.channels,
-                "duration_seconds": round(voice_meta.duration_seconds, 6),
+            "final_audio_track": {
+                "path": final_audio["path"],
+                "sha256": final_audio["sha256"],
+                "format": final_audio["format"],
+                "sample_rate": final_audio["sample_rate"],
+                "channels": final_audio["channels"],
+                "duration_seconds": final_audio["duration_seconds"],
+                "composition_owner": final_audio["composition_owner"],
             },
-            "effect_track": {
-                "path": (
-                    str(effect_output) if prepared_effect_track is not None
-                    else str(final_dir / "effect.wav")
-                ),
-                "sha256": (
-                    str(prepared_effect_track["sha256"])
-                    if prepared_effect_track is not None else sha256_file(effect_output)
-                ),
-                "source_sha256": effect_source_hash,
-                "format": "wav-pcm-s16le",
-                "sample_rate": effect_meta.sample_rate,
-                "channels": effect_meta.channels,
-                "duration_seconds": round(effect_meta.duration_seconds, 6),
-                "gain_policy": "loudnorm-I-12-LRA7-TP-1-then-volume-0.8",
+            "timeline": {
+                "visual_plan_sha256": final_audio["visual_plan_sha256"],
+                "audio_start_seconds": final_audio["audio_start_seconds"],
+                "intro_enabled": final_audio["intro_enabled"],
+                "intro_position": final_audio["intro_position"],
+                "intro_duration_seconds": final_audio["intro_duration_seconds"],
             },
+            "effect_source_sha256": effect_source_hash,
             "prepared_video_duration_seconds": round(video_duration, 6),
             "package_id": final_dir.name,
         }
