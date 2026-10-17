@@ -575,6 +575,7 @@ def prepare_audio_package(
             "sample_rate": voice_meta.sample_rate,
             "channels": voice_meta.channels,
             "duration_seconds": round(voice_meta.duration_seconds, 6),
+            "size_bytes": voice_output.stat().st_size,
             "role": "voice" if rvc_allowed else "silence",
         }
 
@@ -599,6 +600,7 @@ def prepare_audio_package(
             "sample_rate": effect_meta.sample_rate,
             "channels": effect_meta.channels,
             "duration_seconds": round(effect_duration, 6),
+            "size_bytes": Path(effect_track_path).stat().st_size,
             "gain_policy": effect_gain_policy,
         }
         audio_timeline_metadata = {
