@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from ArmoredSpeech import rvc_engine
@@ -17,18 +16,21 @@ def test_rvc_engine_is_owned_by_armoredspeech():
     assert rvc_engine.BASE_DIR == speech_root
 
 
-def test_rvc_models_default_to_speech_runtime_not_studio():
+def test_rvc_models_have_one_canonical_speech_runtime_root():
     repo_root = Path(__file__).resolve().parents[2]
-    configured = os.getenv("ARMORED_RVC_ROOT", "").strip()
-    expected_root = (
-        Path(configured).expanduser().resolve()
-        if configured
-        else (repo_root / "ArmoredSpeech" / "runtime" / "rvc").resolve()
-    )
+    expected_root = (repo_root / "ArmoredSpeech" / "runtime" / "rvc").resolve()
 
     assert rvc_engine.RVC_ROOT == expected_root
     assert rvc_engine.MODELS_DIR == expected_root / "models"
-    assert Path(rvc_engine.MODELS_DIR).parts[-3:] == ("runtime", "rvc", "models") or configured
+    assert Path(rvc_engine.MODELS_DIR).parts[-3:] == ("runtime", "rvc", "models")
+
+
+def test_legacy_rvc_root_environment_variable_cannot_redirect_runtime(monkeypatch):
+    # The engine root is a code-level ownership boundary, not an env fallback
+    # that could silently continue to use ArmoredStudio/runtime/rvc.
+    repo_root = Path(__file__).resolve().parents[2]
+    monkeypatch.setenv("ARMORED_RVC_ROOT", str(repo_root / "ArmoredStudio" / "runtime" / "rvc"))
+    assert rvc_engine.RVC_ROOT == (repo_root / "ArmoredSpeech" / "runtime" / "rvc").resolve()
 
 
 def test_studio_has_no_importable_rvc_entry_point():
