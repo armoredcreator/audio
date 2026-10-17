@@ -88,16 +88,17 @@ def test_final_output_uses_one_ffmpeg_call_with_speech_graph_and_visual_graph(tm
 
     monkeypatch.setattr(visual_finalizer.subprocess, "run", fake_run)
 
+    audio_inputs = [
+        {"kind": "file", "role": "voice", "path": str(voice), "sha256": "a" * 64},
+        {"kind": "loop_file", "role": "effect", "path": str(effect), "sha256": "b" * 64},
+    ]
     result = visual_finalizer.render_with_speech_audio(
         video,
-        voice,
-        effect,
+        audio_inputs,
         banner,
         output,
-        route="RVC_MELODY",
         audio_filter_graph=audio["filter_graph"],
         audio_output_label=audio["output_label"],
-        video_duration_seconds=3.0,
         position="final",
         intro=True,
         plan=plan,
