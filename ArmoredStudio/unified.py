@@ -192,6 +192,7 @@ class UnifiedStudio:
             output,
             audio_filter_graph=package.audio_filter_graph,
             audio_output_label=package.audio_output_label,
+            audio_render_options=package.audio_render_options,
             position=str(package.audio_timeline.get("intro_position") or "final"),
             intro=intro,
             plan=analysis.plan,
