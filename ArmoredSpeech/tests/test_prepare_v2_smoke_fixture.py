@@ -6,7 +6,10 @@ import sqlite3
 import wave
 from pathlib import Path
 
+from ArmoredSpeech import model_processor
+from ArmoredSpeech.contracts import AudioClass, SpeechDecision
 from ArmoredSpeech.prepare_v2_smoke_fixture import (
+    create_real_video_smoke_fixture,
     create_smoke_fixture,
     list_ready_candidates,
 )
@@ -155,3 +158,100 @@ def test_smoke_fixture_clones_database_and_media_without_mutating_sources(tmp_pa
         digest,
         digest,
     )
+
+
+def test_real_video_smoke_fixture_uses_model_processor_and_only_mutates_cloned_db(tmp_path, monkeypatch):
+    database, registered_original, registered_wav, _ = _fixture(tmp_path)
+    source_video = tmp_path / "storage" / "1046_20uhmSz3VE.mp4"
+    source_video.parent.mkdir(parents=True, exist_ok=True)
+    source_video.write_bytes(b"byte-identical real-video stand-in")
+    source_bytes = source_video.read_bytes()
+    source_hash = _sha(source_video)
+    registered_wav_hash = _sha(registered_wav)
+    decision = SpeechDecision(
+        audio_class=AudioClass.PT_BR_NARRATION,
+        language="pt-br",
+        speech_detected=True,
+        music_detected=False,
+        confidence=0.993,
+        rationale="real model processor mocked for isolated unit test",
+    )
+
+    class FakeProcessor:
+        def analyze(self, path):
+            assert Path(path).is_file()
+            assert Path(path) != source_video
+            return decision
+
+        def prepare_wav(self, video_path, wav_path, prepared_decision):
+            assert prepared_decision is decision
+            assert Path(video_path) != source_video
+            _write_wav(Path(wav_path))
+
+    monkeypatch.setattr(model_processor, "ModelProcessor", FakeProcessor)
+
+    fixture = create_real_video_smoke_fixture(
+        tmp_path,
+        database,
+        source_video=source_video,
+        test_source_id="source1",
+    )
+
+    copied_original = Path(fixture["original_copy"])
+    copied_wav = Path(fixture["wav_copy"])
+    database_copy = Path(fixture["speech_database_copy"])
+    manifest_path = Path(fixture["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert fixture["audio_class"] == "PT_BR_NARRATION"
+    assert fixture["language"] == "pt-br"
+    assert fixture["rvc_eligible"] == "true"
+    assert fixture["music_detected"] == "false"
+    assert fixture["source_database_modified"] == "false"
+    assert source_video.read_bytes() == source_bytes
+    assert _sha(source_video) == source_hash
+    assert copied_original.read_bytes() == source_bytes
+    assert _sha(copied_original) == source_hash
+    assert copied_wav.is_file()
+    assert copied_original.parent == copied_wav.parent
+    assert manifest["items"][0]["original_path"] == str(copied_original)
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM armored_speech_results").fetchone()[0] == 1
+        original_row = connection.execute(
+            "SELECT video_path, wav_path FROM armored_speech_results WHERE source_id=? AND item_id=?",
+            ("original-source", "telegram-123"),
+        ).fetchone()
+    assert original_row == (str(registered_original), str(registered_wav))
+    assert _sha(registered_wav) == registered_wav_hash
+
+    with sqlite3.connect(database_copy) as connection:
+        real_row = connection.execute(
+            """
+            SELECT video_path, wav_path, audio_class, language, speech_detected,
+                   music_detected, rvc_eligible, status, original_sha256_before,
+                   original_sha256_after
+            FROM armored_speech_results WHERE source_id=? AND item_id=?
+            """,
+            ("source1", fixture["test_item_id"]),
+        ).fetchone()
+    assert real_row == (
+        str(copied_original), str(copied_wav), "PT_BR_NARRATION", "pt-br",
+        1, 0, 1, "READY", source_hash, source_hash,
+    )
+
+
+def test_real_video_smoke_fixture_rejects_validation_fixtures(tmp_path):
+    database, _, _, _ = _fixture(tmp_path)
+    fixture_video = tmp_path / "storage" / "validation" / "synthetic.mp4"
+    fixture_video.parent.mkdir(parents=True, exist_ok=True)
+    fixture_video.write_bytes(b"fixture")
+    try:
+        create_real_video_smoke_fixture(
+            tmp_path, database, source_video=fixture_video, test_source_id="source1"
+        )
+    except Exception as exc:
+        assert "storage/validation" in str(exc)
+    else:
+        raise AssertionError("validation media must not be accepted as a real storage source")
+
