@@ -261,8 +261,8 @@ A pasta de corpus local para teste contém MP4s com nomes descritivos como `1_ru
 
 O caminho de teste escolhido segue a estrutura por fonte do ArmoredCreator:
 
-- Entradas do corpus ficam diretamente em `storage/Videos GRUPO_FONTE_teste/` e não são movidas, renomeadas nem sobrescritas.
-- O helper cria uma subpasta exclusiva por tentativa abaixo de `storage/Videos GRUPO_FONTE_teste/<item_id>/`, contendo a cópia do MP4 ORIGINAL e o WAV derivado da própria cópia.
+- As entradas do corpus ficam organizadas por pasta de item, por exemplo `storage/Videos GRUPO_FONTE_teste/2/2_narração_pt.mp4`, e não são movidas, renomeadas nem sobrescritas.
+- O helper cria uma subpasta exclusiva por tentativa, com identidade temporária diferente dos IDs numéricos do corpus, abaixo de `storage/Videos GRUPO_FONTE_teste/<item_id_temporario>/`. Ela contém a cópia simulada do MP4 ORIGINAL com nome canônico `<item_id_temporario>_finallinkoriginal.mp4` e o WAV derivado da própria cópia.
 - O relatório/manifeste e o SQLite de laboratório ficam separados em `storage/validation/` e `storage/database/armored_speech_lab_*.sqlite3`; o banco operacional `armoredcreator.db` não é aberto.
 - O identificador sintético usa `source_teste` + item de teste. O alias `source_teste` mapeia no laboratório para `Videos GRUPO_FONTE_teste`; `source1`, `source2`, etc. continuam mapeando para as pastas numeradas usuais.
 
@@ -274,7 +274,7 @@ PowerShell, a partir da raiz do AudioLab, para o primeiro teste integrado use a 
 .\.venv\Scripts\python.exe -m ArmoredSpeech.prepare_v2_smoke_fixture `
   --root . `
   --test-source-id source_teste `
-  --real-video '.\storage\Videos GRUPO_FONTE_teste\2_narração_pt.mp4'
+  --real-video '.\storage\Videos GRUPO_FONTE_teste\2\2_narração_pt.mp4'
 ```
 
 O comando imprime `MANIFEST_PATH`, `SPEECH_DATABASE` e hashes/decisão. Use os caminhos exatos retornados:
@@ -288,6 +288,6 @@ O comando imprime `MANIFEST_PATH`, `SPEECH_DATABASE` e hashes/decisão. Use os c
 
 **Não acrescente `--copy-only` ao teste real.** O runner exigirá FFmpeg, banner, efeito sonoro e, quando elegível, modelo/índice Melody existentes. Ele renderiza a cópia isolada com identidade `v2smoke_real_*` dentro do workspace da fonte de teste; não envia nada ao Hub.
 
-Depois de aprovar o primeiro caso, os outros MP4s da pasta devem ser executados individualmente ou com um runner de corpus explicitamente aprovado. Não varrer recursivamente a pasta para tratar resultados renderizados anteriores como entradas novas: somente os 14 arquivos MP4 diretamente na raiz da pasta são corpus de entrada.
+Depois de aprovar o primeiro caso, os outros MP4s podem ser executados individualmente apontando para seus caminhos dentro das pastas numeradas (por exemplo, `...\3\3_musica.mp4`). Não varrer recursivamente a pasta para tratar cópias de trabalho e resultados renderizados como entradas novas: somente os MP4s originais dentro das pastas `1` a `14` são corpus de entrada.
 
 Antes de considerar o E2E aprovado, conferir o relatório do runner, abrir o MP4 final, ouvir a saída, inspecionar streams/duração e confirmar SHA-256 do MP4 de origem antes/depois. Os testes automatizados usam stubs para o processador/modelo e não substituem conversão real Melody nem renderização FFmpeg no Windows.
