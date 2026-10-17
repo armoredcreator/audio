@@ -186,14 +186,11 @@ class UnifiedStudio:
 
         render_with_speech_audio(
             source,
-            package.voice_track_path,
-            package.effect_track_path,
+            package.audio_inputs,
             banner,
             output,
-            route=package.route,
             audio_filter_graph=package.audio_filter_graph,
             audio_output_label=str(package.audio_timeline.get("output_label") or ""),
-            video_duration_seconds=package.video_duration_seconds,
             position=str(package.audio_timeline.get("intro_position") or "final"),
             intro=intro,
             plan=analysis.plan,
