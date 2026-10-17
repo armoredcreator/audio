@@ -477,7 +477,10 @@ def prepare_audio_package(
                 "duration_seconds": round(voice_meta.duration_seconds, 6),
             },
             "effect_track": {
-                "path": str(effect_output),
+                "path": (
+                    str(effect_output) if prepared_effect_track is not None
+                    else str(final_dir / "effect.wav")
+                ),
                 "sha256": (
                     str(prepared_effect_track["sha256"])
                     if prepared_effect_track is not None else sha256_file(effect_output)
