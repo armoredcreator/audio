@@ -132,6 +132,32 @@ def prepare_audio_packages_for_items(
         slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", original).strip("._-") or "item"
         return f"{slug[:64]}-{hashlib.sha256(original.encode('utf-8')).hexdigest()[:10]}"
 
+    # Audio owns onset/timing analysis. Studio's input plan is visual-only;
+    # Speech may provide the video cut derived from the audio onset when a visual
+    # banner is present, while its audio cut remains exclusively in the audio recipe.
+    from .timeline_mixer import detect_voice_onset_seconds
+
+    effective_visual_plans: dict[tuple[str, str], dict] = {}
+    audio_starts: dict[tuple[str, str], float] = {}
+    for item, directive_payload in directives:
+        identity = (str(item.source_id), str(item.telegram_message_id))
+        plan = dict((visual_plans or {}).get(identity, {}) or {})
+        detectors = plan.get("detectores") or {}
+        banner = detectors.get("banner") if isinstance(detectors, dict) else None
+        banner_detected = bool(
+            isinstance(banner, dict)
+            and (banner.get("banner_detectado") or banner.get("detectado"))
+        )
+        if banner_detected:
+            source_wav = Path(str(directive_payload.get("audio_artifact_path") or ""))
+            voice_onset = detect_voice_onset_seconds(source_wav)
+            plan["video_start"] = max(1.95, voice_onset)
+            audio_starts[identity] = max(0.0, voice_onset - 0.03)
+        else:
+            plan["video_start"] = float(plan.get("video_start", 0.0) or 0.0)
+            audio_starts[identity] = 0.0
+        effective_visual_plans[identity] = plan
+
     # Preflight all source WAVs, original hashes, executable availability, video
     # durations, effect asset, and Melody model/index before running RVC on any item.
     preflights = []
@@ -188,9 +214,12 @@ def prepare_audio_packages_for_items(
             voice="melody",
             preflight=preflight,
             prepared_effect_track=shared_effect_track,
-            visual_plan=(visual_plans or {}).get(
-                (str(item.source_id), str(item.telegram_message_id)), {}
-            ),
+            visual_plan=effective_visual_plans[
+                (str(item.source_id), str(item.telegram_message_id))
+            ],
+            audio_start_seconds=audio_starts[
+                (str(item.source_id), str(item.telegram_message_id))
+            ],
             intro=intro,
             intro_position=intro_position,
         )
