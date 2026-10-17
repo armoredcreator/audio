@@ -220,7 +220,7 @@ def _write_v2_wav(path: Path) -> None:
         wav.setnchannels(2)
         wav.setsampwidth(2)
         wav.setframerate(44100)
-        wav.writeframes(b"\\x00\\x00" * 44100 * 2)
+        wav.writeframes(bytes(44100 * 2 * 2))
 
 
 def _fake_v2_package(root: Path, item, *, corrupt_effect_hash: bool = False) -> dict:
