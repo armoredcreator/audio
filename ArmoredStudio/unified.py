@@ -173,7 +173,7 @@ class UnifiedStudio:
                 "O plano visual difere do plano usado pelo Speech ao compor o áudio; render bloqueado."
             )
 
-        intro = bool(package.timeline.get("intro_enabled"))
+        intro = bool(package.audio_timeline.get("intro_enabled"))
         banner = Path(os.getenv(
             "ARMORED_STUDIO_BANNER", str(self.root / "ArmoredStudio" / "assets" / "banner.png")
         ))
@@ -189,10 +189,15 @@ class UnifiedStudio:
 
         render_with_speech_audio(
             source,
-            package.final_audio_track_path,
+            package.voice_track_path,
+            package.effect_track_path,
             banner,
             output,
-            position=str(package.timeline.get("intro_position") or "final"),
+            route=package.route,
+            audio_filter_graph=package.audio_filter_graph,
+            audio_output_label=str(package.audio_timeline.get("output_label") or ""),
+            video_duration_seconds=package.video_duration_seconds,
+            position=str(package.audio_timeline.get("intro_position") or "final"),
             intro=intro,
             plan=analysis.plan,
         )
