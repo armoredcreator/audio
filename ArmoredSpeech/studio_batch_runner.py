@@ -267,6 +267,10 @@ def run_complete_batch(
                 effect_source_path=effect_source,
             )
             validated_payloads = []
+            # Reuse the track digests across whole-batch preflight and subsequent
+            # Studio calls. Voice WAVs are unique per item; the shared effect WAV
+            # is verified once unless its file identity/size/mtime changes.
+            track_hash_cache: dict[tuple[str, int, int, int, int], str] = {}
             for item, payload in prepared:
                 try:
                     validated = validate_audio_package(
@@ -275,6 +279,7 @@ def run_complete_batch(
                         expected_source_id=str(item.source_id),
                         expected_item_id=str(item.telegram_message_id),
                         expected_original_path=Path(item.original_path),
+                        track_hash_cache=track_hash_cache,
                     )
                 except SpeechHandoffError as exc:
                     raise BatchManifestError(
@@ -291,6 +296,13 @@ def run_complete_batch(
                     "original_sha256": validated.original_sha256,
                 })
                 validated_payloads.append((item, payload))
+
+            # Share the validated track-hash cache with the real Studio engine,
+            # so its mandatory per-item revalidation doesn't re-hash the common
+            # effect WAV unnecessarily. Fake Studio objects used by tests may
+            # not expose the engine attribute.
+            if hasattr(studio, "engine"):
+                studio.engine._audio_track_hash_cache = track_hash_cache
 
             # Recheck the originals after package preparation and before the
             # first render; this is the phase boundary for v2.
