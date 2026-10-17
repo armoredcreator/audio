@@ -64,3 +64,21 @@ def test_list_only_writes_an_explicit_input_manifest_without_processing(tmp_path
     ]
     assert not (storage / "database" / "armored_speech_corpus2_inventory-test.sqlite3").exists()
     assert not (storage / "Videos GRUPO_FONTE_corpus2_inventory-test").exists()
+
+
+def test_explicit_inputs_keep_the_reviewed_order(tmp_path):
+    from ArmoredSpeech.corpus_e2e_runner import _read_explicit_inputs
+
+    first = _touch(tmp_path / "storage" / "10" / "10_narration.mp4")
+    second = _touch(tmp_path / "storage" / "2" / "2_music.mp4")
+    manifest = tmp_path / "storage" / "validation" / "inputs-order.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        json.dumps([
+            second.relative_to(tmp_path).as_posix(),
+            first.relative_to(tmp_path).as_posix(),
+        ]),
+        encoding="utf-8",
+    )
+
+    assert _read_explicit_inputs(tmp_path, manifest) == [second.resolve(), first.resolve()]
