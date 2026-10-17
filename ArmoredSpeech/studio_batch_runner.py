@@ -217,7 +217,9 @@ def run_complete_batch(
     }
 
     previous_copy_mode = os.environ.get("ARMORED_STUDIO_FORCE_COPY")
+    previous_allow_copy = os.environ.get("ARMORED_STUDIO_ALLOW_COPY")
     os.environ["ARMORED_STUDIO_FORCE_COPY"] = "1" if copy_only else "0"
+    os.environ["ARMORED_STUDIO_ALLOW_COPY"] = "1" if copy_only else "0"
     try:
         studio = build_studio(root)
         # This function preflights every READY Speech directive before its first
@@ -282,6 +284,10 @@ def run_complete_batch(
             os.environ.pop("ARMORED_STUDIO_FORCE_COPY", None)
         else:
             os.environ["ARMORED_STUDIO_FORCE_COPY"] = previous_copy_mode
+        if previous_allow_copy is None:
+            os.environ.pop("ARMORED_STUDIO_ALLOW_COPY", None)
+        else:
+            os.environ["ARMORED_STUDIO_ALLOW_COPY"] = previous_allow_copy
 
 
 def main(argv: list[str] | None = None) -> int:
