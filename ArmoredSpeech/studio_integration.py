@@ -90,7 +90,7 @@ def prepare_audio_packages_for_items(
     import hashlib
     import re
 
-    from .audio_package import prepare_audio_package
+    from .audio_package import preflight_audio_package, prepare_audio_package
 
     root = Path(workspace_root).resolve(strict=True)
     package_root = Path(package_root).expanduser().resolve()
@@ -116,8 +116,21 @@ def prepare_audio_packages_for_items(
         slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", original).strip("._-") or "item"
         return f"{slug[:64]}-{hashlib.sha256(original.encode('utf-8')).hexdigest()[:10]}"
 
+    # Preflight all source WAVs, original hashes, executable availability, video
+    # durations, effect asset, and Melody model/index before running RVC on any item.
+    preflights = [
+        preflight_audio_package(
+            directive_payload,
+            item,
+            workspace_root=root,
+            effect_source_path=effect_source_path,
+            voice="melody",
+        )
+        for item, directive_payload in directives
+    ]
+
     prepared: list[tuple[object, dict]] = []
-    for item, directive_payload in directives:
+    for (item, directive_payload), preflight in zip(directives, preflights, strict=True):
         output_dir = (
             package_root
             / safe_component(item.source_id)
@@ -130,6 +143,7 @@ def prepare_audio_packages_for_items(
             effect_source_path=effect_source_path,
             output_dir=output_dir,
             voice="melody",
+            preflight=preflight,
         )
         prepared.append((item, package))
 
