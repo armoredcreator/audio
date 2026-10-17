@@ -567,6 +567,31 @@ def prepare_audio_package(
             effect_source_hash = str(preflight["effect_source_sha256"])
             effect_gain_policy = "loudnorm-I-12-LRA7-TP-1-then-volume-0.8"
 
+        # Declare the exact renderer inputs here so Studio does not make
+        # a route decision. It only translates this validated declarative plan
+        # into FFmpeg input arguments.
+        audio_inputs = []
+        if voice_track is not None:
+            audio_inputs.append({
+                "kind": "file",
+                "role": "voice",
+                "path": voice_track["path"],
+                "sha256": voice_track["sha256"],
+            })
+        else:
+            audio_inputs.append({
+                "kind": "lavfi",
+                "role": "silence",
+                "source": "anullsrc=r=44100:cl=stereo",
+                "duration_seconds": round(main_duration_seconds, 6),
+            })
+        audio_inputs.append({
+            "kind": "loop_file",
+            "role": "effect",
+            "path": effect_track_path,
+            "sha256": effect_hash,
+        })
+
         package = {
             "contract_version": 3,
             "status": "READY",
@@ -597,6 +622,7 @@ def prepare_audio_package(
                 "duration_seconds": round(effect_meta.duration_seconds, 6),
                 "gain_policy": effect_gain_policy,
             },
+            "audio_inputs": audio_inputs,
             "audio_timeline": audio_timeline,
             "prepared_video_duration_seconds": round(main_duration_seconds, 6),
             "package_id": final_dir.name,
