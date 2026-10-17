@@ -50,10 +50,11 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _payload(root: Path, original: Path, voice: Path | None, effect: Path, plan: dict, *, intro=True):
+def _payload(root: Path, original: Path, voice: Path | None, effect: Path, plan: dict, *, intro=True, audio_start_seconds=0.0):
     digest = sha256_file(original)
     audio_timeline = build_audio_filter_graph(
         visual_plan=plan,
+        audio_start_seconds=audio_start_seconds,
         intro=intro,
         intro_position="final" if intro else "final",
     )
@@ -116,7 +117,7 @@ def test_studio_combines_one_speech_audio_graph_with_one_visual_render(tmp_path,
     item = FakeItem("source-1", "content-1", "telegram-1", original)
     plan = {"video_start": 0.0}
     visual = SimpleNamespace(plan=plan, video={"sucesso": True, "duracao": 3.0})
-    payload = _payload(tmp_path, original, voice, effect, plan)
+    payload = _payload(tmp_path, original, voice, effect, plan, audio_start_seconds=0.25)
     captured = {}
 
     monkeypatch.delenv("ARMORED_STUDIO_FORCE_COPY", raising=False)
