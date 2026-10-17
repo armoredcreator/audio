@@ -97,7 +97,7 @@ Essa evidência confirma o pipeline anterior e a convenção de Storage; **não 
 
 ### Validação automatizada da separação v4
 
-- CI passou na compilação e em **79 testes automatizados**: https://github.com/armoredcreator/audio/actions/runs/39048512818.
+- CI passou na compilação e em **79 testes automatizados**: https://github.com/armoredcreator/audio/actions/runs/39049041079.
 - Os testes cobrem a fronteira de arquivo AAC final, integridade/hash, validação temporal, bloqueio de mismatch entre plano visual e Speech, um crop e um único FFmpeg visual com `-c:a copy`.
 - Esses testes não substituem o E2E real no Windows com os ativos RVC migrados para Speech.
 
