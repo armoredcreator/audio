@@ -55,6 +55,7 @@ def _payload(root: Path, original: Path, voice: Path | None, effect: Path, plan:
     audio_timeline = build_audio_filter_graph(
         visual_plan=plan,
         audio_start_seconds=audio_start_seconds,
+        main_duration_seconds=3.0,
         intro=intro,
         intro_position="final" if intro else "final",
     )
