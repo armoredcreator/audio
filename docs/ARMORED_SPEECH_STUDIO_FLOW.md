@@ -262,9 +262,11 @@ A pasta de corpus local para teste contém MP4s com nomes descritivos como `1_ru
 O caminho de teste escolhido segue a estrutura por fonte do ArmoredCreator:
 
 - As entradas do corpus ficam organizadas por pasta de item, por exemplo `storage/Videos GRUPO_FONTE_teste/2/2_narração_pt.mp4`, e não são movidas, renomeadas nem sobrescritas.
-- O helper cria uma subpasta exclusiva por tentativa, com identidade temporária diferente dos IDs numéricos do corpus, abaixo de `storage/Videos GRUPO_FONTE_teste/<item_id_temporario>/`. Ela contém a cópia simulada do MP4 ORIGINAL com nome canônico `<item_id_temporario>_finallinkoriginal.mp4` e o WAV derivado da própria cópia.
-- O relatório/manifeste e o SQLite de laboratório ficam separados em `storage/validation/` e `storage/database/armored_speech_lab_*.sqlite3`; o banco operacional `armoredcreator.db` não é aberto.
-- O identificador sintético usa `source_teste` + item de teste. O alias `source_teste` mapeia no laboratório para `Videos GRUPO_FONTE_teste`; `source1`, `source2`, etc. continuam mapeando para as pastas numeradas usuais.
+- Quando a entrada tem a forma `storage/Videos GRUPO_FONTE_teste/<ID>/<nome_descritivo>.mp4` (por exemplo, `.../2/2_narração_pt.mp4`), o helper reutiliza a identidade numérica da pasta e a mesma pasta de item, sem apagar nem mover a entrada. Cria somente se ainda não existirem `<ID>_finallinkoriginal.mp4` e `<ID>_finallinkoriginal.wav`; se já existirem, bloqueia em vez de sobrescrever.
+- O nome canônico da saída desta fixture de laboratório é `<ID>_finaldomeulinknovo.mp4`; o item `2` deve manter, portanto, `storage/Videos GRUPO_FONTE_teste/2/2_finaldomeulinknovo.mp4`. Studio usa o mesmo contrato `Storage` para o caminho de trabalho `<ID>_.mp4`. A URL usada no manifesto é de teste e termina no sufixo canônico, não no ID, para evitar nomes duplicados como `<ID>_<ID>.mp4`.
+- Para uma entrada que não esteja dentro de uma pasta numérica sob o root da fonte, o helper mantém o fallback isolado de item temporário `v2smoke_real_*`; esse fallback não substitui o caminho principal do corpus numerado.
+- O relatório/manifesto e o SQLite de laboratório ficam separados em `storage/validation/` e `storage/database/armored_speech_lab_*.sqlite3`; o banco operacional `armoredcreator.db` não é aberto.
+- O alias de laboratório `source_teste` mapeia para `Videos GRUPO_FONTE_teste`; `source1`, `source2`, etc. continuam mapeando para as pastas numeradas usuais.
 
 O modo `--real-video` aceita qualquer classificação de áudio resolvida suportada, exceto `UNKNOWN`. Somente narração PT-BR limpa com evidência explícita de ausência de música pode entrar na rota Melody; demais classes devem seguir a rota segura sem RVC. A classificação inconclusiva bloqueia a preparação.
 
@@ -286,7 +288,7 @@ O comando imprime `MANIFEST_PATH`, `SPEECH_DATABASE` e hashes/decisão. Use os c
   --speech-database 'COLE_SPEECH_DATABASE'
 ```
 
-**Não acrescente `--copy-only` ao teste real.** O runner exigirá FFmpeg, banner, efeito sonoro e, quando elegível, modelo/índice Melody existentes. Ele renderiza a cópia isolada com identidade `v2smoke_real_*` dentro do workspace da fonte de teste; não envia nada ao Hub.
+**Não acrescente `--copy-only` ao teste real.** O runner exigirá FFmpeg, banner, efeito sonoro e, quando elegível, modelo/índice Melody existentes. Para a amostra numerada `2`, ele renderiza no workspace `Videos GRUPO_FONTE_teste/2/` com saída `2_finaldomeulinknovo.mp4`; não envia nada ao Hub.
 
 Depois de aprovar o primeiro caso, os outros MP4s podem ser executados individualmente apontando para seus caminhos dentro das pastas numeradas (por exemplo, `...\3\3_musica.mp4`). Não varrer recursivamente a pasta para tratar cópias de trabalho e resultados renderizados como entradas novas: somente os MP4s originais dentro das pastas `1` a `14` são corpus de entrada.
 
