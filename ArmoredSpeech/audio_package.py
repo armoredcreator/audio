@@ -600,7 +600,7 @@ def prepare_audio_package(
             "sample_rate": effect_meta.sample_rate,
             "channels": effect_meta.channels,
             "duration_seconds": round(effect_duration, 6),
-            "size_bytes": Path(effect_track_path).stat().st_size,
+            "size_bytes": effect_output.stat().st_size,
             "gain_policy": effect_gain_policy,
         }
         audio_timeline_metadata = {
