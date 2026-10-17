@@ -19,7 +19,7 @@ Os assets oficiais do Studio e os arquivos/modelo/índice do ambiente RVC serão
 ## Shared Python environment status
 - ArmoredSpeech setup now targets the root `.venv` rather than installing a second identical package set under `ArmoredSpeech/runtime/venv`.
 - The root `.venv` with NumPy 1.23.5 passed 45 unit tests (1 skipped) and the five real Speech reference cases; the original hashes remained unchanged.
-- The RVC environment `ArmoredStudio/runtime/rvc/env311` remains untouched until its unique dependencies and custom Fairseq build can be migrated safely and real Melody conversion passes under the root interpreter.
+- The RVC unique dependencies and custom Fairseq build were added to the root `.venv` with pinned versions. Root-environment imports, Speech tests, five real-audio checks, and a real Melody conversion passed on 2026-10-16. `ArmoredStudio/processing/rvc.py` now resolves only the root environment; the old `env311` venv is no longer an operational dependency and may be deleted locally after pulling this branch.
 
 ## Completed in the lab
 - Static audit: [ARMOREDSTUDIO_BASE_AUDIT.md](./ARMOREDSTUDIO_BASE_AUDIT.md)
