@@ -109,13 +109,6 @@ def _single_portrait_crop(
     return x, y, width, height
 
 
-def _plan_dimensions(plan: dict[str, Any] | None, width: int, height: int) -> tuple[int, int]:
-    crop = (plan or {}).get("crop_final")
-    if not crop:
-        return width, height
-    return int(crop.get("width", width)), int(crop.get("height", height))
-
-
 def _video_filter_graph(
     source_width: int,
     source_height: int,
@@ -200,8 +193,9 @@ def render_video_with_speech_track(
     if output.exists():
         raise FileExistsError(f"Studio nunca deve sobrescrever um resultado existente: {output}")
 
+    # Keep the full source dimensions here. The canonical crop planner below
+    # combines crop_final and 9:16 framing into one crop in source coordinates.
     width, height, fps = _probe_video(video)
-    width, height = _plan_dimensions(plan, width, height)
     output.parent.mkdir(parents=True, exist_ok=True)
     graph, video_map = _video_filter_graph(
         width, height, fps, plan, intro=intro, position=position
