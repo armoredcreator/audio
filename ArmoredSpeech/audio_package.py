@@ -192,9 +192,16 @@ def prepare_audio_package(
     Studio completion for safe retry/audit.
     """
     root = Path(workspace_root).resolve(strict=True)
-    final_dir = Path(output_dir).resolve()
+    final_dir = Path(output_dir).expanduser().resolve()
+    try:
+        final_dir.relative_to(root)
+    except ValueError as exc:
+        raise AudioPackageError("Package output must be inside the lab root") from exc
+    if final_dir == root:
+        raise AudioPackageError("Package output cannot replace the lab root")
+    final_dir.parent.mkdir(parents=True, exist_ok=True)
     if not _inside(final_dir.parent, root):
-        raise AudioPackageError("Package output must be inside the lab root")
+        raise AudioPackageError("Package output parent must remain inside the lab root")
     if final_dir.exists():
         raise AudioPackageError(f"Package output already exists: {final_dir}")
     effect_source = Path(effect_source_path).resolve(strict=True)
