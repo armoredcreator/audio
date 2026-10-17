@@ -80,6 +80,8 @@ def _payload(root: Path, original: Path, voice: Path, effect: Path) -> dict:
         "route": "RVC_MELODY",
         "rvc_eligible": True,
         "rvc_model": "melody",
+        "rvc_model_sha256": "c" * 64,
+        "rvc_index_sha256": "d" * 64,
         "voice_track": {
             "path": str(voice),
             "sha256": _sha(voice),
