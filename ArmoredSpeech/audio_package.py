@@ -394,7 +394,7 @@ def prepare_audio_package(
     The output directory must be new. The returned handoff exposes only the
     completed final_audio_track; voice/effect WAVs remain Speech-owned intermediates.
     """
-    from .timeline_mixer import prepare_final_audio_track
+    from .timeline_mixer import build_audio_filter_graph
 
     root = Path(workspace_root).resolve(strict=True)
     final_dir = Path(output_dir).expanduser().resolve()
@@ -487,14 +487,9 @@ def prepare_audio_package(
                 ffmpeg, "-nostdin", "-y", "-i", str(rvc_raw), "-vn",
                 "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le", str(voice_output),
             ], "RVC_OUTPUT_NORMALIZATION_FAILED")
-        else:
-            # Never fall back to the source narration when the Speech decision
-            # disallows Melody; create deterministic silence for the video span.
-            _run([
-                ffmpeg, "-nostdin", "-y", "-f", "lavfi", "-i",
-                "anullsrc=r=44100:cl=stereo", "-t", f"{video_duration:.6f}",
-                "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le", str(voice_output),
-            ], "SILENT_TRACK_CREATION_FAILED")
+        # EFFECT_ONLY deliberately has no voice file. Studio will give FFmpeg a
+        # generated silence input at index 1; the source video's original audio
+        # is never mapped or sent into the mix.
 
         # Speech owns effect preparation and gain. The complete-batch path
         # supplies one validated shared effect track, avoiding redundant FFmpeg
@@ -527,29 +522,45 @@ def prepare_audio_package(
         if prepared_effect_track is None and sha256_file(effect_source) != effect_source_hash:
             raise AudioPackageError("Project sound-effect asset changed during preparation")
 
-        voice_meta = _wave_metadata(voice_output)
         effect_meta = _wave_metadata(effect_output)
         if prepared_effect_track is not None and abs(
             effect_meta.duration_seconds - float(prepared_effect_track.get("duration_seconds", 0))
         ) > 0.02:
             raise AudioPackageError("Shared effect track duration metadata mismatch")
-        if voice_meta.sample_rate != 44100 or voice_meta.channels != 2:
-            raise AudioPackageError("Voice track must be canonical PCM WAV 44100 Hz stereo")
         if effect_meta.sample_rate != 44100 or effect_meta.channels != 2:
             raise AudioPackageError("Effect track must be canonical PCM WAV 44100 Hz stereo")
 
-        final_audio = prepare_final_audio_track(
-            voice_output,
-            effect_output,
-            stage / "final_audio.wav",
-            workspace_root=root,
+        voice_meta = _wave_metadata(voice_output) if rvc_allowed else None
+        if voice_meta is not None and (
+            voice_meta.sample_rate != 44100 or voice_meta.channels != 2
+        ):
+            raise AudioPackageError("Voice track must be canonical PCM WAV 44100 Hz stereo")
+
+        audio_timeline = build_audio_filter_graph(
             visual_plan=visual_plan,
             intro=intro,
             intro_position=intro_position,
         )
-        # The package directory is atomically renamed from stage to final_dir
-        # after all checks, so publish the eventual canonical path in the handoff.
-        final_audio["path"] = str(final_dir / "final_audio.wav")
+        voice_track = None
+        if rvc_allowed and voice_meta is not None:
+            voice_track = {
+                "path": str(final_dir / "voice.wav"),
+                "sha256": sha256_file(voice_output),
+                "format": "wav-pcm-s16le",
+                "sample_rate": voice_meta.sample_rate,
+                "channels": voice_meta.channels,
+                "duration_seconds": round(voice_meta.duration_seconds, 6),
+            }
+        if prepared_effect_track is not None:
+            effect_track_path = str(effect_output)
+            effect_hash = str(prepared_effect_track["sha256"])
+            effect_source_hash = str(prepared_effect_track["source_sha256"])
+            effect_gain_policy = str(prepared_effect_track["gain_policy"])
+        else:
+            effect_track_path = str(final_dir / "effect.wav")
+            effect_hash = sha256_file(effect_output)
+            effect_source_hash = str(preflight["effect_source_sha256"])
+            effect_gain_policy = "loudnorm-I-12-LRA7-TP-1-then-volume-0.8"
 
         package = {
             "contract_version": 3,
@@ -570,23 +581,18 @@ def prepare_audio_package(
             "rvc_model": rvc_model,
             "rvc_model_sha256": preflight.get("rvc_model_sha256") if rvc_allowed else None,
             "rvc_index_sha256": preflight.get("rvc_index_sha256") if rvc_allowed else None,
-            "final_audio_track": {
-                "path": final_audio["path"],
-                "sha256": final_audio["sha256"],
-                "format": final_audio["format"],
-                "sample_rate": final_audio["sample_rate"],
-                "channels": final_audio["channels"],
-                "duration_seconds": final_audio["duration_seconds"],
-                "composition_owner": final_audio["composition_owner"],
+            "voice_track": voice_track,
+            "effect_track": {
+                "path": effect_track_path,
+                "sha256": effect_hash,
+                "source_sha256": effect_source_hash,
+                "format": "wav-pcm-s16le",
+                "sample_rate": effect_meta.sample_rate,
+                "channels": effect_meta.channels,
+                "duration_seconds": round(effect_meta.duration_seconds, 6),
+                "gain_policy": effect_gain_policy,
             },
-            "timeline": {
-                "visual_plan_sha256": final_audio["visual_plan_sha256"],
-                "audio_start_seconds": final_audio["audio_start_seconds"],
-                "intro_enabled": final_audio["intro_enabled"],
-                "intro_position": final_audio["intro_position"],
-                "intro_duration_seconds": final_audio["intro_duration_seconds"],
-            },
-            "effect_source_sha256": effect_source_hash,
+            "audio_timeline": audio_timeline,
             "prepared_video_duration_seconds": round(video_duration, 6),
             "package_id": final_dir.name,
         }
