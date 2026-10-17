@@ -334,8 +334,16 @@ def prepare_audio_package(
         )
     if str(effect_source) != preflight.get("effect_source_path"):
         raise AudioPackageError("Effect source differs from the batch preflight")
-    if sha256_file(effect_source) != preflight.get("effect_source_sha256"):
-        raise AudioPackageError("Effect asset changed after batch preflight")
+    if prepared_effect_track is None:
+        # Standalone path: validate locally. The whole-batch path checks the
+        # source once before and once after creating its shared effect artifact.
+        if sha256_file(effect_source) != preflight.get("effect_source_sha256"):
+            raise AudioPackageError("Effect asset changed after batch preflight")
+    else:
+        if prepared_effect_track.get("_prepared_and_verified") is not True:
+            raise AudioPackageError("Shared effect track has not passed preparation validation")
+        if prepared_effect_track.get("source_sha256") != preflight.get("effect_source_sha256"):
+            raise AudioPackageError("Shared effect track was prepared from another asset")
 
     original, source_wav, original_hash, rvc_allowed = _validate_v1_directive(
         payload, root=root, item=item
@@ -399,21 +407,43 @@ def prepare_audio_package(
                 "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le", str(voice_output),
             ], "SILENT_TRACK_CREATION_FAILED")
 
-        # Speech owns effect preparation and gain. Studio v2 must not loudnorm
-        # or apply volume again; it may only loop, fade and align the track.
-        _run([
-            ffmpeg, "-nostdin", "-y", "-i", str(effect_source), "-vn",
-            "-af", "loudnorm=I=-12:LRA=7:TP=-1,volume=0.8",
-            "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le", str(effect_output),
-        ], "EFFECT_TRACK_PREPARATION_FAILED")
+        # Speech owns effect preparation and gain. The complete-batch path
+        # supplies one validated shared effect track, avoiding redundant FFmpeg
+        # loudnorm passes for every item. Standalone calls keep a local fallback.
+        if prepared_effect_track is not None:
+            effect_output = Path(prepared_effect_track.get("path", "")).resolve(strict=True)
+            if not effect_output.is_file() or not _inside(effect_output, root):
+                raise AudioPackageError("Shared effect track is missing or outside the lab root")
+            if effect_output.stat().st_size <= 44:
+                raise AudioPackageError("Shared effect track is empty")
+            prepared_hash = prepared_effect_track.get("sha256")
+            if not isinstance(prepared_hash, str) or len(prepared_hash) != 64:
+                raise AudioPackageError("Shared effect track hash is invalid")
+            if (
+                prepared_effect_track.get("format") != "wav-pcm-s16le"
+                or prepared_effect_track.get("sample_rate") != 44100
+                or prepared_effect_track.get("channels") != 2
+                or prepared_effect_track.get("gain_policy") != "loudnorm-I-12-LRA7-TP-1-then-volume-0.8"
+            ):
+                raise AudioPackageError("Shared effect track metadata/policy is incompatible")
+        else:
+            _run([
+                ffmpeg, "-nostdin", "-y", "-i", str(effect_source), "-vn",
+                "-af", "loudnorm=I=-12:LRA=7:TP=-1,volume=0.8",
+                "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le", str(effect_output),
+            ], "EFFECT_TRACK_PREPARATION_FAILED")
 
         if sha256_file(original) != original_hash:
             raise AudioPackageError("Original SHA-256 changed while preparing audio")
-        if sha256_file(effect_source) != effect_source_hash:
+        if prepared_effect_track is None and sha256_file(effect_source) != effect_source_hash:
             raise AudioPackageError("Project sound-effect asset changed during preparation")
 
         voice_meta = _wave_metadata(voice_output)
         effect_meta = _wave_metadata(effect_output)
+        if prepared_effect_track is not None and abs(
+            effect_meta.duration_seconds - float(prepared_effect_track.get("duration_seconds", 0))
+        ) > 0.02:
+            raise AudioPackageError("Shared effect track duration metadata mismatch")
         if voice_meta.sample_rate != 44100 or voice_meta.channels != 2:
             raise AudioPackageError("Voice track must be canonical PCM WAV 44100 Hz stereo")
         if effect_meta.sample_rate != 44100 or effect_meta.channels != 2:
@@ -447,8 +477,11 @@ def prepare_audio_package(
                 "duration_seconds": round(voice_meta.duration_seconds, 6),
             },
             "effect_track": {
-                "path": str(final_dir / "effect.wav"),
-                "sha256": sha256_file(effect_output),
+                "path": str(effect_output),
+                "sha256": (
+                    str(prepared_effect_track["sha256"])
+                    if prepared_effect_track is not None else sha256_file(effect_output)
+                ),
                 "source_sha256": effect_source_hash,
                 "format": "wav-pcm-s16le",
                 "sample_rate": effect_meta.sample_rate,
