@@ -457,7 +457,7 @@ def prepare_audio_package(
                 ffmpeg, "-nostdin", "-y", "-i", str(source_wav), "-vn",
                 "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le", str(rvc_input),
             ], "RVC_INPUT_PREPARATION_FAILED")
-            from armored_core.audio.rvc import converter_voz, localizar_modelo
+            from .rvc_engine import converter_voz, localizar_modelo
 
             converter_voz(rvc_input, rvc_raw, voice, item_id=item.content_id)
             model_after, index_after = localizar_modelo(voice)
