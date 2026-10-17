@@ -70,15 +70,14 @@ def test_analysis_engine_is_visual_only_and_returns_export_plan(tmp_path, monkey
     monkeypatch.setattr(unified, "obter_informacoes_video", lambda source: {"sucesso": True, "duracao": 1.0})
     monkeypatch.setattr(unified, "analisar_bordas_video", lambda source: {})
     monkeypatch.setattr(unified, "analisar_banner", lambda source: {"banner_detectado": False})
-    monkeypatch.setattr(unified, "analisar_corte_banner", lambda source: {})
     monkeypatch.setattr(unified, "detectar_veo", lambda source: {})
     monkeypatch.setattr(unified, "detectar_gemini", lambda source: {})
-    monkeypatch.setattr(unified, "criar_plano_exportacao", lambda *args: {"audio_start": 0.0})
+    monkeypatch.setattr(unified, "criar_plano_exportacao", lambda *args: {"crop_final": None, "video_start": 0.0, "acoes": []})
     monkeypatch.setattr(unified, "validar_plano_exportacao", lambda plan: {"valido": True, "erros": []})
 
     result = AnalysisEngine().analyze(tmp_path / "synthetic.mp4")
 
-    assert result.plan == {"audio_start": 0.0}
+    assert result.plan == {"crop_final": None, "video_start": 0.0, "acoes": []}
     assert result.validation["valido"] is True
     assert not hasattr(result, "audio")
     assert not hasattr(AnalysisEngine(), "audio_intelligence")
