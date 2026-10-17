@@ -1,28 +1,32 @@
-# Speech batch → Studio visual renderer
+# Speech batch → Studio visual renderer (contract v4)
 
-O runner de laboratório só recebe um manifesto que declara o lote Speech completo e aprovado. Não descobre um lote parcial pelo SQLite operacional e não abre banco de produção.
+O runner recebe um manifesto que declara o lote Speech completo e aprovado. Não descobre lote parcial pelo SQLite operacional e não abre banco de produção.
 
 ## Fluxo
 
-1. Studio executa uma pré-análise **somente visual** para encontrar barras, banner, caixas VEO/Gemini e preparar um plano de enquadramento.
-2. Speech lê as decisões READY do seu SQLite, confere original e WAV, resolve a classe/rota e executa todo o RVC elegível.
-3. Speech deriva o corte temporal de fala a partir do WAV quando existe banner e constrói o grafo de áudio: trim, fades, mixagem e concatenação do efeito/intro. O efeito é preparado com ganho uma única vez e compartilhado por lote.
-4. O runner valida identidade, hashes, arquivos, modelo/index, grafo e duração de todos os itens antes de chamar o Studio.
-5. O plano visual é atualizado com o início de vídeo derivado por Speech e seu hash deve coincidir com o hash no contrato.
-6. Studio combina o grafo visual (crop único na fonte, split de intro/main, filtros de imagem) com o grafo de áudio gerado pelo Speech em uma única chamada FFmpeg final. Não há pré-mixagem de um WAV final nem chamada FFmpeg separada para renderizar as cenas e depois muxar.
-7. O runner confirma caminhos de saída e SHA-256 dos originais.
+1. Studio faz uma pré-análise somente visual: enquadramento seguro, barras, banner e detectores VEO/Gemini.
+2. Speech lê as decisões READY da base isolada, valida original/WAV, classifica o áudio e resolve a rota segura.
+3. Speech executa RVC Melody quando elegível, prepara o efeito com ganho aplicado uma vez, decide a timeline de áudio, faz trim/fades/mixagem/intro e executa FFmpeg para materializar **um único AAC/M4A final por item**.
+4. O handoff v4 contém identidade, hash do original, arquivo final AAC/M4A, hash/duração e metadados da timeline/plano visual. Não contém WAVs separados de voz/efeito nem grafo de áudio.
+5. O runner valida todos os artefatos finais e a integridade dos originais antes da primeira renderização.
+6. Studio recalcula/valida o plano visual correspondente e faz um único crop na fonte. O FFmpeg final aplica somente o grafo visual e copia o AAC pronto com `-c:a copy` para o MP4.
+7. O runner verifica saída e SHA-256 dos originais.
 
 ## Comandos
 
+Na raiz do laboratório:
+
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
+.\ArmoredSpeech\scripts\migrate_audio_assets.ps1
 ```
 
-O teste real exige os ativos migrados para `ArmoredSpeech/runtime/rvc/models` e `ArmoredSpeech/assets/efeitosonoro.wav`, além do corpus local. Não executar até o script `ArmoredSpeech/scripts/migrate_audio_assets.ps1` concluir e os dois caminhos existirem.
+O E2E real requer os modelos/índices em `ArmoredSpeech/runtime/rvc/models`, o efeito em `ArmoredSpeech/assets/efeitosonoro.wav`, o corpus local e um manifesto Speech aprovado. O script de migração copia e confere SHA-256 sem apagar os ativos antigos; só remova a origem após o E2E v4 real ser aprovado.
 
-## Segurança
+## Separação e segurança
 
-- Uma classificação desconhecida ou pacote ausente bloqueia a primeira renderização.
-- O caminho `EFFECT_ONLY` usa silêncio gerado como entrada FFmpeg; nunca reusa o áudio original do vídeo.
-- O Studio não executa RVC, não analisa fala/idioma/música e não aplica volume, fades, cortes ou mixagem.
+- A rota RVC/EFFECT_ONLY, o silêncio, a mixagem, os ganhos, fades e o AAC final pertencem ao Speech.
+- Studio só valida o artefato final, edita pixels e faz mux da trilha já codificada.
+- Um crop canônico é aplicado uma vez no grafo visual.
+- Há uma única invocação FFmpeg final por vídeo no Studio. Speech ainda usa suas próprias invocações FFmpeg para preparar o áudio.
 - Nenhum teste desta branch publica no Hub.
