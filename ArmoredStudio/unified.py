@@ -14,7 +14,6 @@ from .speech_handoff import validate_audio_package, SpeechHandoffError
 from .analysis.video import obter_informacoes_video
 from .analysis.blackbar import analisar_bordas_video
 from .analysis.banner_analyzer import analisar_banner
-from .analysis.banner import analisar_banner as analisar_corte_banner
 from .analysis.veo_detector import detect_fast as detectar_veo
 from .analysis.gemini_detector import detect_fast as detectar_gemini
 from .analysis.export_planner import criar_plano_exportacao
@@ -27,7 +26,6 @@ class AnalysisResult:
     video: dict[str, Any]
     blackbar: dict[str, Any]
     banner: dict[str, Any]
-    banner_cut: dict[str, Any]
     veo: dict[str, Any]
     gemini: dict[str, Any]
     plan: dict[str, Any]
@@ -44,7 +42,6 @@ class AnalysisEngine:
 
         blackbar = analisar_bordas_video(source)
         banner = analisar_banner(source)
-        banner_cut = analisar_corte_banner(source) if banner.get("banner_detectado") else {}
         veo = detectar_veo(source)
         gemini = detectar_gemini(source)
 
@@ -73,14 +70,14 @@ class AnalysisEngine:
             gemini.get("score"),
         )
 
-        plan = criar_plano_exportacao(video, blackbar, banner, banner_cut, veo, gemini)
+        plan = criar_plano_exportacao(video, blackbar, banner, veo, gemini)
         validation = validar_plano_exportacao(plan)
         if not validation.get("valido"):
             raise RuntimeError(
                 "Plano de processamento inválido: "
                 + "; ".join(validation.get("erros", []))
             )
-        return AnalysisResult(video, blackbar, banner, banner_cut, veo, gemini, plan, validation)
+        return AnalysisResult(video, blackbar, banner, veo, gemini, plan, validation)
 
 
 class UnifiedStudio:
