@@ -342,3 +342,92 @@ def test_audio_package_builder_fails_closed_when_music_evidence_is_unknown(tmp_p
             effect_source_path=effect_source,
             output_dir=tmp_path / "storage" / "validation" / "batch3" / "source1" / "telegram3",
         )
+def test_audio_package_builder_reuses_shared_batch_effect_without_reencoding(tmp_path, monkeypatch):
+    original = tmp_path / "source.mp4"
+    original.write_bytes(b"synthetic immutable original")
+    source_wav = tmp_path / "source.wav"
+    _write_wav(source_wav, sample_rate=16000, channels=1)
+    effect_source = tmp_path / "ArmoredStudio" / "assets" / "efeitosonoro.wav"
+    _write_wav(effect_source)
+    shared_effect = tmp_path / "storage" / "validation" / "shared" / "effect.wav"
+    _write_wav(shared_effect)
+    original_hash = _sha(original)
+    item = Item("source-1", "telegram-shared", "source1_telegram_shared", original)
+    directive = {
+        "contract_version": 1,
+        "source_id": item.source_id,
+        "item_id": item.telegram_message_id,
+        "original_path": str(original),
+        "audio_artifact_path": str(source_wav),
+        "audio_class": "PT_BR_NARRATION",
+        "language": "pt-br",
+        "speech_detected": True,
+        "music_detected": False,
+        "confidence": 0.99,
+        "rvc_eligible": True,
+        "original_sha256_before": original_hash,
+        "original_sha256_after": original_hash,
+    }
+    events = []
+
+    def fake_write_wave(path: str | Path):
+        _write_wav(Path(path), sample_rate=44100, channels=2)
+
+    monkeypatch.setattr(audio_package, "_tool", lambda name, env_name: f"mock-{name}")
+    monkeypatch.setattr(audio_package, "_media_duration", lambda path, tool: 1.0)
+
+    def fake_run(command: list[str], label: str):
+        events.append(label)
+        fake_write_wave(command[-1])
+
+    monkeypatch.setattr(audio_package, "_run", fake_run)
+    from armored_core.audio import rvc
+
+    def fake_convert(source, destination, voice, item_id=None):
+        events.append("RVC_MELODY")
+        fake_write_wave(destination)
+        return Path(destination)
+
+    monkeypatch.setattr(rvc, "converter_voz", fake_convert)
+    preflight = _preflight(
+        tmp_path, original, source_wav, effect_source, rvc_allowed=True
+    )
+    monkeypatch.setattr(
+        rvc,
+        "localizar_modelo",
+        lambda voice: (Path(preflight["rvc_model_path"]), Path(preflight["rvc_index_path"])),
+    )
+    shared_meta = audio_package._wave_metadata(shared_effect)
+    prepared_effect = {
+        "path": str(shared_effect),
+        "sha256": _sha(shared_effect),
+        "source_sha256": _sha(effect_source),
+        "format": "wav-pcm-s16le",
+        "sample_rate": shared_meta.sample_rate,
+        "channels": shared_meta.channels,
+        "duration_seconds": shared_meta.duration_seconds,
+        "gain_policy": "loudnorm-I-12-LRA7-TP-1-then-volume-0.8",
+        "_prepared_and_verified": True,
+    }
+
+    output_dir = tmp_path / "storage" / "validation" / "batch-shared" / "source1" / "telegram-shared"
+    package = audio_package.prepare_audio_package(
+        directive,
+        item,
+        workspace_root=tmp_path,
+        effect_source_path=effect_source,
+        output_dir=output_dir,
+        preflight=preflight,
+        prepared_effect_track=prepared_effect,
+    )
+
+    assert package["route"] == "RVC_MELODY"
+    assert package["effect_track"]["path"] == str(shared_effect)
+    assert package["effect_track"]["sha256"] == _sha(shared_effect)
+    assert not (output_dir / "effect.wav").exists()
+    assert "EFFECT_TRACK_PREPARATION_FAILED" not in events
+    assert events.count("RVC_MELODY") == 1
+    assert _sha(original) == original_hash
+    assert _validate(tmp_path, original, package).effect_track_path == shared_effect
+
+
