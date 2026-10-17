@@ -239,7 +239,7 @@ def test_audio_package_builder_prepares_tracks_without_changing_original(tmp_pat
     original.write_bytes(b"synthetic immutable original")
     source_wav = tmp_path / "source.wav"
     _write_wav(source_wav, sample_rate=16000, channels=1)
-    effect_source = tmp_path / "ArmoredStudio" / "assets" / "efeitosonoro.wav"
+    effect_source = tmp_path / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
     _write_wav(effect_source)
     original_hash = _sha(original)
     item = Item("source-1", "telegram-1", "source1_telegram1", original)
@@ -312,7 +312,7 @@ def test_audio_package_builder_routes_unapproved_audio_to_silence_plus_effect(tm
     original.write_bytes(b"synthetic original")
     source_wav = tmp_path / "music.wav"
     _write_wav(source_wav, sample_rate=16000, channels=1)
-    effect_source = tmp_path / "ArmoredStudio" / "assets" / "efeitosonoro.wav"
+    effect_source = tmp_path / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
     _write_wav(effect_source)
     original_hash = _sha(original)
     item = Item("source-1", "telegram-2", "source1_telegram2", original)
@@ -370,7 +370,7 @@ def test_audio_package_builder_fails_closed_when_music_evidence_is_unknown(tmp_p
     original.write_bytes(b"synthetic immutable original")
     source_wav = tmp_path / "source.wav"
     _write_wav(source_wav, sample_rate=16000, channels=1)
-    effect_source = tmp_path / "ArmoredStudio" / "assets" / "efeitosonoro.wav"
+    effect_source = tmp_path / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
     _write_wav(effect_source)
     digest = _sha(original)
     item = Item("source-1", "telegram-3", "source1_telegram3", original)
@@ -404,7 +404,7 @@ def test_audio_package_builder_reuses_shared_batch_effect_without_reencoding(tmp
     original.write_bytes(b"synthetic immutable original")
     source_wav = tmp_path / "source.wav"
     _write_wav(source_wav, sample_rate=16000, channels=1)
-    effect_source = tmp_path / "ArmoredStudio" / "assets" / "efeitosonoro.wav"
+    effect_source = tmp_path / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
     _write_wav(effect_source)
     shared_effect = tmp_path / "storage" / "validation" / "shared" / "effect.wav"
     _write_wav(shared_effect)
@@ -497,7 +497,7 @@ def test_batch_preflight_hashes_melody_model_and_index_only_once(tmp_path, monke
     original.write_bytes(b"synthetic immutable original")
     source_wav = tmp_path / "source.wav"
     _write_wav(source_wav, sample_rate=16000, channels=1)
-    effect_source = tmp_path / "ArmoredStudio" / "assets" / "efeitosonoro.wav"
+    effect_source = tmp_path / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
     effect_source.parent.mkdir(parents=True, exist_ok=True)
     effect_source.write_bytes(b"effect asset bytes large enough for preflight" * 2)
     model_dir = tmp_path / "ArmoredStudio" / "runtime" / "rvc" / "models" / "melody"
