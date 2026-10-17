@@ -122,7 +122,13 @@ def _media_duration(path: Path, ffprobe: str) -> float:
     return duration
 
 
-def _validate_v1_directive(payload: dict[str, Any], *, root: Path, item) -> tuple[Path, Path, str, bool]:
+def _validate_v1_directive(
+    payload: dict[str, Any],
+    *,
+    root: Path,
+    item,
+    expected_original_sha256: str | None = None,
+) -> tuple[Path, Path, str, bool]:
     if not isinstance(payload, dict) or payload.get("contract_version") != 1:
         raise AudioPackageError("Expected validated Speech handoff v1 directive")
     if payload.get("status") not in (None, "READY"):
@@ -146,13 +152,17 @@ def _validate_v1_directive(payload: dict[str, Any], *, root: Path, item) -> tupl
         raise AudioPackageError("Speech reference WAV is missing or empty")
     declared_before = payload.get("original_sha256_before")
     declared_after = payload.get("original_sha256_after")
-    actual = sha256_file(original)
     if (
         not isinstance(declared_before, str)
         or not isinstance(declared_after, str)
         or declared_before.lower() != declared_after.lower()
-        or declared_before.lower() != actual
     ):
+        raise AudioPackageError("Original SHA-256 evidence is missing or inconsistent")
+    if expected_original_sha256 is None:
+        actual = sha256_file(original)
+    else:
+        actual = str(expected_original_sha256)
+    if declared_before.lower() != actual.lower():
         raise AudioPackageError("Original SHA-256 evidence is missing or inconsistent")
     _wave_metadata(source_wav)
     audio_class = str(payload.get("audio_class") or "")
@@ -184,8 +194,14 @@ def preflight_audio_package(
     effect_source_path: Path,
     voice: str = "melody",
     effect_source_sha256: str | None = None,
+    rvc_asset_fingerprint: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Validate every input and required RVC asset before spending CPU on a batch."""
+    """Validate every input and required RVC asset before spending CPU on a batch.
+
+    A whole-batch caller may pass a previously fingerprinted Melody model/index,
+    preventing a large model/index file from being re-hashed for every item.
+    """
+
     root = Path(workspace_root).resolve(strict=True)
     effect_source = Path(effect_source_path).expanduser().resolve(strict=True)
     if not effect_source.is_file() or effect_source.stat().st_size <= 44:
@@ -210,15 +226,39 @@ def preflight_audio_package(
     if rvc_allowed:
         if voice.strip().lower() != "melody":
             raise AudioPackageError("Only the validated Melody model is approved for this route")
-        from armored_core.audio.rvc import localizar_modelo, resolver_rvc_python
+        if rvc_asset_fingerprint is None:
+            from armored_core.audio.rvc import localizar_modelo, resolver_rvc_python
 
-        resolver_rvc_python()
-        model, index = localizar_modelo("melody")
-        model_path = str(model.resolve(strict=True))
-        model_sha256 = sha256_file(model)
-        if index is not None:
-            index_path = str(index.resolve(strict=True))
-            index_sha256 = sha256_file(index)
+            rvc_python_path = str(resolver_rvc_python().resolve(strict=True))
+            model, index = localizar_modelo("melody")
+            model_path = str(model.resolve(strict=True))
+            model_sha256 = sha256_file(model)
+            if index is not None:
+                index_path = str(index.resolve(strict=True))
+                index_sha256 = sha256_file(index)
+        else:
+            # This fingerprint was created by the first eligible item in the
+            # same whole-batch preflight; don't hash the same large model/index
+            # repeatedly for every historical video.
+            from armored_core.audio.rvc import MODELS_DIR, resolver_rvc_python
+
+            model_path = str(Path(rvc_asset_fingerprint["rvc_model_path"]).resolve(strict=True))
+            model_sha256 = str(rvc_asset_fingerprint["rvc_model_sha256"])
+            index_path = rvc_asset_fingerprint.get("rvc_index_path")
+            index_sha256 = rvc_asset_fingerprint.get("rvc_index_sha256")
+            rvc_python_path = str(Path(resolver_rvc_python()).resolve(strict=True))
+            if rvc_python_path != rvc_asset_fingerprint.get("rvc_python_path"):
+                raise AudioPackageError("RVC Python environment changed during batch preflight")
+            try:
+                Path(model_path).relative_to(Path(MODELS_DIR).resolve(strict=True))
+            except ValueError as exc:
+                raise AudioPackageError("Cached Melody model path escaped the configured models directory") from exc
+            if index_path is not None:
+                index_path = str(Path(index_path).resolve(strict=True))
+                try:
+                    Path(index_path).relative_to(Path(MODELS_DIR).resolve(strict=True))
+                except ValueError as exc:
+                    raise AudioPackageError("Cached Melody index path escaped the configured models directory") from exc
 
     return {
         "original_sha256": original_hash,
@@ -229,6 +269,7 @@ def preflight_audio_package(
         "video_duration_seconds": video_duration,
         "ffmpeg": ffmpeg,
         "ffprobe": ffprobe,
+        "rvc_python_path": rvc_python_path if rvc_allowed else None,
         "rvc_model_path": model_path,
         "rvc_model_sha256": model_sha256,
         "rvc_index_path": index_path,
@@ -346,7 +387,10 @@ def prepare_audio_package(
             raise AudioPackageError("Shared effect track was prepared from another asset")
 
     original, source_wav, original_hash, rvc_allowed = _validate_v1_directive(
-        payload, root=root, item=item
+        payload,
+        root=root,
+        item=item,
+        expected_original_sha256=str(preflight.get("original_sha256") or ""),
     )
     if original_hash != preflight.get("original_sha256"):
         raise AudioPackageError("Original differs from the batch preflight")
