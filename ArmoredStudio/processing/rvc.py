@@ -12,6 +12,8 @@ import sys
 
 BASE_DIR = Path(__file__).resolve().parent
 STUDIO_ROOT = BASE_DIR.parent
+REPO_ROOT = STUDIO_ROOT.parent
+SHARED_ENV_DIR = REPO_ROOT / ".venv"
 _configured_rvc_root = os.getenv("ARMORED_RVC_ROOT", "").strip()
 RVC_ROOT = (
     Path(_configured_rvc_root).expanduser()
@@ -27,11 +29,13 @@ DEFAULT_OUTPUT = RVC_ROOT / "output" / "audio_rvc.wav"
 
 
 def resolver_rvc_python() -> Path:
-    """Resolve the local RVC Python for the current operating system."""
-    # Prefer the migrated, validated Python 3.11 runtime without deleting
-    # the pre-existing environment. Fall back to the legacy runtime only if
-    # env311 has not yet been provisioned.
-    candidates = (
+    """Resolve the shared root Python by default, retaining an explicit RVC rollback."""
+    shared_candidates = (
+        SHARED_ENV_DIR / "Scripts" / "python.exe",
+        SHARED_ENV_DIR / "bin" / "python",
+        SHARED_ENV_DIR / "bin" / "python3",
+    )
+    reference_candidates = (
         RVC_ENV311_DIR / "Scripts" / "python.exe",
         RVC_ENV311_DIR / "bin" / "python",
         RVC_ENV311_DIR / "bin" / "python3",
@@ -39,14 +43,26 @@ def resolver_rvc_python() -> Path:
         RVC_ENV_DIR / "bin" / "python",
         RVC_ENV_DIR / "bin" / "python3",
     )
+
+    # One operational environment at the repository root is the default.
+    # Set ARMORED_RVC_USE_REFERENCE=1 only to explicitly run the preserved
+    # env311/legacy reference during rollback or comparison.
+    use_reference = os.getenv("ARMORED_RVC_USE_REFERENCE", "").strip().lower()
+    candidates = (
+        reference_candidates + shared_candidates
+        if use_reference in {"1", "true", "yes"}
+        else shared_candidates + reference_candidates
+    )
+
     for candidate in candidates:
         if candidate.exists() and candidate.is_file():
             return candidate
+
     expected = "\n".join(str(path) for path in candidates)
     raise FileNotFoundError(
-        "Python do ambiente RVC não encontrado. Caminhos esperados:\n" + expected
+        "Python do ambiente compartilhado/RVC não encontrado. Caminhos esperados:\n"
+        + expected
     )
-
 
 def validar_arquivo(arquivo, descricao):
     arquivo = Path(arquivo)
