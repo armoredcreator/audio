@@ -12,7 +12,7 @@ def test_visual_graph_crops_once_before_splitting_main_and_intro():
         1080,
         1920,
         "30/1",
-        {"audio_start": 1.25, "video_start": 0.0},
+        {"video_start": 0.0},
         intro=True,
         position="final",
     )
@@ -32,7 +32,7 @@ def test_visual_plan_video_start_and_crop_are_applied_once_before_the_branch():
         1080,
         "30/1",
         {
-            "audio_start": 1.25,
+            "video_start": 0.0,
             "video_start": 0.75,
             "crop_final": {"x": 0, "y": 0, "width": 1920, "height": 1080},
         },
@@ -75,8 +75,8 @@ def test_final_output_uses_one_ffmpeg_call_with_speech_graph_and_visual_graph(tm
         path.write_bytes(b"test-input")
 
     captured = {"calls": 0}
-    plan = {"audio_start": 0.5, "video_start": 0.0}
-    audio = build_audio_filter_graph(visual_plan=plan, intro=True, intro_position="final")
+    plan = {"video_start": 0.0}
+    audio = build_audio_filter_graph(visual_plan=plan, audio_start_seconds=0.5, intro=True, intro_position="final")
 
     monkeypatch.setattr(visual_finalizer, "_probe_video", lambda path: (1080, 1920, "30/1"))
     monkeypatch.setattr(visual_finalizer, "resolve_executable", lambda *args, **kwargs: Path("ffmpeg"))
