@@ -32,6 +32,18 @@ class AnalysisResult:
     validation: dict[str, Any]
 
 
+def _visual_plan_digest(plan: dict[str, Any] | None) -> str:
+    """Hash a visual plan while encoding path-like detector metadata as paths."""
+    raw = json.dumps(
+        plan or {},
+        default=os.fspath,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 class AnalysisEngine:
     """Studio owns visual analysis only. Audio classification belongs to Speech."""
 
@@ -159,12 +171,7 @@ class UnifiedStudio:
             raise RuntimeError(f"ArmoredSpeech handoff inválido: {exc}") from exc
 
         analysis = visual_analysis or self.analysis.analyze(source)
-        plan_digest = hashlib.sha256(
-            json.dumps(
-                analysis.plan or {}, ensure_ascii=False, sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
+        plan_digest = _visual_plan_digest(analysis.plan)
         if plan_digest != package.visual_plan_sha256:
             raise RuntimeError(
                 "O plano visual difere do plano usado pelo Speech ao compor o áudio; render bloqueado."
