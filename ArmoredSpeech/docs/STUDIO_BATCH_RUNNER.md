@@ -50,7 +50,7 @@ O smoke E2E de um único item não substitui a validação do corpus. O teste do
 **1. Inventariar e hashear os candidatos, sem análise de áudio, cópias de vídeo ou SQLite novo:**
 
 ```powershell
-.\\.venv\\Scripts\\python.exe -m ArmoredSpeech.corpus_e2e_runner --root . --video-root .\\storage --expected-count 14 --list-only
+.\.venv\Scripts\python.exe -m ArmoredSpeech.corpus_e2e_runner --root . --video-root .\storage --expected-count 14 --list-only
 ```
 
 A saída deve mostrar `CORPUS_DISCOVERED=14/14`, cada caminho e hash, e `INPUTS_JSON=...`. Abra a lista/relatório e confirme que são os 14 vídeos-fontes pretendidos, sem saídas renderizadas ou duplicatas. A descoberta não encontrar exatamente 14 é uma condição de bloqueio; não processe a lista errada.
@@ -58,7 +58,7 @@ A saída deve mostrar `CORPUS_DISCOVERED=14/14`, cada caminho e hash, e `INPUTS_
 **2. Somente depois de confirmar os 14 caminhos**, execute o lote real substituindo o placeholder pelo caminho exato impresso em `INPUTS_JSON`:
 
 ```powershell
-.\\.venv\\Scripts\\python.exe -m ArmoredSpeech.corpus_e2e_runner --root . --inputs-json ".\\storage\\validation\\corpus14_inventory_<batch-id>\\inputs.json" --expected-count 14 --render
+.\.venv\Scripts\python.exe -m ArmoredSpeech.corpus_e2e_runner --root . --inputs-json ".\storage\validation\corpus14_inventory_<batch-id>\inputs.json" --expected-count 14 --render
 ```
 
 Esse segundo comando:
