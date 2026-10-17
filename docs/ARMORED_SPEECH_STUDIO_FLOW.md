@@ -9,7 +9,7 @@ Esta branch de laboratório implementa a separação de responsabilidades antes 
 - ArmoredSpeech é o proprietário do processamento e das decisões de áudio.
 - ArmoredStudio é o proprietário das decisões visuais e da edição do vídeo.
 - O renderizador final combina os grafos criados pelos dois domínios em **uma chamada FFmpeg audiovisual por vídeo**, com **um único crop de origem**.
-- O E2E anterior realizado pelo usuário confirmou a rota Melody e a organização de Storage, mas ocorreu com um contrato anterior. Ele não conta como validação do novo contrato v5.
+- O E2E real do item 5 em 17/10/2026 passou no contrato v5: rota Melody, pacote Speech validado, renderização final H.264/AAC e SHA-256 original preservado. Ainda faltam testes de classes sem RVC e a auditoria final.
 - A branch permanece experimental; o PR #5 está em draft e não foi mesclado. Nenhuma alteração foi aplicada ao repositório operacional ou às bases congeladas.
 
 ## 1. Responsabilidade exclusiva do ArmoredSpeech
@@ -104,18 +104,30 @@ Ele confere SHA-256, não sobrescreve destinos diferentes e **não apaga nem alt
 - Os arquivos do corpus, originais canônicos, modelos/índices e assets não são apagados por testes.
 - Nenhum teste publica no Hub.
 
-## 8. Evidência anterior versus validação pendente
+## 8. Evidência E2E v5 e próximos critérios
 
-Em 17/10/2026, o usuário executou no Windows o E2E anterior para `2/2_narração_pt.mp4`, confirmou `STUDIO_SPEECH_BATCH=SUCCESS`, `ORIGINALS_INTACT=True`, viu o MP4 final e confirmou que imagem/áudio estavam corretos. O SHA-256 do original foi confirmado. Essa execução usou contrato anterior (não v5).
+Em 17/10/2026, o usuário executou no Windows o runner real no contrato v5 para a fonte `source_teste`, mensagem `5`, usando o manifesto aprovado e um SQLite experimental isolado. Resultado observado:
 
-A CI do ramo v5 passou na compilação e em 78 testes automatizados antes da última adição das opções de renderização declaradas por Speech. O run que inclui esse último ajuste deve ser conferido antes de solicitar atualização local.
+- `STUDIO_SPEECH_BATCH=SUCCESS`, `MODE=REAL_STUDIO`, `ITEMS=1`, código de saída 0.
+- Pacote Speech validado com `voice.wav`, `_shared/effect.wav` e `package.json`; classe `PT_BR_NARRATION` e rota `RVC_MELODY`.
+- Vídeo final: `storage/Videos GRUPO_FONTE_teste/5/5_finaldomeulinknovo.mp4`, H.264 1080×1920, duração de 11,420 s; áudio AAC estéreo a 44.100 Hz, duração de 11,401 s.
+- O SHA-256 do original antes/depois foi `c489fcaae803f36407c82dde3b93ff68077001ef5607909081a2c6555bee15a1`, igual ao manifesto.
+- O usuário confirmou visualmente que a edição tratou e removeu a marca d'água Gemini neste vídeo.
+- Relatório: `storage/validation/speech-studio-v5-item5-20261017T185708Z.json`; log: `storage/validation/speech-studio-v5-item5-20261017T185708Z.log`.
 
-O próximo passo **não é rodar mais classes de áudio ainda**. Primeiro:
-1. confirmar CI verde do contrato v5 e do renderizador final;
-2. atualizar a cópia local com fast-forward seguro;
-3. copiar/verificar os ativos para Speech;
-4. executar E2E real com o contrato v5 e inspecionar a saída;
-5. depois testar ruído, silêncio, música, fala com música e vídeos com barras;
-6. somente após aprovação real auditar/remover qualquer módulo/ativo restante e limpar temporários.
+Esse teste valida o caminho real v5 de narração PT-BR/Melody nesse item, a saída audiovisual e a preservação do original. Não generaliza para todas as classes, modelos, vídeos ou detecções.
 
-O PR permanece em draft até os E2Es reais e a auditoria final passarem.
+## 9. Próximos passos seguros
+
+1. Atualizar o checkout local por fast-forward seguro para os commits de documentação e executar a suíte completa de testes.
+2. Executar E2E isolados para cada rota sem RVC (música, sem áudio, ruído, fala estrangeira e fala com música), um cenário por vez, sem compartilhar nem resetar o SQLite experimental existente.
+3. Auditar referências a motores RVC/áudio antigos e dependências antes de qualquer remoção; manter os ativos legados preservados durante essa auditoria.
+4. Atualizar evidências/CI e revisar o diff completo. A PR #5 permanece em draft e não mesclada até a auditoria e os testes adicionais passarem.
+
+## 10. Segurança e isolamento
+
+- Não tocar em `armoredcreator/armoredcreator`, `armoredcreator-test` nem `armoredcreator-testbase`.
+- Não abrir nem alterar `storage/database/armoredcreator.db`; usar somente o SQLite experimental declarado no comando.
+- Não publicar no Hub.
+- Não executar `git reset --hard`, `git clean` nem limpeza recursiva genérica.
+- Preservar vídeos originais, resultado aprovado, banco isolado, modelos/índices, assets e evidências.
