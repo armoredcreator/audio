@@ -354,11 +354,17 @@ def run_complete_batch(
                         f"Plano visual não confere com o handoff Speech para {identity}"
                     )
                 visual_plans[identity] = effective_plan
-                visual_analyses[identity] = replace(
-                    visual_analyses[identity],
-                    plan=effective_plan,
-                    validation=plan_validation,
-                )
+                visual_result = visual_analyses[identity]
+                if hasattr(visual_result, "__dataclass_fields__"):
+                    visual_analyses[identity] = replace(
+                        visual_result,
+                        plan=effective_plan,
+                        validation=plan_validation,
+                    )
+                else:
+                    # Lightweight test doubles use mutable SimpleNamespace objects.
+                    visual_result.plan = effective_plan
+                    visual_result.validation = plan_validation
 
             if hasattr(studio, "engine"):
                 studio.engine._audio_track_hash_cache = track_hash_cache
