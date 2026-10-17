@@ -164,6 +164,15 @@ def build_audio_filter_graph(
         "intro_duration_seconds": 2.0 if intro else 0.0,
         "composition_owner": "ArmoredSpeech",
         "effect_gain_policy": "loudnorm-I-12-LRA7-TP-1-then-volume-0.8",
+        # Speech authors these final audio encoding/input options. Studio only
+        # translates them into FFmpeg argv during the single final render.
+        "render_options": {
+            "codec": "aac",
+            "bitrate": "192k",
+            "sample_rate": 44100,
+            "channels": 2,
+            "effect_input_loop": True,
+        },
     }
 
 
