@@ -20,9 +20,9 @@ A regra de uma chamada FFmpeg vale para a renderização audiovisual final. Spee
 Na raiz do laboratório:
 
 ```powershell
-.\\.venv\\Scripts\\python.exe -m compileall -q ArmoredSpeech ArmoredStudio armored_core
-.\\.venv\\Scripts\\python.exe -m pytest -q
-.\\.venv\\Scripts\\python.exe -m ArmoredSpeech.studio_batch_runner --root . --manifest '.\\storage\\validation\\<manifesto-aprovado>\\manifest.json' --speech-database '.\\storage\\database\\<sqlite-isolado>.sqlite3'
+.\.venv\Scripts\python.exe -m compileall -q ArmoredSpeech ArmoredStudio armored_core
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ArmoredSpeech.studio_batch_runner --root . --manifest '.\storage\validation\<manifesto-aprovado>\manifest.json' --speech-database '.\storage\database\<sqlite-isolado>.sqlite3'
 ```
 
 O teste real não deve usar `--copy-only`. Escolha um manifesto já revisado e um banco de Speech experimental correspondente; não use `storage/database/armoredcreator.db`. Antes de executar, confira o HEAD, hashes dos originais, ativos necessários e inexistência do destino. Gere relatório/log novos por tentativa; não apague evidências nem sobrescreva resultados anteriores.
