@@ -318,6 +318,172 @@ def create_smoke_fixture(
     }
 
 
+
+def create_real_video_smoke_fixture(
+    root: Path,
+    speech_database: Path,
+    *,
+    source_video: Path,
+    test_source_id: str = "source1",
+) -> dict[str, str]:
+    """Analyze a real storage MP4 on a byte-identical copy and build an isolated v2 fixture.
+
+    The source video and source Speech database are read-only. A ModelProcessor
+    decision and WAV sidecar are created only for the copied MP4, and the READY
+    row is inserted only into a disposable SQLite backup.
+    """
+    from .contracts import AudioClass, SpeechStatus
+    from .model_processor import ModelProcessor
+    from .registry import record_result
+
+    root = Path(root).resolve(strict=True)
+    database = _validate_database_path(root, speech_database)
+    video = Path(source_video).expanduser()
+    if not video.is_absolute():
+        video = root / video
+    video = video.resolve(strict=True)
+    storage_root = (root / "storage").resolve(strict=True)
+    try:
+        relative_video = video.relative_to(storage_root)
+    except ValueError as exc:
+        raise SmokeFixtureError("Real source MP4 must be inside this lab's storage directory") from exc
+    if any(part.casefold() == "validation" for part in relative_video.parts):
+        raise SmokeFixtureError("Real source MP4 cannot be taken from storage/validation")
+    if not video.is_file() or video.suffix.casefold() != ".mp4":
+        raise SmokeFixtureError("Real source must be an existing MP4 inside storage")
+    if not isinstance(test_source_id, str) or not test_source_id.strip():
+        raise SmokeFixtureError("Test source id cannot be empty")
+
+    source_hash = sha256_file(video)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    suffix = uuid.uuid4().hex[:6]
+    safe_stem = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in video.stem)
+    test_item_id = f"v2smoke_real_{safe_stem}_{suffix}"
+    batch_id = f"speech-v2-real-smoke-{stamp}-{suffix}"
+    run_dir = root / "storage" / "validation" / batch_id
+    run_dir.mkdir(parents=True, exist_ok=False)
+
+    storage = Storage(root)
+    workspace = storage.source_workspace_root(test_source_id) / test_item_id
+    original_copy = workspace / f"{test_item_id}_finallinkoriginal.mp4"
+    wav_copy = workspace / f"{test_item_id}_finallinkoriginal.wav"
+    workspace_created = False
+
+    try:
+        workspace.mkdir(parents=True, exist_ok=False)
+        workspace_created = True
+        shutil.copy2(video, original_copy)
+        if sha256_file(original_copy).lower() != source_hash.lower():
+            raise SmokeFixtureError("Copied real MP4 SHA-256 differs from source")
+
+        # Use the real analyzer/converter; never synthesize a classification row.
+        processor = ModelProcessor()
+        decision = processor.analyze(original_copy)
+        if (
+            decision.audio_class is not AudioClass.PT_BR_NARRATION
+            or str(decision.language or "").strip().lower().replace("_", "-") not in {"pt", "pt-br"}
+            or not decision.speech_detected
+            or decision.music_detected is not False
+            or not decision.rvc_eligible
+        ):
+            raise SmokeFixtureError(
+                "Real source did not pass the clean Melody route: "
+                f"class={decision.audio_class.value}, language={decision.language!r}, "
+                f"speech_detected={decision.speech_detected}, "
+                f"music_detected={decision.music_detected}, "
+                f"rvc_eligible={decision.rvc_eligible}. No Studio run was prepared."
+            )
+
+        processor.prepare_wav(original_copy, wav_copy, decision)
+        if not wav_copy.is_file() or wav_copy.stat().st_size <= 44:
+            raise SmokeFixtureError("Real Speech processing did not produce a usable WAV sidecar")
+        try:
+            with wave.open(str(wav_copy), "rb") as audio:
+                if audio.getnchannels() < 1 or audio.getframerate() < 1 or audio.getnframes() < 1:
+                    raise SmokeFixtureError("Prepared real Speech WAV has no audio frames")
+                if not audio.readframes(1):
+                    raise SmokeFixtureError("Prepared real Speech WAV has no readable audio")
+        except (wave.Error, EOFError, OSError) as exc:
+            raise SmokeFixtureError(f"Prepared real Speech WAV is invalid: {exc}") from exc
+
+        if sha256_file(video).lower() != source_hash.lower():
+            raise SmokeFixtureError("The real source MP4 changed during Speech processing")
+        if sha256_file(original_copy).lower() != source_hash.lower():
+            raise SmokeFixtureError("The copied original MP4 changed during Speech processing")
+
+        database_copy = run_dir / "speech_experimental_real_smoke.sqlite3"
+        source_connection = _readonly_connection(database)
+        target_connection = sqlite3.connect(database_copy)
+        target_connection.row_factory = sqlite3.Row
+        try:
+            source_connection.backup(target_connection)
+            record_result(
+                target_connection,
+                source_id=test_source_id,
+                item_id=test_item_id,
+                video_path=original_copy,
+                wav_path=wav_copy,
+                decision=decision,
+                status=SpeechStatus.READY,
+                original_sha256_before=source_hash,
+                original_sha256_after=source_hash,
+            )
+        finally:
+            source_connection.close()
+            target_connection.close()
+
+        manifest = {
+            "schema_version": 1,
+            "phase": "ARMORED_SPEECH",
+            "phase_status": "COMPLETE",
+            "approved": True,
+            "allow_copy_only": False,
+            "batch_id": batch_id,
+            "expected_item_count": 1,
+            "items": [{
+                "content_id": f"{test_source_id}_{test_item_id}",
+                "telegram_message_id": test_item_id,
+                "source_id": test_source_id,
+                "state": "IA",
+                "workspace": str(workspace),
+                "original_path": str(original_copy),
+                "original_sha256": source_hash,
+                "affiliate_name": "speech-v2-real-smoke",
+                "affiliate_url": f"https://example.invalid/speech-v2-real-smoke/{test_item_id}",
+            }],
+        }
+        manifest_path = run_dir / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        if workspace_created:
+            shutil.rmtree(workspace, ignore_errors=True)
+        shutil.rmtree(run_dir, ignore_errors=True)
+        raise
+
+    return {
+        "batch_id": batch_id,
+        "manifest_path": str(manifest_path),
+        "speech_database_copy": str(database_copy),
+        "original_copy": str(original_copy),
+        "wav_copy": str(wav_copy),
+        "source_original": str(video),
+        "source_database": str(database),
+        "source_database_modified": "false",
+        "original_sha256": source_hash,
+        "audio_class": decision.audio_class.value,
+        "language": str(decision.language or ""),
+        "confidence": str(decision.confidence),
+        "rvc_eligible": str(decision.rvc_eligible).lower(),
+        "music_detected": str(decision.music_detected).lower(),
+        "workspace": str(workspace),
+        "test_source_id": test_source_id,
+        "test_item_id": test_item_id,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Prepare an isolated Speech v2 RVC smoke fixture without modifying the source DB or originals."
@@ -328,6 +494,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list-ready", action="store_true",
                         help="list existing READY clean-PT-BR rows eligible for Melody")
     parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument("--real-video", type=Path,
+                        help="analyze an existing MP4 under storage on a copy, then create a disposable v2 fixture")
+    parser.add_argument("--test-source-id", default="source1",
+                        help="logical source id for --real-video (default: source1)")
     parser.add_argument("--source-id", help="exact source_id from armored_speech_results")
     parser.add_argument("--item-id", help="exact item_id from armored_speech_results")
     args = parser.parse_args(argv)
@@ -335,6 +505,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         root = Path(args.root).expanduser().resolve(strict=True)
         database = _validate_database_path(root, args.speech_database)
+        if args.real_video:
+            if args.list_ready or args.source_id or args.item_id:
+                raise SmokeFixtureError("--real-video cannot be combined with --list-ready, --source-id, or --item-id")
+            fixture = create_real_video_smoke_fixture(
+                root, database, source_video=args.real_video, test_source_id=args.test_source_id
+            )
+            print("SPEECH_V2_REAL_VIDEO_FIXTURE=READY")
+            for key, value in fixture.items():
+                print(f"{key.upper()}={value}")
+            print("NEXT_COMMAND=PowerShell: run ArmoredSpeech.studio_batch_runner with MANIFEST_PATH and SPEECH_DATABASE_COPY")
+            return 0
         if args.list_ready or (not args.source_id and not args.item_id):
             candidates = list_ready_candidates(root, database, limit=args.limit)
             if not candidates:
