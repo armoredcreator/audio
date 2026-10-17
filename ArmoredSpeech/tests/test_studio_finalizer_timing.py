@@ -101,6 +101,13 @@ def test_final_output_combines_speech_audio_and_visual_graphs_in_one_ffmpeg_call
         video, voice, effect, banner, output,
         audio_filter_graph=audio_graph,
         audio_output_label="[main_a]",
+        audio_render_options={
+            "codec": "aac",
+            "bitrate": "192k",
+            "sample_rate": 44100,
+            "channels": 2,
+            "effect_input_loop": True,
+        },
         position="final", intro=True, plan=plan,
     )
 
@@ -146,6 +153,13 @@ def test_no_intro_render_still_uses_one_ffmpeg_invocation_and_no_banner(tmp_path
         video, voice, effect, tmp_path / "unused-banner.png", output,
         audio_filter_graph=audio_graph,
         audio_output_label="[main_a]",
+        audio_render_options={
+            "codec": "aac",
+            "bitrate": "192k",
+            "sample_rate": 44100,
+            "channels": 2,
+            "effect_input_loop": True,
+        },
         position="final", intro=False, plan={"video_start": 0.0},
     )
     command = captured["command"]
