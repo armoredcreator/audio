@@ -236,7 +236,7 @@ def test_real_video_smoke_fixture_uses_model_processor_and_only_mutates_cloned_d
                    original_sha256_after
             FROM armored_speech_results WHERE source_id=? AND item_id=?
             """,
-            ("source1", fixture["test_item_id"]),
+            ("source_teste", fixture["test_item_id"]),
         ).fetchone()
     assert real_row == (
         str(copied_original), str(copied_wav), "PT_BR_NARRATION", "pt-br",
