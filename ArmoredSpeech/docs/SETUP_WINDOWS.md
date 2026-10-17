@@ -1,36 +1,41 @@
-# ArmoredSpeech — ambiente Python compartilhado no Windows
+# ArmoredSpeech — ambiente Python unificado no Windows
 
-O AudioLab utiliza um único ambiente virtual na raiz: `.venv`. ArmoredSpeech, ArmoredStudio e, após a migração validada, RVC devem reutilizar esse interpretador sempre que as versões das dependências forem compatíveis.
+O AudioLab possui **um único ambiente operacional** na raiz do repositório: `.venv`. ArmoredSpeech, ArmoredStudio e RVC Melody devem usar esse interpretador.
 
-## Preparar ou atualizar o ambiente
+## Preparar o ambiente
 
-Execute na raiz do repositório:
+Execute na raiz:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 .\ArmoredSpeech\setup_runtime.ps1
 ```
 
-O script é um ponto de entrada compatível, mas instala as dependências no `.venv` da raiz. Ele não cria nem instala pacotes em `ArmoredSpeech/runtime/venv`. Para instalar também a separação vocal opcional, execute ` .\ArmoredSpeech\setup_runtime.ps1 -InstallSeparation`; esse pacote pode exigir espaço e tempo de instalação consideráveis.
+O script instala/reafirma as dependências do Speech no ambiente compartilhado. Não cria um ambiente virtual próprio do Speech. Se instalar dependências novas de RVC, mantenha as versões existentes congeladas e confira o inventário antes/depois.
 
-As dependências de análise ficam declaradas em `ArmoredSpeech/requirements-analysis.txt`, mas são instaladas no ambiente compartilhado. O NumPy está fixado em `1.23.5`, que passou os cinco casos de referência reais disponíveis nesta etapa; uma validação completa do corpus continua necessária.
-
-## Validar o corpus de áudio
+## Validar o Speech
 
 ```powershell
-$SpeechPython = ".\.venv\Scripts\python.exe"
-& $SpeechPython .\ArmoredSpeech\tests\validate_full_corpus.py
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe .\ArmoredSpeech\tests\validate_full_corpus.py
 ```
 
-O validador procura vídeos sob `storage` na raiz do laboratório por padrão. Se necessário, defina `ARMORED_AUDIO_VALIDATION_VIDEO_ROOT` explicitamente.
+O validador procura vídeos em `storage` por padrão. Se necessário, defina `ARMORED_AUDIO_VALIDATION_VIDEO_ROOT`.
 
-## Estado e limites
+Na validação local de 16/10/2026, a suíte teve **45 aprovados e 1 ignorado** e a validação de áudio real passou em **5/5 casos**. Os hashes dos vídeos originais permaneceram inalterados. Ainda é necessário executar a validação completa do corpus para afirmar cobertura total.
 
-- Cinco arquivos de referência passaram com NumPy 1.23.5 e os hashes dos MP4s permaneceram inalterados.
-- Os outros arquivos continuam sujeitos a revisão; não assumir que todo o corpus está aprovado.
-- Testes de contrato sintéticos não substituem renderização real pelo ArmoredStudio.
-- Não executar Hub ou publicação nessa validação.
+## Validar RVC Melody
 
-## Ambiente legado
+```powershell
+.\.venv\Scripts\python.exe .\ArmoredStudio\processing\rvc.py .\audio_original.wav .\storage\validation\melody_output.wav melody
+```
 
-`ArmoredSpeech/runtime/venv` é legado. O setup atual não o utiliza nem o remove automaticamente. Depois de confirmar que todos os comandos locais usam `.venv`, esse ambiente duplicado poderá ser removido manualmente. Não apague modelos, vídeos, resultados, assets ou bancos locais.
+Use sempre um caminho de saída que ainda não exista e preserve os originais.
+
+A conversão de amostra foi executada e escutada/aprovada em 16/10/2026 com o Python da raiz, modelo Melody e índice originais preservados.
+
+## Ambiente antigo
+
+O ambiente independente de RVC `ArmoredStudio/runtime/rvc/env311` não é mais necessário para execução. O código operacional resolve somente `.venv` na raiz. Sua pasta local pode ser apagada após atualizar o checkout para o commit que remove os últimos fallbacks, confirmando que `.venv` existe e repetindo o smoke test de imports.
+
+Não apague modelos/índices Melody, vídeos, WAVs originais, assets, credenciais ou resultados de validação.
