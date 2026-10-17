@@ -17,7 +17,7 @@ class Item:
 
 
 def test_batch_preflights_all_directives_and_inputs_before_first_package_build(tmp_path, monkeypatch):
-    effect = tmp_path / "ArmoredStudio" / "assets" / "efeitosonoro.wav"
+    effect = tmp_path / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
     effect.parent.mkdir(parents=True, exist_ok=True)
     effect.write_bytes(b"synthetic effect placeholder" * 8)
     items = []
