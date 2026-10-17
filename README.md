@@ -22,7 +22,7 @@ A arquitetura, o fluxo ponta a ponta, as responsabilidades, o contrato, as evid�
 
 - O fluxo antigo do item 2 foi renderizado e aprovado pelo usuário; isso não prova o novo contrato v4.
 - A branch de laboratório mudou para contrato v4: Speech produz o AAC/M4A final; Studio não recebe faixas separadas nem grafo de áudio.
-- CI mais recente confirmado: compilação e 79 testes automatizados passaram: https://github.com/armoredcreator/audio/actions/runs/39048256296.
+- CI mais recente confirmado: compilação e 79 testes automatizados passaram: https://github.com/armoredcreator/audio/actions/runs/39048512818.
 - Pendente: executar o E2E real Windows com os ativos migrados para Speech, inspecionar o resultado e validar as rotas não-RVC antes de remover os ativos legados de Studio ou mesclar a PR.
 
 ## Comandos
