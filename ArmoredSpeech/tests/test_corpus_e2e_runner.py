@@ -57,8 +57,8 @@ def test_list_only_writes_an_explicit_input_manifest_without_processing(tmp_path
     assert report["status"] == "INPUTS_INVENTORIED"
     assert report["discovered_count"] == 2
     assert json.loads(input_manifest.read_text(encoding="utf-8")) == [
-        first.relative_to(tmp_path).as_posix(),
         second.relative_to(tmp_path).as_posix(),
+        first.relative_to(tmp_path).as_posix(),
     ]
     assert not (storage / "database" / "armored_speech_corpus2_inventory-test.sqlite3").exists()
     assert not (storage / "Videos GRUPO_FONTE_corpus2_inventory-test").exists()
