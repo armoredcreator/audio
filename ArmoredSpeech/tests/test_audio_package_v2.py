@@ -81,12 +81,19 @@ def _package(tmp_path: Path, **overrides):
     return original, voice, effect, payload
 
 
-def _validate(root: Path, original: Path, payload: dict):
+def _validate(
+    root: Path,
+    original: Path,
+    payload: dict,
+    *,
+    expected_source_id: str = "source-1",
+    expected_item_id: str = "telegram-1",
+):
     return validate_audio_package(
         payload,
         workspace_root=root,
-        expected_source_id="source-1",
-        expected_item_id="telegram-1",
+        expected_source_id=expected_source_id,
+        expected_item_id=expected_item_id,
         expected_original_path=original,
     )
 
@@ -255,7 +262,9 @@ def test_audio_package_builder_routes_unapproved_audio_to_silence_plus_effect(tm
     assert package["route"] == "EFFECT_ONLY"
     assert package["rvc_model"] is None
     assert package["rvc_eligible"] is False
-    assert _validate(tmp_path, original, package).route == "EFFECT_ONLY"
+    assert _validate(
+        tmp_path, original, package, expected_item_id="telegram-2"
+    ).route == "EFFECT_ONLY"
 
 
 def test_audio_package_builder_fails_closed_when_music_evidence_is_unknown(tmp_path):
