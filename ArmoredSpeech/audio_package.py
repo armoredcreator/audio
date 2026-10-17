@@ -96,6 +96,23 @@ def _wave_metadata(path: Path) -> WaveMetadata:
         raise AudioPackageError(f"Expected a readable PCM WAV: {path}") from exc
 
 
+def _file_stat_fingerprint(path: Path) -> dict[str, int]:
+    stat = Path(path).stat()
+    return {
+        "size": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+        "inode": int(getattr(stat, "st_ino", 0)),
+    }
+
+
+def _stat_matches(path: Path, expected: dict[str, Any], prefix: str) -> bool:
+    actual = _file_stat_fingerprint(path)
+    return all(
+        actual[field] == expected.get(f"{prefix}_{field}")
+        for field in ("size", "mtime_ns", "inode")
+    )
+
+
 def _media_duration(path: Path, ffprobe: str) -> float:
     command = [
         ffprobe, "-v", "error", "-show_entries", "format=duration",
@@ -223,6 +240,9 @@ def preflight_audio_package(
     index_sha256 = None
     model_path = None
     index_path = None
+    rvc_python_path = None
+    model_stat: dict[str, int] = {}
+    index_stat: dict[str, int] = {}
     if rvc_allowed:
         if voice.strip().lower() != "melody":
             raise AudioPackageError("Only the validated Melody model is approved for this route")
@@ -233,9 +253,11 @@ def preflight_audio_package(
             model, index = localizar_modelo("melody")
             model_path = str(model.resolve(strict=True))
             model_sha256 = sha256_file(model)
+            model_stat = _file_stat_fingerprint(model)
             if index is not None:
                 index_path = str(index.resolve(strict=True))
                 index_sha256 = sha256_file(index)
+                index_stat = _file_stat_fingerprint(index)
         else:
             # This fingerprint was created by the first eligible item in the
             # same whole-batch preflight; don't hash the same large model/index
@@ -249,6 +271,15 @@ def preflight_audio_package(
             rvc_python_path = str(Path(resolver_rvc_python()).resolve(strict=True))
             if rvc_python_path != rvc_asset_fingerprint.get("rvc_python_path"):
                 raise AudioPackageError("RVC Python environment changed during batch preflight")
+            if not _stat_matches(Path(model_path), rvc_asset_fingerprint, "rvc_model"):
+                raise AudioPackageError("Melody model file changed during batch preflight")
+            if index_path is not None and not _stat_matches(
+                Path(index_path), rvc_asset_fingerprint, "rvc_index"
+            ):
+                raise AudioPackageError("Melody index changed during batch preflight")
+            model_stat = _file_stat_fingerprint(Path(model_path))
+            if index_path is not None:
+                index_stat = _file_stat_fingerprint(Path(index_path))
             try:
                 Path(model_path).relative_to(Path(MODELS_DIR).resolve(strict=True))
             except ValueError as exc:
@@ -272,8 +303,14 @@ def preflight_audio_package(
         "rvc_python_path": rvc_python_path if rvc_allowed else None,
         "rvc_model_path": model_path,
         "rvc_model_sha256": model_sha256,
+        "rvc_model_size": model_stat.get("size"),
+        "rvc_model_mtime_ns": model_stat.get("mtime_ns"),
+        "rvc_model_inode": model_stat.get("inode"),
         "rvc_index_path": index_path,
         "rvc_index_sha256": index_sha256,
+        "rvc_index_size": index_stat.get("size"),
+        "rvc_index_mtime_ns": index_stat.get("mtime_ns"),
+        "rvc_index_inode": index_stat.get("inode"),
     }
 
 
@@ -424,18 +461,22 @@ def prepare_audio_package(
 
             converter_voz(rvc_input, rvc_raw, voice, item_id=item.content_id)
             model_after, index_after = localizar_modelo(voice)
-            if (
-                str(model_after.resolve(strict=True)) != preflight.get("rvc_model_path")
-                or sha256_file(model_after) != preflight.get("rvc_model_sha256")
-            ):
-                raise AudioPackageError("RVC model changed during conversion")
+            if str(model_after.resolve(strict=True)) != preflight.get("rvc_model_path"):
+                raise AudioPackageError("RVC model path changed during conversion")
+            if preflight.get("rvc_model_size") is not None:
+                if not _stat_matches(model_after, preflight, "rvc_model"):
+                    raise AudioPackageError("RVC model file changed during conversion")
+            elif sha256_file(model_after) != preflight.get("rvc_model_sha256"):
+                raise AudioPackageError("RVC model hash changed during conversion")
+
             if preflight.get("rvc_index_path") is not None:
-                if (
-                    index_after is None
-                    or str(index_after.resolve(strict=True)) != preflight.get("rvc_index_path")
-                    or sha256_file(index_after) != preflight.get("rvc_index_sha256")
-                ):
-                    raise AudioPackageError("RVC index changed during conversion")
+                if index_after is None or str(index_after.resolve(strict=True)) != preflight.get("rvc_index_path"):
+                    raise AudioPackageError("RVC index path changed during conversion")
+                if preflight.get("rvc_index_size") is not None:
+                    if not _stat_matches(index_after, preflight, "rvc_index"):
+                        raise AudioPackageError("RVC index changed during conversion")
+                elif sha256_file(index_after) != preflight.get("rvc_index_sha256"):
+                    raise AudioPackageError("RVC index hash changed during conversion")
             elif index_after is not None:
                 raise AudioPackageError("RVC index appeared/changed after batch preflight")
             _run([
