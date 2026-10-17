@@ -368,6 +368,7 @@ def create_real_video_smoke_fixture(
     original_copy = workspace / f"{test_item_id}_finallinkoriginal.mp4"
     wav_copy = workspace / f"{test_item_id}_finallinkoriginal.wav"
     workspace_created = False
+    database_path: Path | None = None
 
     try:
         workspace.mkdir(parents=True, exist_ok=False)
@@ -460,6 +461,8 @@ def create_real_video_smoke_fixture(
     except Exception:
         if workspace_created:
             shutil.rmtree(workspace, ignore_errors=True)
+        if database_path is not None:
+            database_path.unlink(missing_ok=True)
         shutil.rmtree(run_dir, ignore_errors=True)
         raise
 
