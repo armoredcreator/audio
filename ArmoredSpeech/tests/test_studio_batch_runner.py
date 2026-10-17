@@ -55,6 +55,10 @@ def _write_wav(path: Path) -> None:
 
 
 def _fixture(root: Path, *, item_count: int = 2):
+    speech_assets = root / "ArmoredSpeech" / "assets"
+    speech_assets.mkdir(parents=True, exist_ok=True)
+    (speech_assets / "efeitosonoro.wav").write_bytes(b"synthetic lab effect placeholder")
+
     items = []
     rows = []
     for number in range(1, item_count + 1):
@@ -162,7 +166,7 @@ def test_runner_rejects_batch_without_explicit_completion(tmp_path):
         )
 
 
-def test_runner_preflights_entire_speech_batch_before_first_studio_call(tmp_path):
+def test_copy_only_visual_mode_does_not_consume_speech_audio_registry(tmp_path):
     manifest_path, database, manifest = _fixture(tmp_path, item_count=2)
     with sqlite3.connect(database) as con:
         con.execute(
@@ -171,18 +175,26 @@ def test_runner_preflights_entire_speech_batch_before_first_studio_call(tmp_path
         )
         con.commit()
 
-    with pytest.raises(Exception, match="No Speech decision"):
-        run_complete_batch(
-            root=tmp_path,
-            manifest_path=manifest_path,
-            speech_database=database,
-            copy_only=True,
-        )
+    report = run_complete_batch(
+        root=tmp_path,
+        manifest_path=manifest_path,
+        speech_database=database,
+        copy_only=True,
+    )
 
+    assert report["status"] == "SUCCESS"
+    assert report["mode"] == "COPY_ONLY_TEST"
+    assert len(report["processed"]) == 2
     for item in manifest["items"]:
-        output = Path(item["workspace"]) / f"{item['telegram_message_id']}_demo-{'1' if item['telegram_message_id'].endswith('1') else '2'}.mp4"
-        assert not output.exists()
-
+        source = Path(item["original_path"])
+        output = Path(runner_module.Storage(tmp_path).result(
+            item["content_id"],
+            item.get("affiliate_url"),
+            item.get("affiliate_name"),
+            source_id=item["source_id"],
+        ))
+        assert output.is_file()
+        assert output.read_bytes() == source.read_bytes()
 
 def test_runner_rejects_manifest_item_count_mismatch(tmp_path):
     manifest_path, database, manifest = _fixture(tmp_path, item_count=1)
