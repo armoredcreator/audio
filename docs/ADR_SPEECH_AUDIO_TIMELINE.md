@@ -1,6 +1,6 @@
 # Decisão técnica — separação real ArmoredSpeech → ArmoredStudio
 
-**Status:** v3 implementado na branch isolada; testes automatizados verdes no commit-base e aguardando revalidação após os últimos ajustes. O E2E histórico aprovado pelo usuário usou o contrato antigo e não substitui o E2E real do contrato v3.  
+**Status:** v3 implementado na branch isolada; testes automatizados verdes no commit-base e aguardando revalidação após os últimos ajustes de propriedade de ativos. O E2E histórico aprovado pelo usuário usou o contrato antigo e não substitui o E2E real do contrato v3.  
 **Branch:** `design/speech-studio-audio-timeline-20261017`  
 **Escopo:** somente `armoredcreator/audio`; sem integração no repositório operacional, sem reset de banco operacional e sem publicação no Hub.
 
@@ -67,5 +67,5 @@ O usuário aprovou em 17/10/2026 um E2E antigo do item 2 (RVC Melody, hash origi
 
 ## 6. Testes automatizados
 
-O último CI confirmado para o commit-base executou `compileall` e **80 testes passaram**: https://github.com/armoredcreator/audio/actions/runs/39040124557. Mudanças posteriores (caminho canônico RVC e fixtures com ativo Speech) exigem que a execução de CI mais recente seja conferida antes de tratar a branch como novamente verde.
+O último CI confirmado para o commit-base executou `compileall` e **81 testes passaram em 0,80 s**: https://github.com/armoredcreator/audio/actions/runs/39044408297. Mudanças posteriores (caminho canônico RVC e fixtures com ativo Speech) exigem que a execução de CI mais recente seja conferida antes de tratar a branch como novamente verde.
 
