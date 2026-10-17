@@ -81,7 +81,7 @@ def _package(tmp_path: Path, **overrides):
         "audio_timeline": __import__(
             "ArmoredSpeech.timeline_mixer", fromlist=["build_audio_filter_graph"]
         ).build_audio_filter_graph(
-            visual_plan={"audio_start": 0.0}, intro=True, intro_position="final"
+            visual_plan={"video_start": 0.0}, audio_start_seconds=0.0, intro=True, intro_position="final"
         ),
         "prepared_video_duration_seconds": 1.0,
     }
