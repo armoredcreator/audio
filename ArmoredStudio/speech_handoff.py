@@ -316,6 +316,13 @@ def validate_audio_package(
     )
     if effect_data.get("gain_policy") != "loudnorm-I-12-LRA7-TP-1-then-volume-0.8":
         raise SpeechHandoffError("Effect gain policy is absent or not approved")
+    effect_source_hash = effect_data.get("source_sha256")
+    if not isinstance(effect_source_hash, str) or len(effect_source_hash) != 64:
+        raise SpeechHandoffError("Effect source SHA-256 metadata missing or invalid")
+    try:
+        int(effect_source_hash, 16)
+    except ValueError as exc:
+        raise SpeechHandoffError("Effect source SHA-256 metadata missing or invalid") from exc
 
     return ValidatedAudioPackage(
         source_id=expected_source_id,
