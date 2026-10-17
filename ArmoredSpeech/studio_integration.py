@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-"""Prepare Speech-owned audio and final AAC/M4A artifacts for a complete batch.
+"""Prepare Speech-owned audio tracks and contract v5 packages for a complete batch.
 
 This module does not call Studio or render video. It reads Speech-owned SQLite
-decisions, prepares/validates audio internally, and returns only final audio
-artifacts for the Studio visual renderer.
+decisions, prepares/validates audio inputs, and returns tracks plus the audio
+filter graph for Studio's single final audiovisual render.
 """
 
 from pathlib import Path
