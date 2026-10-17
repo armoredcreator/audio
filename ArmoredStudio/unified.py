@@ -138,7 +138,7 @@ class UnifiedStudio:
             raise RuntimeError("ArmoredSpeech READY handoff obrigatório; processamento bloqueado")
         if speech_payload is not None:
             try:
-                if speech_payload.get("contract_version") == 2:
+                if isinstance(speech_payload, dict) and speech_payload.get("contract_version") == 2:
                     speech_audio_package = validate_audio_package(
                         speech_payload,
                         workspace_root=self.root,
