@@ -163,7 +163,7 @@ def test_smoke_fixture_clones_database_and_media_without_mutating_sources(tmp_pa
 
 def test_real_video_smoke_fixture_uses_model_processor_and_only_mutates_cloned_db(tmp_path, monkeypatch):
     database, registered_original, registered_wav, _ = _fixture(tmp_path)
-    source_video = tmp_path / "storage" / "Videos GRUPO_FONTE_teste" / "2_narração_pt.mp4"
+    source_video = tmp_path / "storage" / "Videos GRUPO_FONTE_teste" / "2" / "2_narração_pt.mp4"
     source_video.parent.mkdir(parents=True, exist_ok=True)
     source_video.write_bytes(b"byte-identical real-video stand-in")
     source_bytes = source_video.read_bytes()
@@ -214,9 +214,16 @@ def test_real_video_smoke_fixture_uses_model_processor_and_only_mutates_cloned_d
     assert _sha(copied_original) == source_hash
     assert copied_wav.is_file()
     assert copied_original.parent == copied_wav.parent
+    assert copied_original.parent == source_video.parent
     assert copied_original.parent.parent == tmp_path / "storage" / "Videos GRUPO_FONTE_teste"
+    assert fixture["test_item_id"] == "2"
+    assert copied_original.name == "2_finallinkoriginal.mp4"
+    assert copied_wav.name == "2_finallinkoriginal.wav"
     assert manifest["items"][0]["source_id"] == "source_teste"
-    assert manifest["items"][0]["content_id"].startswith("source_teste_")
+    assert manifest["items"][0]["content_id"] == "source_teste_2"
+    assert manifest["items"][0]["telegram_message_id"] == "2"
+    assert manifest["items"][0]["workspace"] == str(source_video.parent)
+    assert manifest["items"][0]["affiliate_url"].endswith("/finaldomeulinknovo")
     assert manifest["items"][0]["original_path"] == str(copied_original)
 
     with sqlite3.connect(database) as connection:
@@ -269,7 +276,7 @@ def test_named_test_source_uses_original_source_workspace_pattern(tmp_path):
 
 def test_real_video_smoke_fixture_allows_resolved_non_melody_route(tmp_path, monkeypatch):
     database, _, _, _ = _fixture(tmp_path)
-    source_video = tmp_path / "storage" / "Videos GRUPO_FONTE_teste" / "1_ruido.mp4"
+    source_video = tmp_path / "storage" / "Videos GRUPO_FONTE_teste" / "1" / "1_ruido.mp4"
     source_video.parent.mkdir(parents=True, exist_ok=True)
     source_video.write_bytes(b"real-video stand-in for resolved noise route")
     source_hash = _sha(source_video)
@@ -300,6 +307,9 @@ def test_real_video_smoke_fixture_allows_resolved_non_melody_route(tmp_path, mon
     assert fixture["audio_class"] == "NOISE"
     assert fixture["rvc_eligible"] == "false"
     assert fixture["music_detected"] == "false"
+    assert fixture["test_item_id"] == "1"
+    assert Path(fixture["original_copy"]).name == "1_finallinkoriginal.mp4"
+    assert Path(fixture["original_copy"]).parent == source_video.parent
     assert Path(fixture["original_copy"]).parent.parent == (
         tmp_path / "storage" / "Videos GRUPO_FONTE_teste"
     )
