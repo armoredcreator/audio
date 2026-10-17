@@ -176,6 +176,63 @@ def _validate_v1_directive(payload: dict[str, Any], *, root: Path, item) -> tupl
     return original, source_wav, actual, rvc_allowed
 
 
+def preflight_audio_package(
+    payload: dict[str, Any],
+    item,
+    *,
+    workspace_root: Path,
+    effect_source_path: Path,
+    voice: str = "melody",
+) -> dict[str, Any]:
+    """Validate every input and required RVC asset before spending CPU on a batch."""
+    root = Path(workspace_root).resolve(strict=True)
+    effect_source = Path(effect_source_path).expanduser().resolve(strict=True)
+    if not effect_source.is_file() or effect_source.stat().st_size <= 44:
+        raise AudioPackageError("Project sound-effect asset is missing or empty")
+    if not _inside(effect_source, root):
+        raise AudioPackageError("Project sound-effect asset must be inside the lab root")
+
+    original, source_wav, original_hash, rvc_allowed = _validate_v1_directive(
+        payload, root=root, item=item
+    )
+    ffmpeg = _tool("ffmpeg", "ARMORED_FFMPEG")
+    ffprobe = _tool("ffprobe", "ARMORED_FFPROBE")
+    video_duration = _media_duration(original, ffprobe)
+    effect_source_hash = sha256_file(effect_source)
+
+    model_sha256 = None
+    index_sha256 = None
+    model_path = None
+    index_path = None
+    if rvc_allowed:
+        if voice.strip().lower() != "melody":
+            raise AudioPackageError("Only the validated Melody model is approved for this route")
+        from armored_core.audio.rvc import localizar_modelo, resolver_rvc_python
+
+        resolver_rvc_python()
+        model, index = localizar_modelo("melody")
+        model_path = str(model.resolve(strict=True))
+        model_sha256 = sha256_file(model)
+        if index is not None:
+            index_path = str(index.resolve(strict=True))
+            index_sha256 = sha256_file(index)
+
+    return {
+        "original_sha256": original_hash,
+        "source_wav_sha256": sha256_file(source_wav),
+        "effect_source_path": str(effect_source),
+        "effect_source_sha256": effect_source_hash,
+        "rvc_allowed": rvc_allowed,
+        "video_duration_seconds": video_duration,
+        "ffmpeg": ffmpeg,
+        "ffprobe": ffprobe,
+        "rvc_model_path": model_path,
+        "rvc_model_sha256": model_sha256,
+        "rvc_index_path": index_path,
+        "rvc_index_sha256": index_sha256,
+    }
+
+
 def prepare_audio_package(
     payload: dict[str, Any],
     item,
@@ -184,6 +241,7 @@ def prepare_audio_package(
     effect_source_path: Path,
     output_dir: Path,
     voice: str = "melody",
+    preflight: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Prepare and validate all audio tracks before the Studio phase begins.
 
@@ -205,18 +263,28 @@ def prepare_audio_package(
     if final_dir.exists():
         raise AudioPackageError(f"Package output already exists: {final_dir}")
     effect_source = Path(effect_source_path).resolve(strict=True)
-    if not effect_source.is_file() or effect_source.stat().st_size <= 44:
-        raise AudioPackageError("Project sound-effect asset is missing or empty")
-    if not _inside(effect_source, root):
-        raise AudioPackageError("Project sound-effect asset must be inside the lab root")
+    if preflight is None:
+        preflight = preflight_audio_package(
+            payload, item, workspace_root=root, effect_source_path=effect_source, voice=voice
+        )
+    if str(effect_source) != preflight.get("effect_source_path"):
+        raise AudioPackageError("Effect source differs from the batch preflight")
+    if sha256_file(effect_source) != preflight.get("effect_source_sha256"):
+        raise AudioPackageError("Effect asset changed after batch preflight")
 
     original, source_wav, original_hash, rvc_allowed = _validate_v1_directive(
         payload, root=root, item=item
     )
-    ffmpeg = _tool("ffmpeg", "ARMORED_FFMPEG")
-    ffprobe = _tool("ffprobe", "ARMORED_FFPROBE")
-    video_duration = _media_duration(original, ffprobe)
-    effect_source_hash = sha256_file(effect_source)
+    if original_hash != preflight.get("original_sha256"):
+        raise AudioPackageError("Original differs from the batch preflight")
+    if sha256_file(source_wav) != preflight.get("source_wav_sha256"):
+        raise AudioPackageError("Speech reference WAV changed after batch preflight")
+    if rvc_allowed != bool(preflight.get("rvc_allowed")):
+        raise AudioPackageError("RVC route differs from the batch preflight")
+    ffmpeg = str(preflight["ffmpeg"])
+    ffprobe = str(preflight["ffprobe"])
+    video_duration = float(preflight["video_duration_seconds"])
+    effect_source_hash = str(preflight["effect_source_sha256"])
 
     final_dir.parent.mkdir(parents=True, exist_ok=True)
     stage = final_dir.with_name(f".{final_dir.name}.tmp-{uuid.uuid4().hex}")
@@ -235,9 +303,24 @@ def prepare_audio_package(
                 ffmpeg, "-nostdin", "-y", "-i", str(source_wav), "-vn",
                 "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le", str(rvc_input),
             ], "RVC_INPUT_PREPARATION_FAILED")
-            from armored_core.audio.rvc import converter_voz
+            from armored_core.audio.rvc import converter_voz, localizar_modelo
 
             converter_voz(rvc_input, rvc_raw, voice, item_id=item.content_id)
+            model_after, index_after = localizar_modelo(voice)
+            if (
+                str(model_after.resolve(strict=True)) != preflight.get("rvc_model_path")
+                or sha256_file(model_after) != preflight.get("rvc_model_sha256")
+            ):
+                raise AudioPackageError("RVC model changed during conversion")
+            if preflight.get("rvc_index_path") is not None:
+                if (
+                    index_after is None
+                    or str(index_after.resolve(strict=True)) != preflight.get("rvc_index_path")
+                    or sha256_file(index_after) != preflight.get("rvc_index_sha256")
+                ):
+                    raise AudioPackageError("RVC index changed during conversion")
+            elif index_after is not None:
+                raise AudioPackageError("RVC index appeared/changed after batch preflight")
             _run([
                 ffmpeg, "-nostdin", "-y", "-i", str(rvc_raw), "-vn",
                 "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le", str(voice_output),
@@ -288,6 +371,8 @@ def prepare_audio_package(
             "route": route,
             "rvc_eligible": rvc_allowed,
             "rvc_model": rvc_model,
+            "rvc_model_sha256": preflight.get("rvc_model_sha256") if rvc_allowed else None,
+            "rvc_index_sha256": preflight.get("rvc_index_sha256") if rvc_allowed else None,
             "voice_track": {
                 "path": str(final_dir / "voice.wav"),
                 "sha256": sha256_file(voice_output),
