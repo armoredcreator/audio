@@ -75,7 +75,9 @@ def _read_explicit_inputs(root: Path, manifest_path: Path) -> list[Path]:
         paths.append(path)
     if len(set(paths)) != len(paths):
         raise CorpusBatchError("O manifesto de entradas contém caminhos duplicados")
-    return sorted(paths, key=lambda path: str(path).casefold())
+    # The reviewed input manifest is ordered intentionally (e.g. cases 1..14).
+    # Preserve that order so generated test identities and reports stay aligned.
+    return paths
 
 
 def _is_generated_or_evidence(path: Path, root: Path, scan_root: Path) -> bool:
