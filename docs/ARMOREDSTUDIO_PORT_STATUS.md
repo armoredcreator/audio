@@ -40,7 +40,7 @@ Os assets oficiais do Studio e os arquivos/modelo/índice do ambiente RVC serão
 
 ## Required next steps
 1. The user transfers the official Studio assets and RVC runtime/model/index into the isolated lab; confirm expected paths and hashes without committing private/binary assets.
-2. Pull/checkout this feature branch in the Windows lab and run `\.venv\Scripts\python.exe -m pytest -q` plus `-m ArmoredSpeech.studio_batch_runner --help`; confirm the local environment passes before creating a reviewed manifest and experimental Speech SQLite.
+2. Pull/checkout this feature branch in the Windows lab and run `.\.venv\Scripts\python.exe -m pytest -q` and `.\.venv\Scripts\python.exe -m ArmoredSpeech.studio_batch_runner --help`; confirm the local environment passes before creating a reviewed manifest and experimental Speech SQLite.
 3. Run a read-only inventory/preflight on the local corpus, verify the exact official Studio assets, FFmpeg and RVC model/index without uploading private or binary resources.
 4. Only then run a small approved real-render subset in an isolated workspace; record pass/fail per case and preserve original hashes. No Telegram, Shopee, Hub or publication in this phase.
 5. Only after these checks and user review, consider promotion. The production/reference repositories remain untouched.
