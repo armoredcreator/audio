@@ -42,7 +42,7 @@ def _package(tmp_path: Path, **overrides):
     _write_wav(effect)
     digest = _sha(original)
     payload = {
-        "contract_version": 2,
+        "contract_version": 3,
         "status": "READY",
         "source_id": "source-1",
         "item_id": "telegram-1",
@@ -60,23 +60,21 @@ def _package(tmp_path: Path, **overrides):
         "rvc_model": "melody",
         "rvc_model_sha256": "c" * 64,
         "rvc_index_sha256": "d" * 64,
-        "voice_track": {
+        "timeline": {
+            "visual_plan_sha256": "a" * 64,
+            "audio_start_seconds": 0.0,
+            "intro_enabled": True,
+            "intro_position": "final",
+            "intro_duration_seconds": 2.0,
+        },
+        "final_audio_track": {
             "path": str(voice),
             "sha256": _sha(voice),
             "format": "wav-pcm-s16le",
             "sample_rate": 44100,
             "channels": 2,
             "duration_seconds": 1.0,
-        },
-        "effect_track": {
-            "path": str(effect),
-            "sha256": _sha(effect),
-            "source_sha256": "a" * 64,
-            "format": "wav-pcm-s16le",
-            "sample_rate": 44100,
-            "channels": 2,
-            "duration_seconds": 1.0,
-            "gain_policy": "loudnorm-I-12-LRA7-TP-1-then-volume-0.8",
+            "composition_owner": "ArmoredSpeech",
         },
     }
     payload.update(overrides)
@@ -218,7 +216,7 @@ def test_audio_package_builder_prepares_tracks_without_changing_original(tmp_pat
 
     monkeypatch.setattr(audio_package, "_run", fake_run)
 
-    from armored_core.audio import rvc
+    from ArmoredSpeech import rvc_engine as rvc
     def fake_convert(source, destination, voice, item_id=None):
         fake_write_wave(destination)
         return Path(destination)
