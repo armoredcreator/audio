@@ -304,8 +304,7 @@ def create_smoke_fixture(
     return {
         "batch_id": batch_id,
         "manifest_path": str(manifest_path),
-        "speech_database": str(database_path),
-        "speech_database_copy": str(database_path),
+        "speech_database_copy": str(database_copy),
         "original_copy": str(original_copy),
         "wav_copy": str(wav_copy),
         "source_original": str(source_original),
@@ -317,7 +316,6 @@ def create_smoke_fixture(
         "test_source_id": test_source_id,
         "test_item_id": test_item_id,
     }
-
 
 
 def create_real_video_smoke_fixture(
