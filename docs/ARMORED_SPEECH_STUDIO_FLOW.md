@@ -292,4 +292,16 @@ O comando imprime `MANIFEST_PATH`, `SPEECH_DATABASE` e hashes/decisão. Use os c
 
 Depois de aprovar o primeiro caso, os outros MP4s podem ser executados individualmente apontando para seus caminhos dentro das pastas numeradas (por exemplo, `...\3\3_musica.mp4`). Não varrer recursivamente a pasta para tratar cópias de trabalho e resultados renderizados como entradas novas: somente os MP4s originais dentro das pastas `1` a `14` são corpus de entrada.
 
-Antes de considerar o E2E aprovado, conferir o relatório do runner, abrir o MP4 final, ouvir a saída, inspecionar streams/duração e confirmar SHA-256 do MP4 de origem antes/depois. Os testes automatizados usam stubs para o processador/modelo e não substituem conversão real Melody nem renderização FFmpeg no Windows.
+### Evidência E2E real no Windows — caso 2
+
+Em 17/10/2026, o usuário executou Speech → pacote v2 → Studio com o corpus numerado `2/2_narração_pt.mp4` e conferiu o resultado visual/auditivo.
+
+- Resultado do runner: `STUDIO_SPEECH_BATCH=SUCCESS`, `MODE=REAL_STUDIO`, `ITEMS=1`, `ORIGINALS_INTACT=True`, `audio_contract_version=2`.
+- Classificação Speech: `PT_BR_NARRATION`, idioma `pt-br`, confiança `0.9934035043882937`, rota `RVC_MELODY`, `music_detected=false`.
+- Workspace canônico: `storage/Videos GRUPO_FONTE_teste/2/`.
+- Original de teste: `2_finallinkoriginal.mp4`; WAV Speech: `2_finallinkoriginal.wav`; saída canônica: `2_finaldomeulinknovo.mp4`.
+- SHA-256 esperado e confirmado para o original: `0e58fcd53135e437778ee1abd787f985a5b6ebe70c638072a232eeded31f9d05`.
+- Relatório confirmado pelo usuário: `storage/validation/speech-studio-speech-v2-real-smoke-20261017T124415123639Z-1b40f0-20261017T124615Z.json`.
+- O usuário assistiu ao MP4 de saída e confirmou áudio e imagem corretos.
+
+Este E2E valida um caso real da rota Melody e o contrato de armazenamento numerado. Ainda não aprova todas as classes de áudio nem autoriza mesclar a PR. Próximas verificações do corpus: música isolada, sem áudio, ruído, fala com música e amostras com barras; confirmar rotas sem RVC e comportamento visual para cada tipo relevante. Os testes automatizados seguem usando stubs para alguns caminhos e não substituem essas verificações reais.
