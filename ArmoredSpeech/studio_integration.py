@@ -23,11 +23,14 @@ def prepare_audio_packages_for_items(
     intro: bool = True,
     intro_position: str = "final",
 ) -> list[tuple[object, dict]]:
-    """Preflight the full decision batch and prepare final audio timelines in Speech.
+    """Prepare a Speech-owned audio-render recipe for every item in the batch.
 
-    The caller supplies visual plans produced by Studio's audio-free visual
-    preflight. This function never calls Studio or renders video. Every return
-    value contains one completed soundtrack, not separate tracks for Studio to mix.
+    The caller supplies a read-only visual plan so Speech can calculate temporal
+    relationships. This function owns all audio decisions, route selection,
+    RVC, effect preparation/gain, and the audio filter graph. It does not call
+    Studio or render video. The v3 payload declares validated input tracks and
+    the complete audio graph; Studio only combines that graph with the visual
+    graph in one final audiovisual FFmpeg call.
     """
     import hashlib
     import re
