@@ -118,6 +118,9 @@ class UnifiedStudio:
         self.root = Path(root).resolve()
         self.storage = storage
         self.analysis = analysis or AnalysisEngine()
+        # Shared within this Studio batch so immutable v2 effect track SHA-256
+        # is not recalculated once per item after the runner already validated it.
+        self._audio_track_hash_cache: dict[tuple[str, int, int, int, int], str] = {}
 
     def _test_copy(self, source: Path, output: Path) -> None:
         if os.getenv("ARMORED_STUDIO_ALLOW_COPY") != "1":
@@ -142,6 +145,7 @@ class UnifiedStudio:
                         expected_source_id=str(item.source_id),
                         expected_item_id=str(item.telegram_message_id),
                         expected_original_path=original,
+                        track_hash_cache=self._audio_track_hash_cache,
                     )
                 else:
                     speech_handoff = validate_handoff(
