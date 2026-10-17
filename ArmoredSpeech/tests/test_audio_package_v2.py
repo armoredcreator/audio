@@ -595,6 +595,7 @@ def test_shared_effect_sha256_is_cached_across_package_validation(tmp_path, monk
     # A batch reuses the pre-normalized project effect but carries a unique
     # voice track and original per item. Studio validates both inputs.
     payload_two["effect_track"] = dict(payload_one["effect_track"])
+    payload_two["audio_inputs"][1] = dict(payload_one["audio_inputs"][1])
     assert payload_two["voice_track"]["path"] != payload_one["voice_track"]["path"]
     assert payload_two["effect_track"]["path"] == payload_one["effect_track"]["path"]
 
