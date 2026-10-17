@@ -253,3 +253,42 @@ Para reduzir I/O em lotes extensos, a faixa de efeito é preparada uma vez por l
 **Validação CI mais recente:** compileall passou e 96 testes passaram em 0,57 s no GitHub Actions: [run 39026559315](https://github.com/armoredcreator/audio/actions/runs/39026559315).
 
 **Limite essencial:** os testes incluem WAVs sintéticos, stubs e o contrato/runner de laboratório. Não houve conversão real RVC nem renderização FFmpeg real no Windows usando o pacote v2 nesta etapa. A aprovação histórica em Windows vale para o caminho v1 anterior; o caminho v2 precisa repetir o E2E com o vídeo isolado de referência, comparar áudio/imagem/duração e validar SHA-256 antes/depois. A PR continua draft, sem merge, e nenhuma mudança foi portada ao repositório operacional.
+
+
+## 16. Preparar o E2E v2 real no Windows sem tocar no banco/original de origem
+
+A branch inclui `ArmoredSpeech/prepare_v2_smoke_fixture.py`, um utilitário de laboratório para preparar **um único item** já marcado READY e elegível para Melody:
+
+1. Lista itens candidatos no SQLite experimental, sem escrever nele.
+2. Copia o MP4 e o WAV sidecar para um workspace exclusivo sob `storage/Videos GRUPO_FONTE_1`, conferindo SHA-256.
+3. Usa o backup de SQLite para criar uma **cópia descartável do banco Speech**, insere nela uma linha de teste apontando para as cópias e grava um manifesto de lote completo aprovado.
+4. Não altera a mídia de origem nem o banco passado em `--speech-database`. O artefato novo fica sob `storage/validation/speech-v2-smoke-*/`; a cópia de mídia fica em uma pasta de teste identificada com `v2smoke_`.
+
+PowerShell, a partir da raiz do AudioLab:
+
+```powershell
+# 1) Aponte somente para o SQLite experimental do ArmoredSpeech.
+$SpeechDb = '.\\storage\\database\\armored_speech_experimental.db'
+
+# 2) Liste candidatos READY, narração PT-BR limpa e RVC elegível.
+.\\.venv\\Scripts\\python.exe -m ArmoredSpeech.prepare_v2_smoke_fixture `
+  --root . --speech-database $SpeechDb --list-ready
+
+# 3) Use exatamente os source_id/item_id exibidos para preparar a cópia isolada.
+.\\.venv\\Scripts\\python.exe -m ArmoredSpeech.prepare_v2_smoke_fixture `
+  --root . --speech-database $SpeechDb `
+  --source-id 'COLE_SOURCE_ID' --item-id 'COLE_ITEM_ID'
+```
+
+O utilitário imprime `MANIFEST_PATH` e `SPEECH_DATABASE_COPY`. Copie os caminhos mostrados para executar o lote real:
+
+```powershell
+.\\.venv\\Scripts\\python.exe -m ArmoredSpeech.studio_batch_runner `
+  --root . `
+  --manifest 'COLE_MANIFEST_PATH' `
+  --speech-database 'COLE_SPEECH_DATABASE_COPY'
+```
+
+**Não acrescente `--copy-only` ao teste real.** O runner exigirá FFmpeg, o banner, o efeito sonoro existente e, se a linha for elegível, o modelo/índice Melody existentes. Um lote bem-sucedido gera um relatório JSON em `storage/validation/` e a saída MP4 na pasta de teste; confira o relatório, ouça o áudio, inspecione o vídeo/streams e compare o SHA-256 do original de teste antes/depois.
+
+Se o arquivo SQLite tiver outro nome, substitua o exemplo pelo caminho real **do banco experimental**. O utilitário recusa o nome comum do banco operacional `armoredcreator.db`, exige a tabela de registro experimental de Speech e abre a fonte em modo somente leitura. Caso não apareça nenhum candidato, não force a elegibilidade: selecione um áudio READY classificado explicitamente, ou conclua primeiro a preparação Speech desse item.
