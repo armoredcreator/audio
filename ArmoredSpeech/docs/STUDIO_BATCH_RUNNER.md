@@ -1,82 +1,28 @@
-# Executor isolado ArmoredSpeech → ArmoredStudio
+# Speech batch → Studio visual renderer
 
-Este executor é **exclusivo do AudioLab**. Ele não inicia Sync, Vision, Stock, IA, Hub nem publicação. Recebe um manifesto explícito do lote aprovado e completo do Speech, lê as decisões READY somente pela ponte de contrato e chama a fronteira pública `ArmoredStudio.service.build(root).process(item, speech_payload=...)`.
+O runner de laboratório só recebe um manifesto que declara o lote Speech completo e aprovado. Não descobre um lote parcial pelo SQLite operacional e não abre banco de produção.
 
-## O que impede processamento prematuro
+## Fluxo
 
-O executor só aceita um manifesto JSON com:
-- `schema_version: 1`;
-- `phase: "ARMORED_SPEECH"`;
-- `phase_status: "COMPLETE"`;
-- `approved: true`;
-- `expected_item_count` igual ao tamanho exato da lista `items`;
-- IDs únicos `source_id + telegram_message_id`;
-- todos os itens no estado `IA`, que é a fronteira imediatamente anterior ao Studio;
-- caminho de cada original dentro do workspace de item e hash SHA-256 igual ao declarado.
+1. Studio executa uma pré-análise **somente visual** para encontrar barras, banner, caixas VEO/Gemini e preparar um plano de enquadramento.
+2. Speech lê as decisões READY do seu SQLite, confere original e WAV, resolve a classe/rota e executa todo o RVC elegível.
+3. Speech deriva o corte temporal de fala a partir do WAV quando existe banner e constrói o grafo de áudio: trim, fades, mixagem e concatenação do efeito/intro. O efeito é preparado com ganho uma única vez e compartilhado por lote.
+4. O runner valida identidade, hashes, arquivos, modelo/index, grafo e duração de todos os itens antes de chamar o Studio.
+5. O plano visual é atualizado com o início de vídeo derivado por Speech e seu hash deve coincidir com o hash no contrato.
+6. Studio combina o grafo visual (crop único na fonte, split de intro/main, filtros de imagem) com o grafo de áudio gerado pelo Speech em uma única chamada FFmpeg final. Não há pré-mixagem de um WAV final nem chamada FFmpeg separada para renderizar as cenas e depois muxar.
+7. O runner confirma caminhos de saída e SHA-256 dos originais.
 
-Antes da primeira chamada ao Studio, `process_items_with_speech(...)` faz preflight de todos os registros Speech e exige decisão `READY` e artefatos disponíveis. O validador do Studio verifica novamente o contrato, identidade, WAV legível, caminhos, hashes e elegibilidade RVC. Se qualquer item do lote não estiver pronto, nenhum item é enviado ao Studio.
-
-**Importante:** o manifesto representa a lista integral aprovada pelo operador para esse lote; o executor não consegue adivinhar se uma lista arbitrária representa toda a coleta histórica. Gere/revise esse manifesto só depois de a fase Speech declarar conclusão.
-
-## Manifesto de exemplo
-
-Salve dentro do root do laboratório, por exemplo em `storage/validation/speech-phase-complete.json`. Os caminhos podem ser absolutos ou relativos ao root.
-
-```json
-{
-  "schema_version": 1,
-  "phase": "ARMORED_SPEECH",
-  "phase_status": "COMPLETE",
-  "approved": true,
-  "allow_copy_only": true,
-  "batch_id": "speech-lote-validado-001",
-  "expected_item_count": 1,
-  "items": [
-    {
-      "content_id": "source1_12345",
-      "telegram_message_id": "12345",
-      "source_id": "source1",
-      "state": "IA",
-      "workspace": "storage/Videos GRUPO_FONTE_1/12345",
-      "original_path": "storage/Videos GRUPO_FONTE_1/12345/12345_finallinkoriginal.mp4",
-      "original_sha256": "COLOQUE_AQUI_OS_64_CARACTERES_SHA256_REAIS",
-      "affiliate_name": "produto",
-      "affiliate_url": "https://shopee.com.br/product/123"
-    }
-  ]
-}
-```
-
-O valor de `original_sha256` acima é deliberadamente um placeholder, não um hash utilizável. Calcule o hash real do arquivo e confirme a lista antes de executar.
-
-O SQLite indicado deve ser o banco **experimental** do ArmoredSpeech dentro do mesmo root do laboratório. Não passe banco, credenciais, sessão nem configuração do ArmoredCreator de produção.
-
-## Primeiro teste: somente handoff/contrato
-
-O modo `--copy-only` chama o serviço real do Studio, valida o handoff e copia bytes do original para uma saída de teste. Ele **não** executa detecção visual, FFmpeg, composição, RVC nem prova qualidade do vídeo. Só pode ser usado quando o manifesto contém `"allow_copy_only": true`.
+## Comandos
 
 ```powershell
-Set-Location 'C:\Users\Administrador\Downloads\ArmoredAudioLab'
-.\.venv\Scripts\python.exe -m ArmoredSpeech.studio_batch_runner `
-  --root . `
-  --manifest .\storage\validation\speech-phase-complete.json `
-  --speech-database .\storage\database\armored_speech_experimental.db `
-  --copy-only
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Ajuste apenas o caminho do SQLite para o nome real do banco experimental. O relatório JSON é gravado em `storage/validation/` e informa modo, lote, itens, caminhos de saída e integridade dos originais. Em caso de falha, o executor grava status `FAILED` e propaga erro; não apaga WAVs de Speech.
+O teste real exige os ativos migrados para `ArmoredSpeech/runtime/rvc/models` e `ArmoredSpeech/assets/efeitosonoro.wav`, além do corpus local. Não executar até o script `ArmoredSpeech/scripts/migrate_audio_assets.ps1` concluir e os dois caminhos existirem.
 
-## Execução real
+## Segurança
 
-A execução sem `--copy-only` tenta análise visual/áudio e processamento real. Antes dela, confirme a presença e a identidade dos assets oficiais `ArmoredStudio/assets/banner.png` e `ArmoredStudio/assets/efeitosonoro.wav`, FFmpeg e modelo/índice Melody. Use primeiro uma lista pequena, revisada e de cópias isoladas. Não execute a publicação; Hub permanece fora do escopo. Um `SUCCESS` neste runner comprova o lote processado e a integridade registrada dos originais, mas a precisão de VEO/Gemini/barras pretas e a qualidade auditiva ainda exigem avaliação por caso.
-
-## Garantias e limitações
-
-- Nunca infere conclusão olhando somente para o número de registros READY no SQLite.
-- Não acessa o banco do Coordinator nem inicia integrações externas.
-- Não aceita originais fora do root ou fora do workspace declarado.
-- Recusa destinos Studio já existentes antes da primeira chamada, preservando resultados anteriores.
-- Recalcula hash dos originais antes e depois; saída precisa existir, ser não vazia e permanecer no root.
-- Preflight bloqueia o lote inteiro se faltar decisão READY/artefato em qualquer item.
-- Não apaga fontes, WAVs Speech, modelo, índice nem assets.
-- O executor não prova classificação correta do Speech nem aprova automaticamente o lote histórico: isso depende da fase Speech e da revisão do manifesto.
+- Uma classificação desconhecida ou pacote ausente bloqueia a primeira renderização.
+- O caminho `EFFECT_ONLY` usa silêncio gerado como entrada FFmpeg; nunca reusa o áudio original do vídeo.
+- O Studio não executa RVC, não analisa fala/idioma/música e não aplica volume, fades, cortes ou mixagem.
+- Nenhum teste desta branch publica no Hub.
