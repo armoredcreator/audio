@@ -141,9 +141,9 @@ class UnifiedStudio:
             output.replace(destination)
             return destination, {"mode": "test-copy", "plan": None}
 
-        if not isinstance(speech_payload, dict) or speech_payload.get("contract_version") != 3:
+        if not isinstance(speech_payload, dict) or speech_payload.get("contract_version") != 4:
             raise RuntimeError(
-                "ArmoredSpeech final-audio contract v3 é obrigatório; "
+                "ArmoredSpeech final-audio contract v4 é obrigatório; "
                 "os caminhos legados de áudio do Studio estão desabilitados."
             )
         try:
@@ -182,15 +182,13 @@ class UnifiedStudio:
         ffmpeg = os.getenv("ARMORED_FFMPEG", "ffmpeg")
         if not shutil.which(ffmpeg):
             raise RuntimeError("FFmpeg não encontrado")
-        from .processing.visual_finalizer import render_with_speech_audio
+        from .processing.visual_finalizer import render_video_with_speech_track
 
-        render_with_speech_audio(
+        render_video_with_speech_track(
             source,
-            package.audio_inputs,
+            package.final_audio_track_path,
             banner,
             output,
-            audio_filter_graph=package.audio_filter_graph,
-            audio_output_label=str(package.audio_timeline.get("output_label") or ""),
             position=str(package.audio_timeline.get("intro_position") or "final"),
             intro=intro,
             plan=analysis.plan,
