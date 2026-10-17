@@ -8,6 +8,7 @@ a Coordinator/production database.
 """
 
 import argparse
+from dataclasses import replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -21,6 +22,8 @@ from armored_core.models import Item, State
 from armored_core.storage import Storage
 from ArmoredStudio.service import build as build_studio
 from ArmoredStudio.speech_handoff import validate_audio_package, SpeechHandoffError
+from ArmoredStudio.analysis.export_plan_validator import validar_plano_exportacao
+from .timeline_mixer import visual_plan_digest
 from .studio_integration import process_items_with_speech, prepare_audio_packages_for_items
 
 
@@ -318,6 +321,44 @@ def run_complete_batch(
                     "original_sha256": validated.original_sha256,
                 })
                 validated_payloads.append((item, payload))
+
+            # The visual detector runs in Studio, but banner cut timing is
+            # measured by Speech from the original audio. Apply the returned
+            # visual start to the same visual plan whose digest Speech signed,
+            # and validate it before the first final render.
+            for item, payload in validated_payloads:
+                identity = (str(item.source_id), str(item.telegram_message_id))
+                effective_plan = dict(visual_plans[identity])
+                try:
+                    speech_video_start = float(
+                        payload["audio_timeline"]["video_start_seconds"]
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise BatchManifestError(
+                        f"Speech video timeline missing for {identity}"
+                    ) from exc
+                if speech_video_start < 0:
+                    raise BatchManifestError(
+                        f"Speech video timeline is negative for {identity}"
+                    )
+                effective_plan["video_start"] = speech_video_start
+                plan_validation = validar_plano_exportacao(effective_plan)
+                if not plan_validation.get("valido"):
+                    raise BatchManifestError(
+                        f"Plano visual com tempo Speech inválido para {identity}: "
+                        + "; ".join(plan_validation.get("erros", []))
+                    )
+                expected_plan_hash = payload["audio_timeline"]["visual_plan_sha256"]
+                if visual_plan_digest(effective_plan) != expected_plan_hash:
+                    raise BatchManifestError(
+                        f"Plano visual não confere com o handoff Speech para {identity}"
+                    )
+                visual_plans[identity] = effective_plan
+                visual_analyses[identity] = replace(
+                    visual_analyses[identity],
+                    plan=effective_plan,
+                    validation=plan_validation,
+                )
 
             if hasattr(studio, "engine"):
                 studio.engine._audio_track_hash_cache = track_hash_cache
