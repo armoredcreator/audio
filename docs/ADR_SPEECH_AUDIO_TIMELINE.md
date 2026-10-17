@@ -1,6 +1,6 @@
 # Decisão técnica — áudio Speech → Studio e alinhamento temporal
 
-**Status:** decisão de arquitetura para guiar a implementação isolada. A extração estrutural do motor RVC para `armored_core.audio.rvc` já foi feita nesta branch; a chamada por Speech e o pacote v2 continuam pendentes. Não é validação do runtime RVC v2.  
+**Status:** decisão aplicada parcialmente nesta branch isolada. O pacote v2 de Speech, o validador Studio, o finalizer de faixas preparadas e a invocação do motor RVC via `armored_core.audio.rvc` estão codificados e cobertos por testes sintéticos/CI. O E2E real Windows/RVC v2 continua pendente.  
 **Branch:** `design/speech-studio-audio-timeline-20261017`  
 **Contexto:** a fase ArmoredSpeech deve concluir o lote aprovado antes da fase de processamento do ArmoredStudio. O Studio descobre `video_start` e `audio_start` com o plano visual.
 
@@ -71,13 +71,13 @@ O v2 deve rejeitar caminhos fora do workspace, arquivos vazios/ilegíveis, hashe
 ## 6. Ordem de implementação
 
 1. Criar testes de regressão do comportamento temporal atual no finalizer, especialmente `audio_start=0` e `audio_start>0`, com/sem intro.
-2. **Feito parcialmente:** extrair a implementação de baixo nível para `armored_core.audio.rvc` e manter `ArmoredStudio/processing/rvc.py` como facade de compatibilidade. **Pendente:** implementar o produtor de pacote v2 em Speech e a invocação RVC no lote Speech. Não reescrever o backend nem alterar arquivos de modelo/índice.
-3. Ampliar o validador Studio para v2 mantendo v1 durante a transição.
-4. Tornar v1 e v2 mutuamente exclusivos por execução/item; um item v2 jamais entra no caminho de classificação/RVC/mixagem antiga.
-5. Alterar o finalizer para receber faixas preparadas e só efetuar corte/alinhamento/composição temporal, mantendo o efeito no início conforme a semântica atual.
-6. Adicionar testes que provem que, no modo v2, Studio não chama classificador de áudio, conversor RVC nem filtros duplicados de normalização/volume.
-7. Rodar a suíte automatizada e, somente com artefatos reais da cópia isolada, repetir E2E e comparação auditiva/visual; verificar SHA-256 do original antes/depois.
-8. Aposentar v1 somente após os testes e a aprovação manual do E2E.
+2. **Feito nesta branch:** extrair a implementação de baixo nível para `armored_core.audio.rvc` e manter `ArmoredStudio/processing/rvc.py` como facade de compatibilidade. O produtor Speech v2 e a invocação de Melody no lote isolado também foram implementados, reaproveitando o mesmo modelo/índice sem movê-los.
+3. **Feito:** o validador Studio aceita v1 e v2; v2 valida identidades, caminhos, hash do original, rota e metadados/hash das faixas.
+4. **Feito no runner de laboratório:** v1 é usado no modo copy-only; execução real usa v2. O lote e todos os pacotes são preflightados antes da primeira chamada ao Studio, impedindo processamento parcial.
+5. **Feito no finalizer v2:** recebe voz e efeito já preparados, aplica o corte temporal apenas à voz e combina as faixas sem repetir a normalização/ganho; a intro mantém seus fades/trim próprios.
+6. **Feito em testes sintéticos:** cobrem as rotas, os hashes, o hash-cache do efeito compartilhado, a reutilização do fingerprint Melody, bloqueio do lote se um pacote falhar, e `audio_start=0`/`audio_start>0`. A compilação e 96 testes CI passaram.
+7. **Pendente:** executar no Windows com FFmpeg e o modelo/índice Melody reais, usando cópia isolada do vídeo E2E previamente aprovado; comparar áudio, imagem, duração e hashes antes/depois.
+8. **Pendente:** aposentar v1 e remover caminhos antigos somente depois do E2E real v2 ser aprovado manualmente. Não mesclar esta PR antes disso.
 
 ## 7. Critérios de aceitação
 
@@ -91,4 +91,4 @@ O v2 deve rejeitar caminhos fora do workspace, arquivos vazios/ilegíveis, hashe
 
 ## 8. Limitações e evidência
 
-Esta decisão resulta da leitura estática de `unified.py`, `speech_handoff.py`, `processing/rvc.py`, `processing/finalizer.py`, `studio_bridge.py`, `media.py` e dos testes de contrato/lote. Após a extração estrutural do motor, o CI da branch passou em compilação e 73 testes automatizados; não houve renderização nem E2E real com o novo caminho Speech-owned nesta etapa. O E2E histórico aprovado prova apenas a rota anterior testada, não a arquitetura v2.
+A decisão e a implementação resultam da auditoria de `unified.py`, `speech_handoff.py`, `processing/rvc.py`, `processing/finalizer.py`, `studio_bridge.py`, `media.py`, do novo produtor de pacote v2 e dos testes de contrato/lote. CI mais recente passou em compilação e 96 testes automatizados. Não houve renderização FFmpeg real nem conversão RVC real com o novo caminho Speech-owned nesta etapa. O E2E histórico aprovado prova apenas a rota anterior testada, não a arquitetura v2.
