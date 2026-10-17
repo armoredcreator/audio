@@ -109,6 +109,13 @@ def _single_portrait_crop(
     return x, y, width, height
 
 
+def _plan_dimensions(plan: dict[str, Any] | None, width: int, height: int) -> tuple[int, int]:
+    crop = (plan or {}).get("crop_final")
+    if not crop:
+        return width, height
+    return int(crop.get("width", width)), int(crop.get("height", height))
+
+
 def _video_filter_graph(
     source_width: int,
     source_height: int,
