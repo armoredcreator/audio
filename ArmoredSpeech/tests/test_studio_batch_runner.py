@@ -353,5 +353,10 @@ def test_real_runner_blocks_all_studio_calls_if_any_v2_package_is_invalid(tmp_pa
     assert report["processed"] == []
     assert events == [("all-packages-prepared", 2)]
     for item in json.loads(manifest_path.read_text(encoding="utf-8"))["items"]:
-        output = Path(item["workspace"]) / f"{item['telegram_message_id']}_demo.mp4"
+        output = Path(runner_module.Storage(tmp_path).result(
+            item["content_id"],
+            item.get("affiliate_url"),
+            item.get("affiliate_name"),
+            source_id=item["source_id"],
+        ))
         assert not output.exists()
