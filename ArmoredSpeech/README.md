@@ -1,18 +1,20 @@
 # ArmoredSpeech — proprietário do processamento de áudio
 
-ArmoredSpeech é o único responsável por classificar, preparar e finalizar o áudio. ArmoredStudio é responsável pela análise/edição visual e pelo render final do vídeo.
+ArmoredSpeech é o único responsável por classificar, decidir e preparar áudio. ArmoredStudio é responsável pela análise visual, edição de imagem e montagem final do vídeo. A separação acontece por contratos explícitos; o Studio não tem fallback para o antigo processamento de áudio.
 
 ## Separação de responsabilidades
 
-- **Speech:** detectar fala/idioma/ruído/música/silêncio; selecionar a rota segura; extrair e preparar áudio; executar RVC Melody quando elegível; preparar efeito e aplicar ganho uma única vez; sincronizar/trimar voz, criar fades e intro sonora, mixar e produzir o arquivo final AAC/M4A.
-- **Studio:** analisar imagem/vídeo, detectar barras/banners visuais e VEO/Gemini; consolidar o plano visual; aplicar um único crop; renderizar os frames e copiar a trilha AAC/M4A pronta para o MP4 com `-c:a copy`.
-- **Contrato v4:** `ArmoredStudio/speech_handoff.py` valida identidade, integridade do original, caminho/hash/duração do AAC/M4A e hash/timing do plano. Não recebe faixas de voz/efeito separadas nem o grafo de áudio.
-- **Um crop, um render final:** o Studio chama FFmpeg uma vez por vídeo e executa apenas filtros visuais no grafo final. Speech usa FFmpeg em seu próprio pipeline de áudio quando necessário.
-- Originais são somente leitura; hashes antes/depois. O lote todo deve ser preparado/validado antes da primeira renderização Studio.
+- **Speech:** classificar fala/idioma/ruído/música/silêncio; aplicar as regras de elegibilidade RVC; extrair e preparar áudio; executar RVC Melody quando permitido; preparar voz/silêncio e efeito; aplicar ganho uma única vez; sincronizar cortes temporais/fades/intro sonora e criar o grafo de áudio; declarar codec, bitrate, amostragem, canais e looping do efeito no contrato v5.
+- **Studio:** analisar imagem/vídeo, detectar barras/banner/VEO/Gemini; consolidar o plano visual; combinar crop de segurança e enquadramento 9:16 em **um único crop**; montar intro visual e aplicar filtros de imagem.
+- **Renderizador final:** concatena mecanicamente o grafo visual do Studio e o grafo de áudio do Speech numa chamada FFmpeg audiovisual. O Studio não escolhe filtros, volumes, fades, rota de áudio nem RVC.
+- **Contrato v5:** identidade, hash do original, faixas WAV de Speech, hashes/tamanhos/durações, grafo de áudio e opções de render final. A validação bloqueia o lote se qualquer pacote não estiver consistente.
+- Originais são somente leitura; hashes antes/depois. O lote inteiro deve ser preparado e validado antes da primeira renderização.
+
+“Uma chamada FFmpeg” refere-se à composição audiovisual final. Speech pode usar FFmpeg em etapas próprias de preparação/normalização necessárias antes do render e invocar o motor RVC; não há uma segunda chamada para montar uma WAV/M4A final separada que depois é novamente combinada ao vídeo.
 
 ## Ativos locais (Windows PowerShell)
 
-Na raiz do repositório, após atualização segura da branch:
+Na raiz do repositório, após atualizar a branch por fast-forward seguro:
 
 ```powershell
 .\ArmoredSpeech\setup_runtime.ps1
@@ -20,7 +22,9 @@ Na raiz do repositório, após atualização segura da branch:
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-O script copia modelos/índices do RVC e o efeito dos caminhos antigos para `ArmoredSpeech/runtime/rvc/models` e `ArmoredSpeech/assets/efeitosonoro.wav`, confere SHA-256 e não apaga nem sobrescreve a origem. Não remova ativos de Studio antes de um E2E v4 real aprovado.
+O script de migração copia modelos/índices do RVC e o efeito dos caminhos antigos para `ArmoredSpeech/runtime/rvc/models` e `ArmoredSpeech/assets/efeitosonoro.wav`, verifica SHA-256 e não apaga nem sobrescreve a origem. Se o destino já existir com conteúdo diferente, bloqueia.
+
+Não remova os ativos legados do Studio antes de um E2E real com contrato v5 aprovado.
 
 ## Diagnóstico
 
@@ -29,7 +33,7 @@ O script copia modelos/índices do RVC e o efeito dos caminhos antigos para `Arm
 .\.venv\Scripts\python.exe .\ArmoredSpeech\tests\validate_real_audio.py
 ```
 
-Use uma saída que ainda não exista. O validador real precisa dos modelos/índices locais e do corpus de teste.
+Use uma saída que ainda não exista. O validador real precisa dos modelos/índices migrados para Speech e do corpus de teste.
 
 ## Limites
 
