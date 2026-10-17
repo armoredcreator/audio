@@ -45,23 +45,33 @@ O resultado comprova o caminho PT-BR/RVC v5 para esse item e preservação do or
 
 ## Teste E2E do corpus completo (14 vídeos)
 
-O smoke E2E de um único item não substitui a validação do corpus. Para testar os 14 vídeos reais em um lote isolado, use:
+O smoke E2E de um único item não substitui a validação do corpus. O teste dos 14 começa por uma etapa **somente de inventário**; revise a lista antes de processar mídia.
+
+**1. Inventariar e hashear os candidatos, sem análise de áudio, cópias de vídeo ou SQLite novo:**
 
 ```powershell
-.\\.venv\\Scripts\\python.exe -m ArmoredSpeech.corpus_e2e_runner --root . --video-root .\\storage --expected-count 14 --render
+.\\.venv\\Scripts\\python.exe -m ArmoredSpeech.corpus_e2e_runner --root . --video-root .\\storage --expected-count 14 --list-only
 ```
 
-O utilitário:
+A saída deve mostrar `CORPUS_DISCOVERED=14/14`, cada caminho e hash, e `INPUTS_JSON=...`. Abra a lista/relatório e confirme que são os 14 vídeos-fontes pretendidos, sem saídas renderizadas ou duplicatas. A descoberta não encontrar exatamente 14 é uma condição de bloqueio; não processe a lista errada.
 
-- exige exatamente 14 MP4s elegíveis; se encontrar outra quantidade, mostra a lista e para **antes de copiar ou processar arquivos**;
-- pode receber uma lista explícita e revisada por `--inputs-json` quando a descoberta automática não corresponder aos 14 originais pretendidos;
-- cria cópias de trabalho byte-a-byte em um namespace novo, um SQLite experimental novo e sidecars WAV para esse lote;
-- classifica e prepara todos os itens via ArmoredSpeech; somente se os 14 estiverem `READY`, os hashes dos originais continuarem intactos e os ativos do projeto passarem no preflight, executa o render real do Studio;
+**2. Somente depois de confirmar os 14 caminhos**, execute o lote real substituindo o placeholder pelo caminho exato impresso em `INPUTS_JSON`:
+
+```powershell
+.\\.venv\\Scripts\\python.exe -m ArmoredSpeech.corpus_e2e_runner --root . --inputs-json ".\\storage\\validation\\corpus14_inventory_<batch-id>\\inputs.json" --expected-count 14 --render
+```
+
+Esse segundo comando:
+
+- exige exatamente 14 caminhos MP4 existentes, únicos e dentro do laboratório;
+- cria cópias byte-a-byte em um namespace exclusivo, um SQLite experimental novo e artefatos Speech derivados, sem modificar vídeos-fonte;
+- classifica e prepara os 14 pelo ArmoredSpeech; só começa o render real se todos os 14 estiverem `READY`, todos os WAVs forem válidos, hashes dos originais estiverem íntegros e os ativos passarem no preflight;
+- executa o runner real v5 para o lote completo. Os pacotes de áudio são validados antes do primeiro render; o Studio faz uma renderização audiovisual final por item;
 - não limpa nem sobrescreve execuções anteriores, não usa `storage/database/armoredcreator.db` e não publica no Hub.
 
-O comando sem `--render` prepara Speech para os 14 e grava um manifesto ainda não aprovado; ele **não** afirma que houve E2E Studio. Para a prova E2E completa, o comando acima inclui `--render`.
+O comando de inventário cria `storage/validation/corpus14_inventory_<batch-id>/inputs.json` e `inventory-report.json`. O processamento cria `storage/validation/corpus14_<batch-id>/speech-report.json` e `studio-report.json`; os vídeos finais ficam em `storage/Videos GRUPO_FONTE_corpus14_<batch-id>/`. Se algum item falhar durante Speech, o render de Studio de todo o lote é bloqueado e o relatório identifica classe/status/erro; nenhum vídeo do lote começa a ser renderizado.
 
-A evidência fica em `storage/validation/corpus14_<batch-id>/`: `speech-report.json` e, quando o Studio roda, `studio-report.json`. Os MP4s finais ficam no namespace isolado `storage/Videos GRUPO_FONTE_corpus14_<batch-id>/`. Se algum item falhar durante Speech, o lote completo de render é bloqueado e o relatório identifica classe/status/erro; nenhuma saída Studio parcial é iniciada.
+Critério de sucesso observável: `CORPUS_E2E=SUCCESS`, `STUDIO_SPEECH_BATCH=SUCCESS`, `ITEMS=14/14`, `ORIGINALS_INTACT=True` e `ORIGINAL_SOURCE_HASHES_UNCHANGED=True`. CI e testes unitários validam o programa, mas não substituem a execução real com os 14 arquivos locais.
 
 ## Segurança e isolamento
 
