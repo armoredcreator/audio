@@ -20,7 +20,8 @@ from typing import Any
 from armored_core.models import Item, State
 from armored_core.storage import Storage
 from ArmoredStudio.service import build as build_studio
-from .studio_integration import process_items_with_speech
+from ArmoredStudio.speech_handoff import validate_audio_package, SpeechHandoffError
+from .studio_integration import process_items_with_speech, prepare_audio_packages_for_items
 
 
 class BatchManifestError(RuntimeError):
@@ -211,7 +212,9 @@ def run_complete_batch(
         "phase": "ARMORED_SPEECH_TO_STUDIO",
         "status": "RUNNING",
         "mode": "COPY_ONLY_TEST" if copy_only else "REAL_STUDIO",
+        "audio_contract_version": 1 if copy_only else 2,
         "expected_item_count": manifest["expected_item_count"],
+        "audio_packages": [],
         "processed": [],
         "originals_intact": None,
         "started_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -245,13 +248,67 @@ def run_complete_batch(
                 )
 
         studio = build_studio(root)
-        # This function preflights every READY Speech directive before its first
-        # Studio call. Missing/blocked items therefore fail the entire batch closed.
-        results = process_items_with_speech(
-            studio,
-            items,
-            speech_database=speech_database,
-        )
+        if copy_only:
+            # Synthetic contract mode intentionally avoids FFmpeg and RVC.
+            results = process_items_with_speech(
+                studio, items, speech_database=speech_database,
+            )
+        else:
+            # Prepare the complete Speech v2 package batch before calling Studio.
+            safe_batch = re.sub(r"[^A-Za-z0-9_.-]+", "_", manifest["batch_id"]).strip("._-") or "batch"
+            package_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            package_root = root / "storage" / "validation" / "speech-audio-v2" / f"{safe_batch}-{package_stamp}"
+            effect_source = Path(os.getenv("ARMORED_STUDIO_MUSIC", str(root / "ArmoredStudio" / "assets" / "efeitosonoro.wav")))
+            prepared = prepare_audio_packages_for_items(
+                items,
+                speech_database=speech_database,
+                workspace_root=root,
+                package_root=package_root,
+                effect_source_path=effect_source,
+            )
+            validated_payloads = []
+            for item, payload in prepared:
+                try:
+                    validated = validate_audio_package(
+                        payload,
+                        workspace_root=root,
+                        expected_source_id=str(item.source_id),
+                        expected_item_id=str(item.telegram_message_id),
+                        expected_original_path=Path(item.original_path),
+                    )
+                except SpeechHandoffError as exc:
+                    raise BatchManifestError(
+                        f"Pacote Speech v2 inválido antes do início do Studio: {exc}"
+                    ) from exc
+                report["audio_packages"].append({
+                    "source_id": str(item.source_id),
+                    "item_id": str(item.telegram_message_id),
+                    "route": validated.route,
+                    "voice_track_path": str(validated.voice_track_path),
+                    "voice_track_sha256": validated.voice_sha256,
+                    "effect_track_path": str(validated.effect_track_path),
+                    "effect_track_sha256": validated.effect_sha256,
+                    "original_sha256": validated.original_sha256,
+                })
+                validated_payloads.append((item, payload))
+
+            # Recheck the originals after package preparation and before the
+            # first render; this is the phase boundary for v2.
+            changed_before_studio = [
+                (str(item.source_id), str(item.telegram_message_id))
+                for item in items
+                if _sha256(Path(item.original_path)) != original_hashes[
+                    (str(item.source_id), str(item.telegram_message_id))
+                ]
+            ]
+            if changed_before_studio:
+                raise RuntimeError(f"Original mudou durante Speech; Studio bloqueado: {changed_before_studio}")
+
+            # No Studio item starts until every package is READY and validated.
+            results = [
+                studio.process(item, speech_payload=payload)
+                for item, payload in validated_payloads
+            ]
 
         for item, result in zip(items, results, strict=True):
             identity = (str(item.source_id), str(item.telegram_message_id))
