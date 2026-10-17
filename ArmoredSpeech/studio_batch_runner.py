@@ -270,7 +270,7 @@ def run_complete_batch(
             # and emits one complete soundtrack for each item before any render.
             safe_batch = re.sub(r"[^A-Za-z0-9_.-]+", "_", manifest["batch_id"]).strip("._-") or "batch"
             package_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-            package_root = root / "storage" / "validation" / "speech-audio-v3" / f"{safe_batch}-{package_stamp}"
+            package_root = root / "storage" / "validation" / "speech-audio-v4" / f"{safe_batch}-{package_stamp}"
             configured_effect = os.getenv("ARMORED_SPEECH_EFFECT", "").strip()
             effect_source = (
                 Path(configured_effect).expanduser()
