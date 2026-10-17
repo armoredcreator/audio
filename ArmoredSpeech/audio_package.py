@@ -82,7 +82,7 @@ def _wave_metadata(path: Path) -> WaveMetadata:
             rate = stream.getframerate()
             frames = stream.getnframes()
             width = stream.getsampwidth()
-            if channels < 1 or rate < 1 or frames < 1 or width < 1:
+            if channels < 1 or rate < 1 or frames < 1 or width != 2:
                 raise AudioPackageError(f"Invalid WAV stream: {path}")
             if not stream.readframes(1):
                 raise AudioPackageError(f"Unreadable WAV data: {path}")
@@ -183,6 +183,7 @@ def preflight_audio_package(
     workspace_root: Path,
     effect_source_path: Path,
     voice: str = "melody",
+    effect_source_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Validate every input and required RVC asset before spending CPU on a batch."""
     root = Path(workspace_root).resolve(strict=True)
@@ -198,7 +199,9 @@ def preflight_audio_package(
     ffmpeg = _tool("ffmpeg", "ARMORED_FFMPEG")
     ffprobe = _tool("ffprobe", "ARMORED_FFPROBE")
     video_duration = _media_duration(original, ffprobe)
-    effect_source_hash = sha256_file(effect_source)
+    effect_source_hash = effect_source_sha256 or sha256_file(effect_source)
+    if len(effect_source_hash) != 64:
+        raise AudioPackageError("Effect source SHA-256 is invalid")
 
     model_sha256 = None
     index_sha256 = None
@@ -233,6 +236,67 @@ def preflight_audio_package(
     }
 
 
+def prepare_effect_track(
+    effect_source_path: Path,
+    *,
+    workspace_root: Path,
+    output_path: Path,
+    preflight: dict[str, Any],
+) -> dict[str, Any]:
+    """Normalize/gain the project effect once for the whole batch, never per item."""
+    root = Path(workspace_root).resolve(strict=True)
+    source = Path(effect_source_path).expanduser().resolve(strict=True)
+    output = Path(output_path).expanduser().resolve()
+    if not _inside(source, root) or not source.is_file() or source.stat().st_size <= 44:
+        raise AudioPackageError("Project sound-effect asset must be a valid file inside the lab root")
+    try:
+        output.relative_to(root)
+    except ValueError as exc:
+        raise AudioPackageError("Prepared effect track must remain inside the lab root") from exc
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if not _inside(output.parent, root):
+        raise AudioPackageError("Prepared effect output parent escaped the lab root")
+    if output.exists():
+        raise AudioPackageError(f"Prepared effect output already exists: {output}")
+
+    expected_source_hash = preflight.get("effect_source_sha256")
+    if not isinstance(expected_source_hash, str) or len(expected_source_hash) != 64:
+        raise AudioPackageError("Effect source hash missing from batch preflight")
+    actual_source_hash = sha256_file(source)
+    if actual_source_hash.lower() != expected_source_hash.lower():
+        raise AudioPackageError("Effect source changed after batch preflight")
+
+    stage = output.with_name(f".{output.stem}.tmp-{uuid.uuid4().hex}{output.suffix or '.wav'}")
+    ffmpeg = str(preflight["ffmpeg"])
+    try:
+        _run([
+            ffmpeg, "-nostdin", "-y", "-i", str(source), "-vn",
+            "-af", "loudnorm=I=-12:LRA=7:TP=-1,volume=0.8",
+            "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le", str(stage),
+        ], "EFFECT_TRACK_PREPARATION_FAILED")
+        metadata = _wave_metadata(stage)
+        if metadata.sample_rate != 44100 or metadata.channels != 2:
+            raise AudioPackageError("Effect track must be canonical PCM WAV 44100 Hz stereo")
+        if sha256_file(source) != expected_source_hash:
+            raise AudioPackageError("Project sound-effect asset changed during preparation")
+        artifact_hash = sha256_file(stage)
+        stage.replace(output)
+        return {
+            "path": str(output),
+            "sha256": artifact_hash,
+            "source_sha256": expected_source_hash,
+            "format": "wav-pcm-s16le",
+            "sample_rate": metadata.sample_rate,
+            "channels": metadata.channels,
+            "duration_seconds": round(metadata.duration_seconds, 6),
+            "gain_policy": "loudnorm-I-12-LRA7-TP-1-then-volume-0.8",
+            "_prepared_and_verified": True,
+        }
+    except Exception:
+        stage.unlink(missing_ok=True)
+        raise
+
+
 def prepare_audio_package(
     payload: dict[str, Any],
     item,
@@ -242,6 +306,7 @@ def prepare_audio_package(
     output_dir: Path,
     voice: str = "melody",
     preflight: dict[str, Any] | None = None,
+    prepared_effect_track: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Prepare and validate all audio tracks before the Studio phase begins.
 
