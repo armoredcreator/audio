@@ -297,7 +297,7 @@ def test_audio_package_builder_routes_unapproved_audio_to_silence_plus_effect(tm
         lambda command, label: _write_wav(Path(command[-1]), sample_rate=44100, channels=2),
     )
 
-    from armored_core.audio import rvc
+    from ArmoredSpeech import rvc_engine as rvc
     def forbidden_rvc(*args, **kwargs):
         raise AssertionError("RVC must not run for MUSIC_ONLY")
     monkeypatch.setattr(rvc, "converter_voz", forbidden_rvc)
@@ -395,7 +395,7 @@ def test_audio_package_builder_reuses_shared_batch_effect_without_reencoding(tmp
         fake_write_wave(command[-1])
 
     monkeypatch.setattr(audio_package, "_run", fake_run)
-    from armored_core.audio import rvc
+    from ArmoredSpeech import rvc_engine as rvc
 
     def fake_convert(source, destination, voice, item_id=None):
         events.append("RVC_MELODY")
@@ -484,7 +484,7 @@ def test_batch_preflight_hashes_melody_model_and_index_only_once(tmp_path, monke
         "original_sha256_after": digest,
     }
 
-    from armored_core.audio import rvc
+    from ArmoredSpeech import rvc_engine as rvc
 
     monkeypatch.setattr(audio_package, "_tool", lambda name, env_name: f"mock-{name}")
     monkeypatch.setattr(audio_package, "_media_duration", lambda path, tool: 1.0)
