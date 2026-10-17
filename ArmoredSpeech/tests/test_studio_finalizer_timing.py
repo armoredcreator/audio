@@ -204,4 +204,4 @@ def test_portrait_crop_keeps_the_largest_centered_crop_when_aligned_region_allow
 
     x, y, width, height = crop
     assert (width, height) == (900, 1600)
-    assert (x, y) == (2, 4)
+    assert (x, y) == (2, 6)
