@@ -274,16 +274,43 @@ def test_audio_package_builder_prepares_speech_tracks_and_graph_without_final_au
     assert _validate(tmp_path, original, package).audio_filter_graph == package["audio_filter_graph"]
 
 
-def test_effect_only_route_builds_silence_input_and_never_calls_rvc(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "audio_class",
+    [
+        "MUSIC_ONLY",
+        "NO_AUDIO",
+        "NOISE",
+        "NO_USABLE_NARRATION",
+        "FOREIGN_SPEECH",
+    ],
+)
+def test_effect_only_route_builds_silence_input_and_never_calls_rvc(
+    tmp_path, monkeypatch, audio_class
+):
     _mock_preparation(monkeypatch)
-    original = tmp_path / "music.mp4"
+    original = tmp_path / f"{audio_class.lower()}.mp4"
     original.write_bytes(b"synthetic immutable original")
-    source_wav = tmp_path / "music.wav"
-    _write_wav(source_wav, sample_rate=16000, channels=1)
+    source_wav = tmp_path / f"{audio_class.lower()}.wav"
+    _write_wav(
+        source_wav,
+        sample_rate=16000,
+        channels=1,
+        silence=audio_class == "NO_AUDIO",
+    )
     effect_source = tmp_path / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
     _write_wav(effect_source)
     item = Item("source-1", "item-2", "source1_item2", original)
-    directive = _directive(original, source_wav, item, audio_class="MUSIC_ONLY", rvc=False, music=True)
+    directive = _directive(
+        original,
+        source_wav,
+        item,
+        audio_class=audio_class,
+        rvc=False,
+        music=audio_class == "MUSIC_ONLY",
+    )
+    if audio_class == "FOREIGN_SPEECH":
+        directive["speech_detected"] = True
+        directive["language"] = "en"
     from ArmoredSpeech import rvc_engine as rvc
 
     monkeypatch.setattr(
@@ -300,6 +327,7 @@ def test_effect_only_route_builds_silence_input_and_never_calls_rvc(tmp_path, mo
         visual_plan={"video_start": 0.0},
     )
 
+    assert package["audio_class"] == audio_class
     assert package["route"] == "EFFECT_ONLY"
     assert package["rvc_eligible"] is False
     assert package["voice_track"]["role"] == "silence"
