@@ -53,7 +53,7 @@ def test_studio_rejects_legacy_audio_handoffs_for_real_render(tmp_path, monkeypa
     studio = UnifiedStudio(tmp_path, FakeStorage(output))
     monkeypatch.delenv("ARMORED_STUDIO_FORCE_COPY", raising=False)
 
-    with pytest.raises(RuntimeError, match="contract v3"):
+    with pytest.raises(RuntimeError, match="contract v4"):
         studio.process(item, speech_payload={
             "contract_version": 1,
             "source_id": "source-1",
