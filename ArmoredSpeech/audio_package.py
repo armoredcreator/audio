@@ -247,7 +247,7 @@ def preflight_audio_package(
         if voice.strip().lower() != "melody":
             raise AudioPackageError("Only the validated Melody model is approved for this route")
         if rvc_asset_fingerprint is None:
-            from armored_core.audio.rvc import localizar_modelo, resolver_rvc_python
+            from .rvc_engine import localizar_modelo, resolver_rvc_python
 
             rvc_python_path = str(resolver_rvc_python().resolve(strict=True))
             model, index = localizar_modelo("melody")
@@ -262,7 +262,7 @@ def preflight_audio_package(
             # This fingerprint was created by the first eligible item in the
             # same whole-batch preflight; don't hash the same large model/index
             # repeatedly for every historical video.
-            from armored_core.audio.rvc import MODELS_DIR, resolver_rvc_python
+            from .rvc_engine import MODELS_DIR, resolver_rvc_python
 
             model_path = str(Path(rvc_asset_fingerprint["rvc_model_path"]).resolve(strict=True))
             model_sha256 = str(rvc_asset_fingerprint["rvc_model_sha256"])
