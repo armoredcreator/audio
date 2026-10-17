@@ -273,12 +273,16 @@ def run_complete_batch(
             package_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
             package_root = root / "storage" / "validation" / "speech-audio-v3" / f"{safe_batch}-{package_stamp}"
             configured_effect = os.getenv("ARMORED_SPEECH_EFFECT", "").strip()
-            if configured_effect:
-                effect_source = Path(configured_effect).expanduser()
-            else:
-                speech_asset = root / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
-                legacy_asset = root / "ArmoredStudio" / "assets" / "efeitosonoro.wav"
-                effect_source = speech_asset if speech_asset.is_file() else legacy_asset
+            effect_source = (
+                Path(configured_effect).expanduser()
+                if configured_effect
+                else root / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
+            )
+            if not effect_source.is_file():
+                raise BatchManifestError(
+                    "Efeito sonoro não encontrado no ArmoredSpeech. Execute "
+                    "ArmoredSpeech/scripts/migrate_audio_assets.ps1 antes do teste real."
+                )
             intro = os.getenv("ARMORED_STUDIO_INTRO", "1") != "0"
             intro_position = os.getenv("ARMORED_STUDIO_INTRO_POSITION", "final")
             prepared = prepare_audio_packages_for_items(
