@@ -588,25 +588,20 @@ def test_batch_preflight_hashes_melody_model_and_index_only_once(tmp_path, monke
 
 
 
-def test_shared_effect_sha256_is_cached_across_package_validation(tmp_path, monkeypatch):
+def test_shared_final_audio_sha256_is_cached_across_package_validation(tmp_path, monkeypatch):
     item_one = tmp_path / "item-one"
     item_two = tmp_path / "item-two"
     item_one.mkdir()
     item_two.mkdir()
-    original_one, voice_one, effect_shared, payload_one = _package(item_one)
-    original_two, voice_two, _, payload_two = _package(item_two)
-    payload_one["original_path"] = str(original_one)
-    payload_two["original_path"] = str(original_two)
+    original_one, final_audio_one, _, payload_one = _package(item_one)
+    original_two, final_audio_two, _, payload_two = _package(item_two)
     payload_two["source_id"] = "source-1"
     payload_two["item_id"] = "telegram-2"
+    payload_two["original_path"] = str(original_two)
     payload_two["original_sha256_before"] = _sha(original_two)
     payload_two["original_sha256_after"] = _sha(original_two)
-    # A batch reuses the pre-normalized project effect but carries a unique
-    # voice track and original per item. Studio validates both inputs.
-    payload_two["effect_track"] = dict(payload_one["effect_track"])
-    payload_two["audio_inputs"][1] = dict(payload_one["audio_inputs"][1])
-    assert payload_two["voice_track"]["path"] != payload_one["voice_track"]["path"]
-    assert payload_two["effect_track"]["path"] == payload_one["effect_track"]["path"]
+    # Use the same immutable final Speech audio artifact to exercise batch hash caching.
+    payload_two["final_audio_track"] = dict(payload_one["final_audio_track"])
 
     import ArmoredStudio.speech_handoff as handoff_module
 
@@ -638,12 +633,8 @@ def test_shared_effect_sha256_is_cached_across_package_validation(tmp_path, monk
         track_hash_cache=cache,
     )
 
-    assert first.effect_sha256 == second.effect_sha256 == _sha(effect_shared)
-    assert first.effect_track_path == second.effect_track_path == effect_shared
-    assert first.voice_sha256 == _sha(voice_one)
-    assert second.voice_sha256 == _sha(voice_two)
-    assert counted[effect_shared.resolve()] == 1
-    assert counted[voice_one.resolve()] == 1
-    assert counted[voice_two.resolve()] == 1
+    assert first.final_audio_sha256 == second.final_audio_sha256 == _sha(final_audio_one)
+    assert first.final_audio_track_path == second.final_audio_track_path == final_audio_one
+    assert counted[final_audio_one.resolve()] == 1
     assert counted[original_one.resolve()] == 1
     assert counted[original_two.resolve()] == 1
