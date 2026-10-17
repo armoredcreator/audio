@@ -1,4 +1,4 @@
-"""ArmoredStudio - isolated RVC voice processor."""
+"""ArmoredSpeech-owned RVC Melody engine. Routing and invocation belong to Speech."""
 
 from __future__ import annotations
 
@@ -10,17 +10,15 @@ import subprocess
 import sys
 
 
-BASE_DIR = Path(__file__).resolve().parent
-STUDIO_ROOT = BASE_DIR.parent
-REPO_ROOT = STUDIO_ROOT.parent
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SPEECH_ROOT = Path(__file__).resolve().parent
 SHARED_ENV_DIR = REPO_ROOT / ".venv"
-_configured_rvc_root = os.getenv("ARMORED_RVC_ROOT", "").strip()
-RVC_ROOT = (
-    Path(_configured_rvc_root).expanduser()
-    if _configured_rvc_root
-    else STUDIO_ROOT / "runtime" / "rvc"
-).resolve()
+# Single canonical owner: no runtime override or fallback can silently keep
+# loading model/index assets from ArmoredStudio. Local assets must be migrated
+# to ArmoredSpeech/runtime/rvc before the real RVC phase is enabled.
+RVC_ROOT = (SPEECH_ROOT / "runtime" / "rvc").resolve()
 MODELS_DIR = RVC_ROOT / "models"
+BASE_DIR = SPEECH_ROOT
 
 DEFAULT_VOICE = "melody"
 DEFAULT_OUTPUT = RVC_ROOT / "output" / "audio_rvc.wav"
@@ -78,7 +76,7 @@ def _backend_output_tail(stdout: str, stderr: str, limit: int = 12) -> str:
 def converter_interno(entrada, saida, modelo, index, item_id=None):
     import scipy.io.wavfile as wavfile
 
-    prefix = f"[STUDIO][ITEM {item_id}] " if item_id else "[STUDIO] "
+    prefix = f"[SPEECH][ITEM {item_id}] " if item_id else "[SPEECH] "
     print(f"{prefix}RVC voz={modelo.parent.name}")
 
     captured_stdout = io.StringIO()
@@ -164,7 +162,7 @@ def executar_no_rvc(entrada, saida, voz, item_id=None):
     modelo, index = localizar_modelo(voz)
     rvc_python = resolver_rvc_python()
 
-    prefix = f"[STUDIO][ITEM {item_id}]" if item_id else "[STUDIO]"
+    prefix = f"[SPEECH][ITEM {item_id}]" if item_id else "[STUDIO]"
     print(f"\n{prefix} RVC voz={voz}")
 
     current_python = Path(sys.executable).resolve()
@@ -181,7 +179,7 @@ def executar_no_rvc(entrada, saida, voz, item_id=None):
     ]
     resultado = subprocess.run(
         comando,
-        cwd=str(BASE_DIR),
+        cwd=str(REPO_ROOT),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

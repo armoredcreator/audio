@@ -4,32 +4,30 @@ Laboratório isolado para validar ArmoredSpeech e ArmoredStudio antes de qualque
 
 ## Documento canônico
 
-**Toda a arquitetura, o fluxo ponta a ponta, as responsabilidades, o contrato-alvo, as evidências, os riscos e o plano de migração de áudio estão em [docs/ARMORED_SPEECH_STUDIO_FLOW.md](docs/ARMORED_SPEECH_STUDIO_FLOW.md).** Consulte esse documento antes de alterar a integração.
+A arquitetura, o fluxo ponta a ponta, as responsabilidades, o contrato, as evidências e o plano de migração estão em [docs/ARMORED_SPEECH_STUDIO_FLOW.md](docs/ARMORED_SPEECH_STUDIO_FLOW.md).
 
 ## Regras rápidas
 
-- Ordem do pipeline: **ArmoredSync completo → ArmoredVision completo → ArmoredStock completo → ArmoredIA → ArmoredSpeech completo → ArmoredStudio → ArmoredHub**.
-- Speech deve concluir o lote aprovado antes de Studio; não intercalar as fases item a item.
-- Um único ambiente operacional: `.venv` na raiz para ArmoredSpeech, ArmoredStudio e RVC Melody.
-- O RVC deve usar o Python compartilhado; não recriar nem depender de `ArmoredStudio/runtime/rvc/env311`.
-- Preservar originais, modelo/índice Melody, assets e credenciais. Não versionar vídeos, bancos locais, ambientes virtuais, credenciais nem saídas de `storage/`.
-- `armoredcreator-testbase` e `armoredcreator-test` permanecem intocados. Nenhuma mudança deste laboratório está automaticamente aprovada para produção.
-- O falso positivo conhecido do detector Gemini está documentado no documento canônico e deve ser investigado separadamente; não misturar essa correção com a migração de áudio.
+- Ordem do pipeline de produção: **ArmoredSync completo → ArmoredVision completo → ArmoredStock completo → ArmoredIA → ArmoredSpeech completo → ArmoredStudio → ArmoredHub**.
+- Speech precisa concluir e validar o lote aprovado antes de Studio; não intercalar fases item a item.
+- Speech é dono de todo o áudio e entrega uma trilha final AAC/M4A por item.
+- Studio é dono do visual: um crop canônico e um FFmpeg final por vídeo; recebe o AAC final e usa `-c:a copy`.
+- Um único ambiente Python operacional: `.venv` na raiz para Speech, Studio e RVC Melody.
+- Copiar/verificar localmente os ativos RVC e o efeito para Speech com `ArmoredSpeech/scripts/migrate_audio_assets.ps1`. Não apagar os originais em Studio até E2E v4 aprovado.
+- Preservar originais, modelos/índices e assets. Não versionar vídeos, bancos locais, ambientes virtuais, credenciais nem saídas de `storage/`.
+- `armoredcreator-testbase`, `armoredcreator-test` e o repositório operacional ficam intocados. Esta branch não está aprovada automaticamente para produção.
+- O falso positivo conhecido do detector Gemini está fora do escopo da migração de áudio e deve ser investigado separadamente.
 
-## Validação registrada em 16/10/2026
+## Estado em 17/10/2026
 
-- Conversão real RVC Melody executada pelo Python da raiz e resultado escutado/aprovado pelo usuário.
-- Teste real Speech → Studio de um vídeo reportou `STUDIO_E2E=SUCCESS` e `VALIDACAO_E2E=PASSOU`; o usuário confirmou o resultado correto.
-- O CI registrado nesta branch passou em compilação e 68 testes. Isso não equivale a validar todas as rotas de áudio, o corpus inteiro ou a publicação.
-- A migração de RVC/mixagem para Speech está planejada, não concluída. O Studio ainda contém parte da decisão e do processamento de áudio.
+- O fluxo antigo do item 2 foi renderizado e aprovado pelo usuário; isso não prova o novo contrato v4.
+- A branch de laboratório mudou para contrato v4: Speech produz o AAC/M4A final; Studio não recebe faixas separadas nem grafo de áudio.
+- CI mais recente confirmado: compilação e 79 testes automatizados passaram: https://github.com/armoredcreator/audio/actions/runs/39049041079.
+- Pendente: executar o E2E real Windows com os ativos migrados para Speech, inspecionar o resultado e validar as rotas não-RVC antes de remover os ativos legados de Studio ou mesclar a PR.
 
-## Comandos básicos
-
-Na raiz do repositório, em PowerShell:
+## Comandos
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -c "import ArmoredSpeech; import ArmoredStudio.service; print('imports OK')"
 ```
-
-Vídeos, ambientes virtuais, bancos locais, credenciais, assets privados e resultados gerados não devem ser enviados ao Git sem aprovação explícita.

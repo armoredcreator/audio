@@ -19,6 +19,9 @@ __pycache__/
 build/
 dist/
 
+# Private/local ArmoredSpeech runtime resources; never commit RVC weights/indexes.
+ArmoredSpeech/runtime/rvc/
+
 # Private/local ArmoredStudio runtime resources; never commit binaries or model weights.
 ArmoredStudio/assets/banner.png
 ArmoredStudio/assets/efeitosonoro.wav

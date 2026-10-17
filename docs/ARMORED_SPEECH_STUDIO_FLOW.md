@@ -1,222 +1,121 @@
-# ArmoredSpeech → ArmoredStudio — documentação canônica do fluxo
+# ArmoredSpeech → ArmoredStudio: separação de áudio e vídeo
 
-**Repositório:** `armoredcreator/audio`  
-**Branch de referência desta documentação:** `feature/speech-studio-batch-runner-20261016`  
-**Escopo:** laboratório isolado; não é autorização para integrar, publicar ou alterar o ArmoredCreator operacional.  
-**Estado:** classificação/preparação de Speech, RVC Melody e teste real Speech → Studio demonstrados em amostras; transferência definitiva da propriedade de RVC/mixagem para Speech ainda pendente.
+## Objetivo e estado
 
-## 1. Ordem do pipeline maior
-
-A ordem acordada para o sistema completo é:
+Esta branch de laboratório implementa a separação de responsabilidades antes de qualquer migração para o repositório operacional:
 
 **ArmoredSync completo → ArmoredVision completo → ArmoredStock completo → ArmoredIA → ArmoredSpeech completo → ArmoredStudio → ArmoredHub.**
 
-- Sync, Vision e Stock concluem suas fases históricas antes das fases seguintes.
-- IA vem antes de Speech.
-- Speech deve concluir o lote aprovado antes do início do Studio; não intercalar Speech → Studio item por item.
-- Hub/publicação não faz parte dos testes isolados descritos aqui.
-- Esta branch de laboratório não substitui a integração validada contra o banco real nem autoriza publicação.
+- ArmoredSpeech é o proprietário do processamento e das decisões de áudio.
+- ArmoredStudio é o proprietário das decisões visuais e da edição do vídeo.
+- O renderizador final combina os grafos criados pelos dois domínios em **uma chamada FFmpeg audiovisual por vídeo**, com **um único crop de origem**.
+- O E2E anterior realizado pelo usuário confirmou a rota Melody e a organização de Storage, mas ocorreu com um contrato anterior. Ele não conta como validação do novo contrato v5.
+- A branch permanece experimental; o PR #5 está em draft e não foi mesclado. Nenhuma alteração foi aplicada ao repositório operacional ou às bases congeladas.
 
-## 2. Responsabilidades pretendidas
+## 1. Responsabilidade exclusiva do ArmoredSpeech
 
-### ArmoredSpeech — dono do processamento de áudio
+Speech classifica o áudio, detecta idioma/fala/música/ruído/silêncio, valida se RVC Melody é permitido, extrai/prepara o áudio de entrada, executa RVC quando permitido, gera silêncio para rotas sem voz, prepara o efeito e aplica a política de ganho uma única vez. Ele também decide a sincronização, os cortes temporais, os fades, a duração e a composição das faixas.
 
-Responsabilidades atuais e/ou destino da migração:
-1. Extrair e preparar o áudio de entrada sem modificar o MP4 original.
-2. Detectar presença de fala, idioma, música, ruído e ausência de áudio.
-3. Classificar cada item e persistir a decisão no registro SQLite experimental do próprio Speech.
-4. Gerar o WAV sidecar de referência e, quando exigido pela classe, separar a voz.
-5. Aplicar RVC Melody somente quando a decisão e as evidências autorizarem.
-6. Preparar a rota final de áudio: voz convertida, faixa silenciosa ou áudio alternativo conforme a regra aprovada.
-7. Aplicar o efeito sonoro do projeto e os volumes/mixagem acordados.
-8. Entregar ao Studio um artefato de áudio validado, com identidade, metadados, hashes e contrato versionado.
+Speech prepara dois artefatos validados por item:
+- `voice.wav`: voz Melody aprovada ou faixa de silêncio para a rota sem RVC;
+- `effect.wav`: efeito sonoro normalizado e com ganho aplicado, compartilhado pelo lote quando possível.
 
-**Meta da migração:** RVC, escolha da rota, silêncio, efeito sonoro e mixagem passam a ser responsabilidade de Speech. Não basta mover o arquivo do conversor; é preciso mover a decisão e a preparação do áudio sem duplicar processamento.
+Em paralelo, Speech produz o contrato v5 com:
+- identidade do item e hash do original antes/depois;
+- hash e metadados dos arquivos WAV;
+- grafo de filtros de áudio completo e seu SHA-256;
+- rótulo de saída do grafo;
+- plano temporal visual usado, início de voz/vídeo, duração principal, intro e posição;
+- opções de renderização final do áudio (codec, bitrate, amostragem, canais e looping do efeito).
 
-### ArmoredStudio — dono da edição visual e do vídeo final
+A política e o grafo de áudio nascem em Speech. O contrato é validado antes do primeiro render do lote.
 
-Permanece responsável por:
-- metadados e validação do vídeo;
-- detecção de barras pretas;
-- detecção de marcas VEO 1/VEO 2 e Gemini;
-- análise de banner, planejamento e validação de cortes/crop;
-- composição visual, banner/intro e normalização para o formato final;
-- sincronização da faixa recebida de Speech com cortes e duração do vídeo;
-- renderização final via FFmpeg, validação do arquivo resultante e verificação de integridade do original.
+## 2. Responsabilidade exclusiva do ArmoredStudio
 
-O Studio não deve chamar RVC nem aplicar novamente o efeito/mixagem quando receber áudio finalizado por Speech. Ele continua responsável por sincronizar esse áudio com a edição visual e renderizar o vídeo.
+Studio analisa somente o vídeo/imagem: barras, banner visual, marcas VEO/Gemini, enquadramento e plano visual. Ele valida o plano visual, escolhe o único retângulo de crop seguro e aplica efeitos de imagem, intro visual, banner e encode de vídeo.
 
-## 3. Estado atual encontrado no código
+Studio não importa nem executa Audio Intelligence, não extrai áudio, não classifica classes de áudio, não decide rota, não chama RVC, não gera silêncio, não escolhe ganho/volume/fades, não cria o grafo de áudio e não mixa as faixas.
 
-### ArmoredSpeech
-- `ArmoredSpeech/audio_intelligence.py`: classificação de áudio.
-- `ArmoredSpeech/model_processor.py`: converte o resultado da análise em decisão tipada.
-- `ArmoredSpeech/media.py`: prepara o WAV sidecar; pode usar separação vocal quando exigida.
-- `ArmoredSpeech/studio_bridge.py`: exporta a decisão persistida para o contrato.
-- `ArmoredSpeech/studio_integration.py`: faz o handoff e pré-valida o lote antes da primeira chamada ao Studio.
-- `ArmoredSpeech/studio_batch_runner.py`: runner de laboratório para lote aprovado e completo.
+O validador `ArmoredStudio/speech_handoff.py` é apenas a fronteira do contrato: confere identidade, integridade do original, formato/hash das faixas e integridade do grafo produzido por Speech. Não recalcula a política de áudio.
 
-### ArmoredStudio
-- `ArmoredStudio/service.py`: fronteira pública `build(root).process(item, speech_payload=...)`.
-- `ArmoredStudio/unified.py`: orquestra análise e processamento; ainda possui decisão/fluxo de áudio e chama a conversão RVC.
-- `ArmoredStudio/analysis/audio_intelligence.py`: classificador de áudio paralelo que precisa ser aposentado do fluxo de produção depois de migrar e validar a decisão de Speech.
-- `ArmoredStudio/processing/rvc.py`: conversor RVC usado no Studio; a implementação testada deve ser reutilizada, não reescrita sem necessidade.
-- `ArmoredStudio/processing/finalizer.py`: finalização audiovisual. Hoje recebe voz e efeito sonoro como entradas distintas, controla volumes/normalização, aplica cortes temporais e renderiza intro/vídeo principal.
-- `ArmoredStudio/speech_handoff.py`: valida o payload v1, identidade do item, caminhos dentro do workspace, legibilidade do WAV, SHA-256 do original e elegibilidade de RVC.
-- `ArmoredStudio/analysis/blackbar.py`, `veo_detector.py`, `gemini_detector.py`, `export_planner.py` e `export_plan_validator.py`: fluxo visual que permanece no Studio.
+## 3. Um crop e uma única renderização final FFmpeg
 
-**Conclusão arquitetural:** existe uma fronteira de integração funcional, mas a separação de responsabilidades ainda é parcial. O contrato v1 transporta principalmente classificação e WAV de referência; não garante por si só que Speech já tenha entregue voz convertida e mixagem pronta. O Studio ainda executa etapas de áudio, então a migração exige ampliar o contrato e adaptar o finalizador.
+O pipeline final é:
 
-## 4. Contrato proposto para a nova fronteira
+1. Studio faz a pré-análise visual somente de leitura.
+2. Speech usa o plano visual como dado temporal e prepara as faixas e o grafo de áudio.
+3. O runner valida o lote completo e os hashes antes de começar qualquer render.
+4. O renderizador junta mecanicamente o grafo visual do Studio e o grafo de áudio do Speech e executa **uma única invocação FFmpeg para a composição audiovisual final**.
 
-A próxima versão do contrato deve ser versionada e validada de modo fail-closed. Campos conceituais mínimos:
+O grafo visual aplica o início/crop da fonte uma única vez, divide os frames já recortados para a cena principal e a intro visual e concatena o resultado. O grafo de áudio fornecido por Speech consome `[1:a]` (voz/silêncio) e `[2:a]` (efeito). Se houver intro visual, o banner é a entrada visual `[3:v]`.
 
-- versão do contrato;
-- `source_id` e `item_id` estáveis;
-- caminho do original e SHA-256 antes/depois;
-- classe de áudio, idioma, confiança e evidências de fala/música;
-- decisão explícita de RVC e motivo;
-- caminho do artefato de áudio final preparado por Speech;
-- hash do artefato, formato, canais, sample rate e duração;
-- estado do processamento e versão/modelo RVC usados;
-- descrição da rota: voz convertida, silêncio/efeito, ou rota conservadora aprovada;
-- política de limpeza/retensão do WAV e artefatos até o Studio confirmar sucesso.
+Importante: “uma única chamada FFmpeg” refere-se à **renderização final de áudio+vídeo**. Speech ainda pode usar FFmpeg em etapas próprias de extração, preparação e normalização necessárias antes da renderização, além de executar o motor RVC. Não existe um segundo render FFmpeg que monte uma faixa sonora final intermediária e depois outra chamada que remonte o vídeo.
 
-O contrato deve impedir:
-- inferir elegibilidade de RVC apenas pela existência de um WAV;
-- aceitar caminho fora do workspace;
-- aceitar original alterado ou hashes divergentes;
-- processar item cuja decisão esteja ausente, desconhecida ou não READY;
-- aplicar RVC ou mixagem duas vezes;
-- começar o lote do Studio se algum item do lote aprovado estiver bloqueado.
+O renderizador recebe os parâmetros de encode de áudio que Speech declarou no contrato. Ele não inventa nem altera as regras de áudio; traduz o contrato validado em argumentos FFmpeg.
 
-Não permitir que Studio leia diretamente a tabela SQLite interna do Speech. A integração continua por payload/artefato versionado, não por compartilhamento do schema interno.
+## 4. Contrato v5
 
-## 5. Rotas de áudio e regras de segurança
+O contrato v5 é produzido em `ArmoredSpeech/audio_package.py` e consumido/validado por `ArmoredStudio/speech_handoff.py`.
 
-| Classe/condição | Regra segura |
-|---|---|
-| Narração PT-BR sem música relevante | Elegível a Melody somente com decisão válida e evidência aprovada. |
-| Fala PT-BR + música | RVC bloqueado no contrato atual até que a separação vocal seja validada explicitamente; não assumir que um stem é seguro apenas por existir. |
-| Música sem fala | Nunca enviar ao RVC PT-BR; seguir a rota aprovada de áudio não narrado/efeito. |
-| Ruído ou sem narração útil | Não usar RVC; usar a rota conservadora definida pelo projeto. |
-| Sem áudio | Gerar silêncio determinístico quando necessário; aplicar o efeito somente conforme regra aprovada. |
-| Fala estrangeira | Não usar o modelo Melody PT-BR; aplicar a política conservadora definida pelo projeto. |
-| UNKNOWN, erro, arquivo ilegível ou decisão inconsistente | Bloquear a elegibilidade e não presumir sucesso. |
+- `voice_track` e `effect_track`: caminhos dentro do laboratório, SHA-256, PCM WAV, 44,1 kHz estéreo, duração e tamanho;
+- `audio_filter_graph`: o grafo criado por Speech;
+- `audio_output_label`: `[main_a]` ou `[final_a]`;
+- `audio_timeline`: hashes do grafo/plano, inícios, duração da faixa principal, intro e opções de renderização;
+- original: caminho canônico e SHA-256 antes/depois.
 
-Os volumes, normalização, duração e comportamento de introdução precisam ser preservados em testes comparativos. A mixagem deve ocorrer uma única vez.
+A validação bloqueia arquivos ausentes, fora do laboratório, inválidos, hashes divergentes, grafos não permitidos e inconsistência temporal. Nenhuma renderização começa se qualquer item do lote falhar na validação.
 
-## 6. Plano de migração — ainda não executado
+## 5. Módulos e ativos
 
-1. **Congelar a referência:** registrar branch/commit, hashes do modelo e índice Melody, assets necessários, configuração e evidência do teste E2E aprovado.
-2. **Mapear dependências:** identificar todas as chamadas de RVC, extração, silêncio, efeitos, volume, normalização, filtros temporais e limpeza de temporários no Studio.
-3. **Definir o contrato de áudio final:** Speech produz e valida o áudio que o Studio consumirá; registrar duração/formato/hash e a rota escolhida.
-4. **Reaproveitar a implementação RVC comprovada:** não reescrever o conversor nem regenerar/substituir o modelo ou índice. Usar o ambiente compartilhado `.venv` / Python 3.11.9 já validado no laboratório.
-5. **Mover a propriedade, não apenas o arquivo:** Speech decide e prepara a rota completa; Studio deixa de classificar/convertê-la/mixá-la novamente.
-6. **Adaptar o finalizador:** Studio recebe o artefato final de Speech, alinha-o aos cortes temporais e compõe o vídeo; preservar tratamento visual e áudio da introdução conforme a regra aprovada.
-7. **Manter compatibilidade temporária controlada:** caminho antigo pode existir durante a comparação, mas os modos precisam ser mutuamente exclusivos para nunca duplicar RVC ou mixagem.
-8. **Executar testes isolados por rota** e depois o teste real Speech → Studio com o vídeo de referência.
-9. **Comparar saída e integridade:** escuta humana, volume, efeito, sincronização, duração, streams/codificação, imagem, saída legível e SHA-256 do original. Registrar os resultados.
-10. **Retirar o caminho antigo somente após aprovação:** nenhuma implementação funcional, modelo, índice, asset ou arquivo original deve ser removido antes de passar os critérios de aceitação.
+### Em ArmoredSpeech
+- `audio_intelligence.py`, `model_processor.py`, `media.py`: classificação e preparação do áudio.
+- `rvc_engine.py`: único motor RVC, com ativos sob `ArmoredSpeech/runtime/rvc/`; não faz fallback para diretórios de Studio.
+- `audio_package.py`: cria/valida as faixas de voz/silêncio, o efeito e o contrato.
+- `timeline_mixer.py`: cria o grafo de áudio e detecta início de fala quando necessário; não faz renderização separada do áudio final.
+- `studio_integration.py`, `studio_batch_runner.py`: preflight de lote, validação e handoff.
 
-### Critérios de aceitação da migração
+### Em ArmoredStudio
+- `unified.py`: análise visual, validação do contrato e chamada ao renderizador.
+- `processing/visual_finalizer.py`: um crop, grafo visual, concatenação da intro visual e uma única chamada FFmpeg audiovisual.
+- `speech_handoff.py`: validador estrutural do contrato v5; não processa áudio.
 
-- Speech entrega artefato válido e metadados coerentes para cada rota.
-- RVC é executado no máximo uma vez e apenas para narração PT-BR elegível.
-- Efeito sonoro e mixagem são aplicados no máximo uma vez e mantêm os volumes acordados.
-- Studio não depende do classificador de áudio próprio para tomar uma decisão já tomada por Speech.
-- Cortes temporais não causam perda de sincronização ou faixa de áudio ausente.
-- Detecção visual, crop, banner, composição e renderização continuam funcionando.
-- Vídeo original, modelo Melody e índice não mudam.
-- Lote bloqueado/incompleto não começa parcialmente no Studio.
-- Testes automatizados e E2E real passam; saída final é aberta por ferramentas de inspeção e escutada pelo usuário.
+Os módulos de processamento de áudio legados `ArmoredStudio/analysis/audio_intelligence.py`, `ArmoredStudio/processing/rvc.py` e `ArmoredStudio/processing/finalizer.py` não fazem parte do caminho ativo da branch e não devem ser recriados como fallback. A presença de um validador de contrato não representa transferência do processamento de áudio ao Studio.
 
-## 7. Evidências registradas em 16/10/2026
+## 6. Migração local dos ativos (cópia verificada)
 
-### Evidência positiva
-- Ambiente unificado do laboratório com Python 3.11.9.
-- Conversão real RVC Melody executada no ambiente raiz; o usuário escutou e aprovou o resultado.
-- Teste E2E de um vídeo: Speech reportou `READY`, classe `PT_BR_NARRATION`, idioma `pt-br`, fala detectada, música não detectada e elegibilidade RVC verdadeira.
-- O Studio chamou Melody em CPU e reportou `STUDIO_E2E=SUCCESS` / `VALIDACAO_E2E=PASSOU`.
-- O MP4 de saída foi inspecionado via ffprobe: H.264, 1080×1920, AAC mono, duração reportada de 12 segundos.
-- O usuário confirmou que o resultado de áudio/vídeo saiu corretamente.
-- CI registrado no contexto de trabalho: compileall passou e 68 testes passaram. Essa evidência é do CI citado, não uma afirmação de que todos os cenários de produção foram cobertos.
-- Os originais, modelo e índice foram preservados nos testes reportados.
-
-### Limites da evidência
-- Um E2E aprovado comprova o caminho testado, não todas as classes de áudio nem o lote histórico inteiro.
-- O contrato atual ainda não transfere toda a responsabilidade de RVC/mixagem para Speech.
-- A integração de produção, SQLite operacional e publicação no Hub permanecem fora do escopo desta validação.
-
-## 8. Pendência visual conhecida — não alterar nesta migração
-
-Na matriz visual de 14 vídeos analisada em 16/10/2026, o usuário confirmou 13 classificações corretas e um falso positivo do detector Gemini em `178482_7AeDXQWFF2.mp4`, onde não havia marca. Registrar como pendência separada para investigação posterior. **Não modificar o detector Gemini nesta migração de áudio**, para evitar misturar duas mudanças e dificultar a comparação.
-
-Avisos FFmpeg de decodificação observados em um arquivo devem ser investigados separadamente se voltarem a aparecer ou se houver evidência de impacto. Não tratar aviso isolado como prova de falha sem verificar o resultado.
-
-## 9. Ambiente e comandos de validação no Windows
-
-Executar a partir da raiz local do AudioLab. Não usar Python global nem recriar um ambiente RVC legado.
+Na raiz de `ArmoredAudioLab`, depois de atualizar esta branch por fast-forward seguro, execute:
 
 ```powershell
-# Suíte automatizada do repositório
-.\.venv\Scripts\python.exe -m pytest -q
-
-# Verificar importações centrais
-.\.venv\Scripts\python.exe -c "import ArmoredSpeech; import ArmoredStudio.service; print('imports OK')"
-
-# Conversão RVC isolada: usar sempre arquivo de saída novo
-.\.venv\Scripts\python.exe .\ArmoredStudio\processing\rvc.py .\audio_original.wav .\storage\validation\melody_output.wav melody
-
-# Validar áudio real de Speech, quando o corpus local estiver disponível
-.\.venv\Scripts\python.exe .\ArmoredSpeech\tests\validate_real_audio.py
+.\ArmoredSpeech\scripts\migrate_audio_assets.ps1
 ```
 
-Para testes que usam corpus, sempre conferir os caminhos, calcular SHA-256 antes/depois, usar saída separada e não versionar vídeos, credenciais, banco local, ambientes virtuais ou saídas de `storage/`. A disponibilidade de cada arquivo local deve ser verificada antes de executar um comando.
+O script copia modelos/índices RVC e `efeitosonoro.wav` dos caminhos antigos para:
+- `ArmoredSpeech\runtime\rvc\models\melody\`
+- `ArmoredSpeech\assets\efeitosonoro.wav`
 
-## 10. Documentos e escopo
+Ele confere SHA-256, não sobrescreve destinos diferentes e **não apaga nem altera a origem**. Não remova manualmente ativos antigos do Studio antes de um E2E real com contrato v5 aprovado. O banner visual permanece em Studio.
 
-Este é o documento canônico para fluxo, arquitetura, evidências, riscos, testes e plano de migração Speech → Studio. Os READMEs das pastas devem servir apenas como índices para este documento e para os comandos básicos. Documentos de status/planos antigos redundantes foram consolidados para evitar instruções contraditórias. Arquivos de código, testes, assets, requisitos e dados locais não fazem parte desta limpeza documental.
+## 7. Storage, isolamento e segurança
 
-## 11. Fora do escopo e limites de segurança
+- O corpus fica em `storage/Videos GRUPO_FONTE_teste/<ID>/<arquivo_descritivo>.mp4`.
+- O runner usa um banco SQLite isolado do Speech; nunca abre `storage/database/armoredcreator.db`.
+- Manifestos, relatórios, grafos e artefatos de lote ficam sob `storage/validation/`.
+- Um artefato existente nunca é sobrescrito automaticamente.
+- Os arquivos do corpus, originais canônicos, modelos/índices e assets não são apagados por testes.
+- Nenhum teste publica no Hub.
 
-- Não alterar `armoredcreator-testbase` (base congelada) nem `armoredcreator-test` (repositório de prova).
-- Não alterar o repositório operacional `armoredcreator/armoredcreator` nesta fase.
-- Não executar Sync, Vision, Stock, IA, Hub, Telegram, Shopee ou publicação a partir deste laboratório.
-- Não sobrescrever nem apagar originais, banco local, credenciais, modelo/índice RVC ou assets.
-- Não corrigir o falso positivo Gemini no mesmo conjunto de mudanças.
-- Nenhuma integração de produção é considerada aprovada apenas pela existência deste documento.
+## 8. Evidência anterior versus validação pendente
 
+Em 17/10/2026, o usuário executou no Windows o E2E anterior para `2/2_narração_pt.mp4`, confirmou `STUDIO_SPEECH_BATCH=SUCCESS`, `ORIGINALS_INTACT=True`, viu o MP4 final e confirmou que imagem/áudio estavam corretos. O SHA-256 do original foi confirmado. Essa execução usou contrato anterior (não v5).
 
-## 12. Auditoria estática detalhada — 17/10/2026
+A CI do ramo v5 passou na compilação e em 78 testes automatizados antes da última adição das opções de renderização declaradas por Speech. O run que inclui esse último ajuste deve ser conferido antes de solicitar atualização local.
 
-### Dependências reais confirmadas
+O próximo passo **não é rodar mais classes de áudio ainda**. Primeiro:
+1. confirmar CI verde do contrato v5 e do renderizador final;
+2. atualizar a cópia local com fast-forward seguro;
+3. copiar/verificar os ativos para Speech;
+4. executar E2E real com o contrato v5 e inspecionar a saída;
+5. depois testar ruído, silêncio, música, fala com música e vídeos com barras;
+6. somente após aprovação real auditar/remover qualquer módulo/ativo restante e limpar temporários.
 
-- `ArmoredSpeech/studio_integration.py` exporta uma decisão READY pelo `studio_bridge.py` e prepara todas as decisões do lote antes da primeira chamada a `studio.process`.
-- `ArmoredStudio/service.py` chama `UnifiedStudio.process`, que ainda valida o handoff, usa a decisão de Speech como override de classificação, volta a decidir elegibilidade RVC, extrai áudio via FFmpeg, gera silêncio quando necessário, chama `processing.rvc.converter_voz` e invoca `processing.finalizer.finalizar`.
-- `ArmoredStudio/processing/rvc.py` resolve o Python da raiz e carrega o `.pth` e o índice `.index` existentes em `ArmoredStudio/runtime/rvc/models/<voz>`. Reutilizar esta implementação e os assets; não recriar nem substituir modelos.
-- `ArmoredStudio/processing/finalizer.py` controla volume da voz, normalização/volume do efeito, mistura via `amix`, introdução e concatenação audiovisual. A mistura é feita no caminho com e sem intro.
-- `ArmoredStudio/speech_handoff.py` só aceita contrato v1 e WAV sidecar com nome-base igual ao original. Para áudio final precisaremos validar também o hash do artefato, formato, canais, sample rate, duração e rota.
-- `ArmoredSpeech/media.py` hoje prepara WAV mono 16 kHz de referência e pode gerar stem vocal para classe mista. Porém `studio_bridge.py` bloqueia RVC para classe mista, enquanto o teste de `model_processor.py` permite elegibilidade após separação. Até existir validação explícita do stem, a regra operacional segura continua bloqueando Melody para áudio misto.
-
-### Bloqueio de sincronização que precisa de solução antes de remover a mistura
-
-Hoje `finalizer.py` aplica `plan.audio_start` à voz antes de misturá-la, enquanto o efeito sonoro começa desde o início. Se Speech entregar um único WAV já mixado e Studio aplicar `audio_start` nesse WAV, o começo do efeito também será cortado/deslocado. Não podemos simplesmente remover o filtro temporal nem duplicar a mixagem. A migração deve preservar a semântica atual e testar `audio_start = 0` e `audio_start > 0` antes de aposentar o caminho antigo.
-
-### Testes identificados
-
-- `test_studio_bridge.py`, `test_studio_adapter.py`: payload, caminhos, hashes e elegibilidade.
-- `test_studio_integration.py`, `test_studio_integration_contract.py`: rotas e contrato de consumo; o caminho de integração usa modo copy-only, não prova RVC/renderização real.
-- `test_studio_batch_runner.py`, `test_studio_batch_integration.py`: lote completo, preflight e preservação dos originais/saídas.
-- `test_armoredspeech_model_processor.py`, `test_armoredspeech_audio_intelligence.py`, `test_armoredspeech_contracts.py`: classificação e decisão.
-- `validate_real_audio.py`, `validate_full_corpus.py` e `diagnose_real_audio.py`: ferramentas para corpus/áudio real; não substituem testes automatizados.
-
-Esta foi uma auditoria estática do código remoto; não executei testes nem renderização nesta sessão. O E2E aprovado anteriormente é evidência do caminho antigo, não da migração ainda não implementada.
-
-### Portões obrigatórios antes de aposentar v1
-
-1. Testes de contrato v2 para identidade, rota, estado, hash, formato, canais, sample rate, duração e caminhos dentro do workspace.
-2. Testes provando que Melody não é executado para música, silêncio, ruído, fala estrangeira, classe mista ou decisão desconhecida.
-3. Teste que o Studio não reclassifica, não chama RVC e não mistura novamente quando recebe contrato v2.
-4. Testes temporais para `audio_start = 0` e `audio_start > 0`.
-5. Compatibilidade v1 temporária, mutuamente exclusiva com v2 por item, para impedir RVC/mixagem duplicados.
+O PR permanece em draft até os E2Es reais e a auditoria final passarem.
