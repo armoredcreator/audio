@@ -256,9 +256,9 @@ def run_complete_batch(
             raise RuntimeError(f"Hash de original mudou durante Studio: {changed}")
 
         report["status"] = "SUCCESS"
+        report["report_path"] = str(report_path)
         report["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
         _write_report(report_path, report)
-        report["report_path"] = str(report_path)
         return report
     except Exception as exc:
         changed = []
@@ -273,6 +273,7 @@ def run_complete_batch(
         report["error"] = f"{type(exc).__name__}: {exc}"
         report["changed_originals"] = changed
         report["originals_intact"] = not changed
+        report["report_path"] = str(report_path)
         report["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
         _write_report(report_path, report)
         raise
