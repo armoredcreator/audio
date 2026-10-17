@@ -193,14 +193,7 @@ def prepare_audio_packages_for_items(
         ):
             raise RuntimeError("Melody index changed during whole-batch Speech preparation")
 
-    # The batch has completed all final tracks successfully. The shared
-    # normalized effect was an internal Speech intermediate and is not part of
-    # the handoff; remove it so validation storage contains only final tracks.
-    shared_path = Path(str(shared_effect_track["path"]))
-    shared_path.unlink(missing_ok=True)
-    try:
-        shared_path.parent.rmdir()
-    except OSError:
-        pass
-
+    # The shared normalized effect remains a validated batch input until Studio's
+    # single audiovisual FFmpeg render has consumed every Speech audio graph.
+    # The runner retains this package root for audit/cleanup after the batch.
     return prepared
