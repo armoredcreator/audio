@@ -10,6 +10,7 @@ one final audiovisual FFmpeg render; Studio does not create audio policy.
 import hashlib
 import json
 import math
+import wave
 from pathlib import Path
 from typing import Any
 
