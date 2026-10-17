@@ -222,22 +222,67 @@ def run_corpus_batch(
     model: str = "UVR-MDX-NET-Voc_FT.onnx",
     timeout_seconds: int = 7200,
     render: bool = False,
+    list_only: bool = False,
 ) -> dict[str, Any]:
     root = Path(root).resolve(strict=True)
-    if inputs_json:
+    if list_only:
+        if inputs_json is not None or render:
+            raise CorpusBatchError("--list-only não pode ser combinado com --inputs-json ou --render")
+        videos = discover_videos(root, video_root, expected_count)
+    else:
+        if inputs_json is None:
+            raise CorpusBatchError(
+                "Para evitar incluir uma saída de teste como entrada, processe somente uma lista revisada: "
+                "execute primeiro --list-only, confira a lista e passe o caminho por --inputs-json."
+            )
         videos = _read_explicit_inputs(root, inputs_json)
         if len(videos) != expected_count:
             raise CorpusBatchError(
                 f"Manifesto lista {len(videos)} vídeos; esperado exatamente {expected_count}. "
                 "Nenhum artefato foi criado."
             )
-    else:
-        videos = discover_videos(root, video_root, expected_count)
 
     batch_id = batch_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     batch_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", batch_id).strip("._-")[:48]
     if not batch_id:
         raise CorpusBatchError("batch-id inválido")
+
+    if list_only:
+        inventory_dir = root / "storage" / "validation" / f"corpus{expected_count}_inventory_{batch_id}"
+        if inventory_dir.exists():
+            raise CorpusBatchError(f"Inventário já existe; nada será sobrescrito: {inventory_dir}")
+        inventory_dir.mkdir(parents=True, exist_ok=False)
+        inventory = [
+            {
+                "path": _relative(path, root),
+                "filename": path.name,
+                "size_bytes": path.stat().st_size,
+                "sha256": _sha256(path),
+            }
+            for path in videos
+        ]
+        inputs_path = inventory_dir / "inputs.json"
+        inputs_path.write_text(
+            json.dumps([row["path"] for row in inventory], ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        inventory_report = {
+            "schema_version": 1,
+            "status": "INPUTS_INVENTORIED",
+            "expected_count": expected_count,
+            "discovered_count": len(inventory),
+            "video_root": str(Path(video_root).resolve() if Path(video_root).is_absolute() else (root / video_root).resolve()),
+            "inputs_manifest": str(inputs_path),
+            "files": inventory,
+        }
+        _write_json(inventory_dir / "inventory-report.json", inventory_report)
+        print(f"CORPUS_DISCOVERED={len(inventory)}/{expected_count}")
+        for position, row in enumerate(inventory, start=1):
+            print(f"INPUT={position:02d} FILE={row['filename']} SIZE={row['size_bytes']} SHA256={row['sha256']} PATH={row['path']}")
+        print(f"INPUTS_JSON={inputs_path}")
+        print(f"INVENTORY_REPORT={inventory_dir / 'inventory-report.json'}")
+        return inventory_report
+
     source_id = f"source_corpus{expected_count}_{batch_id}"
     storage_root = root / "storage"
     workspace_root = storage_root / f"Videos GRUPO_FONTE_corpus{expected_count}_{batch_id}"
@@ -477,8 +522,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default="UVR-MDX-NET-Voc_FT.onnx",
                         help="modelo de separação vocal para itens fala+música")
     parser.add_argument("--timeout", type=int, default=7200)
+    parser.add_argument("--list-only", action="store_true",
+                        help="apenas listar/hashi-ar exatamente os vídeos candidatos e gerar inputs.json; sem análise nem cópias")
     parser.add_argument("--render", action="store_true",
-                        help="após Speech READY em todos os itens, executar o render real do Studio")
+                        help="após Speech READY em todos os itens da lista revisada, executar o render real do Studio")
     args = parser.parse_args(argv)
     try:
         report = run_corpus_batch(
@@ -490,12 +537,16 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model,
             timeout_seconds=args.timeout,
             render=args.render,
+            list_only=args.list_only,
         )
     except Exception as exc:
         print(f"CORPUS_E2E=FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
     if report.get("status") == "SUCCESS":
         print("CORPUS_E2E=SUCCESS")
+        return 0
+    if report.get("status") == "INPUTS_INVENTORIED":
+        print("CORPUS_E2E=INPUTS_INVENTORIED")
         return 0
     if report.get("status") == "SPEECH_READY_STUDIO_NOT_RUN":
         print("CORPUS_E2E=PREPARED_ONLY")
