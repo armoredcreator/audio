@@ -7,6 +7,7 @@ Laboratório isolado para validar ArmoredSpeech e ArmoredStudio antes de qualque
 - Plano e evidências da unificação de dependências: [docs/DEPENDENCY_SHARING_PLAN.md](docs/DEPENDENCY_SHARING_PLAN.md).
 - **Um único ambiente operacional:** `.venv` na raiz para ArmoredSpeech, ArmoredStudio e RVC Melody.
 - O executor RVC usa somente o Python compartilhado da raiz; não depende de `runtime/rvc/env311`.
+- O runner experimental `python -m ArmoredSpeech.studio_batch_runner` faz o handoff do lote Speech completo e aprovado para a fronteira pública do Studio; veja [o contrato do runner](ArmoredSpeech/docs/STUDIO_BATCH_RUNNER.md).
 - Vídeos, ambientes virtuais, bancos locais, credenciais, assets privados e resultados gerados não devem ser enviados ao Git sem aprovação explícita.
 
 ## Ordem oficial do pipeline
@@ -24,6 +25,7 @@ O corpus fica em `C:\Users\Administrador\Downloads\ArmoredAudioLab\storage`. Os 
 - Speech: 45 testes aprovados, 1 ignorado.
 - Speech real: 5/5 vídeos de referência passaram; hashes originais intactos.
 - RVC: imports de Fairseq e RVCInference passaram no ambiente raiz.
-- Melody: conversão real executada pelo Python da raiz, arquivo de saída não vazio e áudio escutado/aprovado pelo usuário; original, modelo, índice e inventário do RVC anterior permaneceram inalterados.
+- Melody: conversão real executada pelo Python da raiz, arquivo de saída não vazio e áudio escutado/aprovado pelo usuário; original, modelo e índice permaneceram inalterados.
+- Speech + RVC: auditoria read-only do ambiente unificado passou; `pytest -q` passou com 63 testes. O runner de lote Speech → Studio foi adicionado nesta branch, ainda aguardando CI e seu teste copy-only.
 
 A validação completa do corpus de Studio e o pipeline de publicação continuam fora do escopo desta aprovação isolada. Não publicar no Hub ou promover mudanças ao ArmoredCreator de produção sem auditoria e aprovação.
