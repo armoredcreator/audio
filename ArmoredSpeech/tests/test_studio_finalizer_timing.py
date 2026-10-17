@@ -171,3 +171,37 @@ def test_no_intro_render_still_uses_one_ffmpeg_invocation_and_no_banner(tmp_path
     assert graph.count("crop=") == 1
     assert "amix=" in graph
     assert "-loop" not in command
+
+
+def test_portrait_crop_shrinks_tight_odd_origin_safe_region_to_even_alignment():
+    crop = visual_finalizer._single_portrait_crop(
+        {
+            "crop_final": {"x": 1, "y": 1, "width": 900, "height": 1600},
+        },
+        source_width=1000,
+        source_height=1700,
+    )
+
+    x, y, width, height = crop
+    assert x % 2 == 0
+    assert y % 2 == 0
+    assert width % 2 == 0
+    assert height % 2 == 0
+    assert width * 16 == height * 9
+    assert x >= 1 and y >= 1
+    assert x + width <= 901
+    assert y + height <= 1601
+
+
+def test_portrait_crop_keeps_the_largest_centered_crop_when_aligned_region_allows_it():
+    crop = visual_finalizer._single_portrait_crop(
+        {
+            "crop_final": {"x": 2, "y": 4, "width": 902, "height": 1604},
+        },
+        source_width=1000,
+        source_height=1700,
+    )
+
+    x, y, width, height = crop
+    assert (width, height) == (900, 1600)
+    assert (x, y) == (2, 4)
