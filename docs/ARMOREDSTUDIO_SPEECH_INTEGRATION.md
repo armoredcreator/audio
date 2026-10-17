@@ -76,8 +76,10 @@ Não executar renderização real até as dependências/asset serem validadas, o
 
 ## Ambiente Python compartilhado
 
-O setup do ArmoredSpeech usa o `.venv` da raiz, por meio de `ArmoredSpeech/setup_runtime.ps1`. NumPy 1.23.5 passou 45 testes unitários (1 ignorado) e a validação real dos cinco arquivos de referência, com hashes dos originais inalterados. A migração das dependências exclusivas do RVC está pendente; `env311` deve ser preservado até uma conversão Melody passar usando o interpretador compartilhado.
+O ambiente operacional é somente `.venv` na raiz, por meio de `ArmoredSpeech/setup_runtime.ps1`. Em 16/10/2026, o usuário confirmou Python 3.11.9, NumPy 1.23.5, imports de Torch 2.14.1+cpu, TorchAudio 2.11.0+cpu, Fairseq 0.12.3.1 e RVCInference; a auditoria read-only passou e `pytest -q` retornou 63 passed. A conversão real Melody pela raiz foi validada com WAV de saída não vazio, áudio escutado/aprovado e hashes do original/modelo/índice preservados. Isso não certifica renderização Studio de vídeo real.
 
 ## Estado atual
 
-O adapter e os testes sintéticos de handoff existem. A ligação do chamador/orquestrador real do laboratório, os assets binários oficiais e o runtime/modelo/índice RVC ainda precisam ser confirmados antes de declarar o teste real ponta a ponta concluído.
+A branch inclui `ArmoredSpeech/studio_batch_runner.py`, um executor de laboratório que exige manifesto aprovado com `phase_status=COMPLETE`, carrega objetos `armored_core.models.Item`, confere caminhos e SHA-256, pré-valida todas as diretivas READY antes da primeira chamada e chama a fronteira pública do Studio. O modo `--copy-only` valida a integração do serviço/contrato sem alegar renderização real. A primeira execução da CI encontrou um erro de configuração no modo de cópia (a variável `ARMORED_STUDIO_ALLOW_COPY` também precisa estar habilitada); esse erro está sendo corrigido e a suíte precisa passar novamente.
+
+O teste real de vídeo continua bloqueado até confirmar os assets oficiais `banner.png` e `efeitosonoro.wav`, FFmpeg, modelo/índice Melody no laboratório e um subconjunto aprovado do corpus. Não executar Hub, Telegram, Shopee nem publicação.
