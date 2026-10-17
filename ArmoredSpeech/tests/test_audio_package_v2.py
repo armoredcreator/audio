@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 
 from ArmoredStudio.speech_handoff import SpeechHandoffError, validate_audio_package
 from ArmoredSpeech import audio_package
+from ArmoredSpeech.timeline_mixer import build_audio_filter_graph
 
 
 @dataclass
@@ -19,50 +21,65 @@ class Item:
     original_path: Path
 
 
-def _write_wav(path: Path, *, sample_rate: int = 44100, channels: int = 2, seconds: float = 1.0) -> None:
+def _write_wav(
+    path: Path,
+    *,
+    sample_rate: int = 44100,
+    channels: int = 2,
+    seconds: float = 1.0,
+    silence: bool = False,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     frames = int(sample_rate * seconds)
+    sample = b"\x00\x00" if silence else b"\x01\x00"
     with wave.open(str(path), "wb") as stream:
         stream.setnchannels(channels)
         stream.setsampwidth(2)
         stream.setframerate(sample_rate)
-        stream.writeframes(b"\x01\x00" * frames * channels)
+        stream.writeframes(sample * frames * channels)
 
 
 def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _write_m4a(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"\\x00\\x00\\x00\\x18ftypM4A " + b"synthetic aac payload" * 16)
-
-
 def _plan_digest(plan: dict) -> str:
-    import json
     return hashlib.sha256(
         json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
 
 
-def _package(tmp_path: Path, **overrides):
-    original = tmp_path / "original.mp4"
-    original.write_bytes(b"synthetic, immutable original bytes")
-    final_audio = tmp_path / "package" / "final_audio.m4a"
-    _write_m4a(final_audio)
-    digest = _sha(original)
+def _fixture_payload(root: Path, *, source_id: str = "source-1", item_id: str = "item-1"):
+    original = root / "source.mp4"
+    original.write_bytes(b"synthetic immutable original")
+    voice = root / "package" / "voice.wav"
+    effect = root / "package" / "effect.wav"
+    _write_wav(voice)
+    _write_wav(effect)
     plan = {"video_start": 0.0}
-    main_duration = 1.0
-    final_duration = 3.0
-    payload = {
-        "contract_version": 4,
+    graph_meta = build_audio_filter_graph(
+        visual_plan=plan,
+        audio_start_seconds=0.0,
+        main_duration_seconds=1.0,
+        intro=True,
+        intro_position="final",
+    )
+    graph = graph_meta["filter_graph"]
+    timeline = {
+        key: value for key, value in graph_meta.items()
+        if key not in {"filter_graph", "output_label"}
+    }
+    timeline["final_audio_duration_seconds"] = 3.0
+    original_hash = _sha(original)
+    return original, voice, effect, plan, {
+        "contract_version": 5,
         "status": "READY",
-        "source_id": "source-1",
-        "item_id": "telegram-1",
-        "content_id": "source1_telegram1",
+        "source_id": source_id,
+        "item_id": item_id,
+        "content_id": f"{source_id}_{item_id}",
         "original_path": str(original),
-        "original_sha256_before": digest,
-        "original_sha256_after": digest,
+        "original_sha256_before": original_hash,
+        "original_sha256_after": original_hash,
         "audio_class": "PT_BR_NARRATION",
         "language": "pt-br",
         "speech_detected": True,
@@ -70,57 +87,42 @@ def _package(tmp_path: Path, **overrides):
         "confidence": 0.99,
         "route": "RVC_MELODY",
         "rvc_eligible": True,
-        "rvc_model": "melody",
-        "rvc_model_sha256": "c" * 64,
-        "rvc_index_sha256": "d" * 64,
-        "final_audio_track": {
-            "path": str(final_audio),
-            "sha256": _sha(final_audio),
-            "format": "aac-m4a",
-            "codec": "aac",
+        "voice_track": {
+            "path": str(voice),
+            "sha256": _sha(voice),
+            "format": "wav-pcm-s16le",
             "sample_rate": 44100,
             "channels": 2,
-            "duration_seconds": final_duration,
-            "composition_owner": "ArmoredSpeech",
-            "size_bytes": final_audio.stat().st_size,
+            "duration_seconds": 1.0,
+            "size_bytes": voice.stat().st_size,
+            "role": "voice",
         },
-        "audio_timeline": {
-            "visual_plan_sha256": _plan_digest(plan),
-            "audio_start_seconds": 0.0,
-            "video_start_seconds": 0.0,
-            "main_duration_seconds": main_duration,
-            "intro_enabled": True,
-            "intro_position": "final",
-            "intro_duration_seconds": 2.0,
-            "final_audio_duration_seconds": final_duration,
-            "composition_owner": "ArmoredSpeech",
-            "filter_graph_sha256": "a" * 64,
+        "effect_track": {
+            "path": str(effect),
+            "sha256": _sha(effect),
+            "source_sha256": "a" * 64,
+            "format": "wav-pcm-s16le",
+            "sample_rate": 44100,
+            "channels": 2,
+            "duration_seconds": 1.0,
+            "size_bytes": effect.stat().st_size,
+            "gain_policy": "loudnorm-I-12-LRA7-TP-1-then-volume-0.8",
         },
-        "prepared_video_duration_seconds": main_duration,
+        "audio_filter_graph": graph,
+        "audio_output_label": "[final_a]",
+        "audio_timeline": timeline,
+        "prepared_video_duration_seconds": 1.0,
     }
-    payload.update(overrides)
-    return original, final_audio, final_audio, payload
 
 
-def _mock_final_timeline(monkeypatch) -> None:
-    from ArmoredSpeech import timeline_mixer
-
-    def fake_render(**kwargs):
-        output = Path(kwargs["output_path"])
-        _write_m4a(output)
-        return {
-            "path": str(output),
-            "sha256": _sha(output),
-            "format": "aac-m4a",
-            "codec": "aac",
-            "sample_rate": 44100,
-            "channels": 2,
-            "duration_seconds": float(kwargs["expected_duration_seconds"]),
-            "composition_owner": "ArmoredSpeech",
-            "size_bytes": output.stat().st_size,
-        }
-
-    monkeypatch.setattr(timeline_mixer, "render_final_audio_track", fake_render)
+def _validate(root: Path, original: Path, payload: dict, *, source_id="source-1", item_id="item-1"):
+    return validate_audio_package(
+        payload,
+        workspace_root=root,
+        expected_source_id=source_id,
+        expected_item_id=item_id,
+        expected_original_path=original,
+    )
 
 
 def _preflight(root: Path, original: Path, source_wav: Path, effect: Path, *, rvc_allowed: bool):
@@ -150,93 +152,79 @@ def _preflight(root: Path, original: Path, source_wav: Path, effect: Path, *, rv
         "rvc_index_sha256": index_hash,
     }
 
-def _validate(
-    root: Path,
-    original: Path,
-    payload: dict,
-    *,
-    expected_source_id: str = "source-1",
-    expected_item_id: str = "telegram-1",
-):
-    return validate_audio_package(
-        payload,
-        workspace_root=root,
-        expected_source_id=expected_source_id,
-        expected_item_id=expected_item_id,
-        expected_original_path=original,
-    )
+
+def _mock_preparation(monkeypatch):
+    monkeypatch.setattr(audio_package, "_tool", lambda name, env_name: f"mock-{name}")
+    monkeypatch.setattr(audio_package, "_media_duration", lambda path, tool: 1.0)
+
+    def fake_run(command: list[str], label: str):
+        _write_wav(Path(command[-1]), sample_rate=44100, channels=2)
+
+    monkeypatch.setattr(audio_package, "_run", fake_run)
 
 
-def test_valid_v4_audio_package_validates_final_track_hash_and_identity(tmp_path):
-    original, final_audio, _, payload = _package(tmp_path)
+def _directive(original: Path, source_wav: Path, item: Item, *, audio_class="PT_BR_NARRATION", rvc=True, music=False):
+    digest = _sha(original)
+    return {
+        "contract_version": 1,
+        "source_id": item.source_id,
+        "item_id": item.telegram_message_id,
+        "original_path": str(original),
+        "audio_artifact_path": str(source_wav),
+        "audio_class": audio_class,
+        "language": "pt-br" if rvc else "unknown",
+        "speech_detected": bool(rvc),
+        "music_detected": bool(music),
+        "confidence": 0.99,
+        "rvc_eligible": bool(rvc),
+        "original_sha256_before": digest,
+        "original_sha256_after": digest,
+    }
 
-    result = _validate(tmp_path, original, payload)
 
-    assert result.final_audio_track_path == final_audio
-    assert result.final_audio_sha256 == _sha(final_audio)
-    assert result.visual_plan_sha256 == _plan_digest({"video_start": 0.0})
-    assert not hasattr(result, "voice_track_path")
-    assert not hasattr(result, "effect_track_path")
+def test_valid_v5_audio_package_validates_tracks_graph_and_identity(tmp_path):
+    original, voice, effect, plan, payload = _fixture_payload(tmp_path)
+    validated = _validate(tmp_path, original, payload)
+
+    assert validated.voice_track_path == voice
+    assert validated.effect_track_path == effect
+    assert validated.audio_filter_graph == payload["audio_filter_graph"]
+    assert validated.audio_output_label == "[final_a]"
+    assert validated.visual_plan_sha256 == _plan_digest(plan)
 
 
 @pytest.mark.parametrize("field,value", [
     ("status", "PROCESSING"),
-    ("contract_version", 3),
+    ("contract_version", 4),
     ("source_id", "wrong-source"),
     ("item_id", "wrong-item"),
 ])
-def test_v4_package_rejects_wrong_status_contract_or_identity(tmp_path, field, value):
-    original, _, _, payload = _package(tmp_path, **{field: value})
-
+def test_v5_package_rejects_wrong_status_contract_or_identity(tmp_path, field, value):
+    original, _, _, _, payload = _fixture_payload(tmp_path, source_id="source-1", item_id="item-1")
+    payload[field] = value
     with pytest.raises(SpeechHandoffError):
         _validate(tmp_path, original, payload)
 
 
-def test_v4_package_rejects_mutated_final_track_hash(tmp_path):
-    original, final_audio, _, payload = _package(tmp_path)
-    unchanged_size = final_audio.read_bytes()
-    final_audio.write_bytes(bytes([unchanged_size[0] ^ 1]) + unchanged_size[1:])
-
+def test_v5_package_rejects_mutated_track_hash(tmp_path):
+    original, voice, _, _, payload = _fixture_payload(tmp_path)
+    voice.write_bytes(voice.read_bytes() + b"tampered")
     with pytest.raises(SpeechHandoffError, match="SHA-256 mismatch"):
         _validate(tmp_path, original, payload)
 
 
-def test_v4_package_rejects_final_track_outside_workspace(tmp_path):
-    original, _, _, payload = _package(tmp_path)
-    outside = tmp_path.parent / f"{tmp_path.name}-outside.m4a"
-    _write_m4a(outside)
-    payload["final_audio_track"]["path"] = str(outside)
-    payload["final_audio_track"]["sha256"] = _sha(outside)
-    payload["final_audio_track"]["size_bytes"] = outside.stat().st_size
-
-    with pytest.raises(SpeechHandoffError, match="inside the lab workspace"):
+def test_v5_package_rejects_unsupported_audio_graph_filter(tmp_path):
+    original, _, _, _, payload = _fixture_payload(tmp_path)
+    payload["audio_filter_graph"] += ";[2:a]amovie=secret.wav[bad]"
+    payload["audio_timeline"]["filter_graph_sha256"] = hashlib.sha256(
+        payload["audio_filter_graph"].encode("utf-8")
+    ).hexdigest()
+    with pytest.raises(SpeechHandoffError, match="unsupported characters|unsupported filter"):
         _validate(tmp_path, original, payload)
 
 
-def test_studio_validator_does_not_make_audio_route_decisions(tmp_path):
-    original, final_audio, _, payload = _package(
-        tmp_path,
-        audio_class="UNRECOGNIZED_CLASS_FOR_AUDIT_ONLY",
-        language="unknown",
-        speech_detected=False,
-        music_detected=None,
-        route="UNRECOGNIZED_ROUTE_FOR_AUDIT_ONLY",
-        rvc_eligible=False,
-        rvc_model=None,
-        rvc_model_sha256=None,
-        rvc_index_sha256=None,
-    )
-
-    result = _validate(tmp_path, original, payload)
-    assert result.final_audio_track_path == final_audio
-    assert "voice_track" not in payload
-    assert "effect_track" not in payload
-    assert "audio_inputs" not in payload
-    assert "filter_graph" not in payload["audio_timeline"]
-
-
-def test_audio_package_builder_prepares_tracks_without_changing_original(tmp_path, monkeypatch):
-    _mock_final_timeline(monkeypatch)
+def test_audio_package_builder_prepares_speech_tracks_and_graph_without_final_audio_render(tmp_path, monkeypatch):
+    _mock_preparation(monkeypatch)
     original = tmp_path / "source.mp4"
     original.write_bytes(b"synthetic immutable original")
     source_wav = tmp_path / "source.wav"
@@ -244,262 +232,157 @@ def test_audio_package_builder_prepares_tracks_without_changing_original(tmp_pat
     effect_source = tmp_path / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
     _write_wav(effect_source)
     original_hash = _sha(original)
-    item = Item("source-1", "telegram-1", "source1_telegram1", original)
-    directive = {
-        "contract_version": 1,
-        "source_id": item.source_id,
-        "item_id": item.telegram_message_id,
-        "original_path": str(original),
-        "audio_artifact_path": str(source_wav),
-        "audio_class": "PT_BR_NARRATION",
-        "language": "pt-br",
-        "speech_detected": True,
-        "music_detected": False,
-        "confidence": 0.99,
-        "rvc_eligible": True,
-        "original_sha256_before": original_hash,
-        "original_sha256_after": original_hash,
-    }
-
-    def fake_write_wave(path: str | Path):
-        _write_wav(Path(path), sample_rate=44100, channels=2)
-
-    monkeypatch.setattr(audio_package, "_tool", lambda name, env_name: f"mock-{name}")
-    monkeypatch.setattr(audio_package, "_media_duration", lambda path, tool: 1.0)
-
-    def fake_run(command: list[str], label: str):
-        fake_write_wave(command[-1])
-
-    monkeypatch.setattr(audio_package, "_run", fake_run)
-
+    item = Item("source-1", "item-1", "source1_item1", original)
+    directive = _directive(original, source_wav, item)
     from ArmoredSpeech import rvc_engine as rvc
+
     def fake_convert(source, destination, voice, item_id=None):
-        fake_write_wave(destination)
+        _write_wav(Path(destination), sample_rate=44100, channels=2)
         return Path(destination)
+
     monkeypatch.setattr(rvc, "converter_voz", fake_convert)
-    preflight = _preflight(
-        tmp_path, original, source_wav, effect_source, rvc_allowed=True
-    )
+    preflight = _preflight(tmp_path, original, source_wav, effect_source, rvc_allowed=True)
     monkeypatch.setattr(
         rvc, "localizar_modelo",
         lambda voice: (Path(preflight["rvc_model_path"]), Path(preflight["rvc_index_path"])),
     )
 
-    output_dir = tmp_path / "storage" / "validation" / "batch1" / "source1" / "telegram1"
+    output_dir = tmp_path / "storage" / "validation" / "batch1" / "source1" / "item1"
     package = audio_package.prepare_audio_package(
-        directive,
-        item,
+        directive, item,
         workspace_root=tmp_path,
         effect_source_path=effect_source,
         output_dir=output_dir,
         preflight=preflight,
+        visual_plan={"video_start": 0.0},
     )
 
+    assert package["contract_version"] == 5
     assert package["route"] == "RVC_MELODY"
-    assert package["contract_version"] == 4
-    assert package["final_audio_track"]["path"] == str(output_dir / "final_audio.m4a")
-    assert package["final_audio_track"]["composition_owner"] == "ArmoredSpeech"
-    assert package["audio_timeline"]["composition_owner"] == "ArmoredSpeech"
-    assert (output_dir / "final_audio.m4a").is_file()
-    assert (output_dir / "package.json").is_file()
-    assert not (output_dir / "voice.wav").exists()
-    assert not (output_dir / "effect.wav").exists()
+    assert package["voice_track"]["path"] == str(output_dir / "voice.wav")
+    assert package["effect_track"]["path"] == str(output_dir / "effect.wav")
+    assert package["audio_filter_graph"].count("amix=") == 1
+    assert package["audio_output_label"] == "[final_a]"
+    assert (output_dir / "voice.wav").is_file()
+    assert (output_dir / "effect.wav").is_file()
+    assert not (output_dir / "final_audio.m4a").exists()
     assert not (output_dir / "rvc_input.wav").exists()
     assert not (output_dir / "rvc_raw.wav").exists()
-    assert "voice_track" not in package
-    assert "effect_track" not in package
-    assert "audio_filter_graph" not in package
     assert _sha(original) == original_hash
-    assert _validate(tmp_path, original, package).final_audio_track_path == output_dir / "final_audio.m4a"
+    assert _validate(tmp_path, original, package).audio_filter_graph == package["audio_filter_graph"]
 
 
-def test_audio_package_builder_routes_unapproved_audio_to_silence_plus_effect(tmp_path, monkeypatch):
-    _mock_final_timeline(monkeypatch)
+def test_effect_only_route_builds_silence_input_and_never_calls_rvc(tmp_path, monkeypatch):
+    _mock_preparation(monkeypatch)
     original = tmp_path / "music.mp4"
-    original.write_bytes(b"synthetic original")
+    original.write_bytes(b"synthetic immutable original")
     source_wav = tmp_path / "music.wav"
     _write_wav(source_wav, sample_rate=16000, channels=1)
     effect_source = tmp_path / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
     _write_wav(effect_source)
-    original_hash = _sha(original)
-    item = Item("source-1", "telegram-2", "source1_telegram2", original)
-    directive = {
-        "contract_version": 1,
-        "source_id": item.source_id,
-        "item_id": item.telegram_message_id,
-        "original_path": str(original),
-        "audio_artifact_path": str(source_wav),
-        "audio_class": "MUSIC_ONLY",
-        "language": "unknown",
-        "speech_detected": False,
-        "music_detected": True,
-        "confidence": 0.96,
-        "rvc_eligible": False,
-        "original_sha256_before": original_hash,
-        "original_sha256_after": original_hash,
-    }
-
-    monkeypatch.setattr(audio_package, "_tool", lambda name, env_name: f"mock-{name}")
-    monkeypatch.setattr(audio_package, "_media_duration", lambda path, tool: 1.0)
-    monkeypatch.setattr(
-        audio_package,
-        "_run",
-        lambda command, label: _write_wav(Path(command[-1]), sample_rate=44100, channels=2),
-    )
-
+    item = Item("source-1", "item-2", "source1_item2", original)
+    directive = _directive(original, source_wav, item, audio_class="MUSIC_ONLY", rvc=False, music=True)
     from ArmoredSpeech import rvc_engine as rvc
-    def forbidden_rvc(*args, **kwargs):
-        raise AssertionError("RVC must not run for MUSIC_ONLY")
-    monkeypatch.setattr(rvc, "converter_voz", forbidden_rvc)
-    preflight = _preflight(
-        tmp_path, original, source_wav, effect_source, rvc_allowed=False
-    )
 
+    monkeypatch.setattr(
+        rvc, "converter_voz",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("RVC must not run")),
+    )
+    preflight = _preflight(tmp_path, original, source_wav, effect_source, rvc_allowed=False)
     package = audio_package.prepare_audio_package(
-        directive,
-        item,
+        directive, item,
         workspace_root=tmp_path,
         effect_source_path=effect_source,
-        output_dir=tmp_path / "storage" / "validation" / "batch2" / "source1" / "telegram2",
+        output_dir=tmp_path / "storage" / "validation" / "batch2" / "source1" / "item2",
         preflight=preflight,
+        visual_plan={"video_start": 0.0},
     )
 
     assert package["route"] == "EFFECT_ONLY"
-    assert package["rvc_model"] is None
     assert package["rvc_eligible"] is False
-    assert "voice_track" not in package
-    assert "effect_track" not in package
-    assert _validate(
-        tmp_path, original, package, expected_item_id="telegram-2"
-    ).final_audio_track_path == Path(package["final_audio_track"]["path"])
+    assert package["voice_track"]["role"] == "silence"
+    assert package["audio_filter_graph"].count("amix=") == 1
+    assert package["voice_track"]["path"].endswith("voice.wav")
+    validated = _validate(
+        tmp_path, original, package, item_id="item-2"
+    )
+    assert validated.voice_track_path.is_file()
 
 
-def test_audio_package_builder_fails_closed_when_music_evidence_is_unknown(tmp_path):
+def test_audio_package_fails_closed_when_music_evidence_is_unknown(tmp_path):
     original = tmp_path / "source.mp4"
     original.write_bytes(b"synthetic immutable original")
     source_wav = tmp_path / "source.wav"
     _write_wav(source_wav, sample_rate=16000, channels=1)
     effect_source = tmp_path / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
     _write_wav(effect_source)
-    digest = _sha(original)
-    item = Item("source-1", "telegram-3", "source1_telegram3", original)
-    directive = {
-        "contract_version": 1,
-        "source_id": item.source_id,
-        "item_id": item.telegram_message_id,
-        "original_path": str(original),
-        "audio_artifact_path": str(source_wav),
-        "audio_class": "PT_BR_NARRATION",
-        "language": "pt-br",
-        "speech_detected": True,
-        "music_detected": None,
-        "confidence": 0.99,
-        "rvc_eligible": True,
-        "original_sha256_before": digest,
-        "original_sha256_after": digest,
-    }
-
+    item = Item("source-1", "item-3", "source1_item3", original)
+    directive = _directive(original, source_wav, item, rvc=True, music=False)
+    directive["music_detected"] = None
     with pytest.raises(audio_package.AudioPackageError, match="unsafe RVC"):
         audio_package.prepare_audio_package(
-            directive,
-            item,
+            directive, item,
             workspace_root=tmp_path,
             effect_source_path=effect_source,
-            output_dir=tmp_path / "storage" / "validation" / "batch3" / "source1" / "telegram3",
+            output_dir=tmp_path / "storage" / "validation" / "batch3" / "source1" / "item3",
         )
-def test_audio_package_builder_reuses_shared_batch_effect_without_reencoding(tmp_path, monkeypatch):
-    _mock_final_timeline(monkeypatch)
+
+
+def test_audio_package_reuses_shared_effect_track_without_copy_or_reencoding(tmp_path, monkeypatch):
+    _mock_preparation(monkeypatch)
     original = tmp_path / "source.mp4"
     original.write_bytes(b"synthetic immutable original")
     source_wav = tmp_path / "source.wav"
     _write_wav(source_wav, sample_rate=16000, channels=1)
     effect_source = tmp_path / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
     _write_wav(effect_source)
-    shared_effect = tmp_path / "storage" / "validation" / "shared" / "effect.wav"
+    shared_effect = tmp_path / "storage" / "validation" / "batch-shared" / "_shared" / "effect.wav"
     _write_wav(shared_effect)
-    original_hash = _sha(original)
-    item = Item("source-1", "telegram-shared", "source1_telegram_shared", original)
-    directive = {
-        "contract_version": 1,
-        "source_id": item.source_id,
-        "item_id": item.telegram_message_id,
-        "original_path": str(original),
-        "audio_artifact_path": str(source_wav),
-        "audio_class": "PT_BR_NARRATION",
-        "language": "pt-br",
-        "speech_detected": True,
-        "music_detected": False,
-        "confidence": 0.99,
-        "rvc_eligible": True,
-        "original_sha256_before": original_hash,
-        "original_sha256_after": original_hash,
-    }
+    item = Item("source-1", "item-shared", "source1_item_shared", original)
+    directive = _directive(original, source_wav, item)
     events = []
-
-    def fake_write_wave(path: str | Path):
-        _write_wav(Path(path), sample_rate=44100, channels=2)
-
-    monkeypatch.setattr(audio_package, "_tool", lambda name, env_name: f"mock-{name}")
-    monkeypatch.setattr(audio_package, "_media_duration", lambda path, tool: 1.0)
-
-    def fake_run(command: list[str], label: str):
-        events.append(label)
-        fake_write_wave(command[-1])
-
-    monkeypatch.setattr(audio_package, "_run", fake_run)
     from ArmoredSpeech import rvc_engine as rvc
 
     def fake_convert(source, destination, voice, item_id=None):
         events.append("RVC_MELODY")
-        fake_write_wave(destination)
+        _write_wav(Path(destination))
         return Path(destination)
 
     monkeypatch.setattr(rvc, "converter_voz", fake_convert)
-    preflight = _preflight(
-        tmp_path, original, source_wav, effect_source, rvc_allowed=True
-    )
+    preflight = _preflight(tmp_path, original, source_wav, effect_source, rvc_allowed=True)
     monkeypatch.setattr(
-        rvc,
-        "localizar_modelo",
+        rvc, "localizar_modelo",
         lambda voice: (Path(preflight["rvc_model_path"]), Path(preflight["rvc_index_path"])),
     )
-    shared_meta = audio_package._wave_metadata(shared_effect)
+    effect_meta = audio_package._wave_metadata(shared_effect)
     prepared_effect = {
         "path": str(shared_effect),
         "sha256": _sha(shared_effect),
         "source_sha256": _sha(effect_source),
         "format": "wav-pcm-s16le",
-        "sample_rate": shared_meta.sample_rate,
-        "channels": shared_meta.channels,
-        "duration_seconds": shared_meta.duration_seconds,
+        "sample_rate": effect_meta.sample_rate,
+        "channels": effect_meta.channels,
+        "duration_seconds": effect_meta.duration_seconds,
         "gain_policy": "loudnorm-I-12-LRA7-TP-1-then-volume-0.8",
         "_prepared_and_verified": True,
     }
 
-    output_dir = tmp_path / "storage" / "validation" / "batch-shared" / "source1" / "telegram-shared"
+    output_dir = tmp_path / "storage" / "validation" / "batch-shared" / "source1" / "item-shared"
     package = audio_package.prepare_audio_package(
-        directive,
-        item,
+        directive, item,
         workspace_root=tmp_path,
         effect_source_path=effect_source,
         output_dir=output_dir,
         preflight=preflight,
         prepared_effect_track=prepared_effect,
+        visual_plan={"video_start": 0.0},
     )
 
-    assert package["route"] == "RVC_MELODY"
-    assert package["contract_version"] == 4
-    assert package["final_audio_track"]["path"] == str(output_dir / "final_audio.m4a")
-    assert package["audio_timeline"]["composition_owner"] == "ArmoredSpeech"
-    assert not (output_dir / "voice.wav").exists()
-    assert not (output_dir / "effect.wav").exists()
+    assert package["contract_version"] == 5
+    assert package["effect_track"]["path"] == str(shared_effect)
     assert shared_effect.is_file()
-    assert "EFFECT_TRACK_PREPARATION_FAILED" not in events
     assert events.count("RVC_MELODY") == 1
-    assert _sha(original) == original_hash
-    assert _validate(
-        tmp_path, original, package, expected_item_id="telegram-shared"
-    ).final_audio_track_path == output_dir / "final_audio.m4a"
+    assert _validate(tmp_path, original, package, item_id="item-shared").effect_track_path == shared_effect
 
 
 def test_batch_preflight_hashes_melody_model_and_index_only_once(tmp_path, monkeypatch):
@@ -508,8 +391,7 @@ def test_batch_preflight_hashes_melody_model_and_index_only_once(tmp_path, monke
     source_wav = tmp_path / "source.wav"
     _write_wav(source_wav, sample_rate=16000, channels=1)
     effect_source = tmp_path / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
-    effect_source.parent.mkdir(parents=True, exist_ok=True)
-    effect_source.write_bytes(b"effect asset bytes large enough for preflight" * 2)
+    _write_wav(effect_source)
     model_dir = tmp_path / "ArmoredSpeech" / "runtime" / "rvc" / "models" / "melody"
     model_dir.mkdir(parents=True, exist_ok=True)
     model = model_dir / "melody.pth"
@@ -519,25 +401,8 @@ def test_batch_preflight_hashes_melody_model_and_index_only_once(tmp_path, monke
     python_path = tmp_path / ".venv" / "Scripts" / "python.exe"
     python_path.parent.mkdir(parents=True, exist_ok=True)
     python_path.write_bytes(b"python placeholder")
-
-    item = Item("source-1", "telegram-asset-cache", "source1_telegram_asset_cache", original)
-    digest = _sha(original)
-    directive = {
-        "contract_version": 1,
-        "source_id": item.source_id,
-        "item_id": item.telegram_message_id,
-        "original_path": str(original),
-        "audio_artifact_path": str(source_wav),
-        "audio_class": "PT_BR_NARRATION",
-        "language": "pt-br",
-        "speech_detected": True,
-        "music_detected": False,
-        "confidence": 0.99,
-        "rvc_eligible": True,
-        "original_sha256_before": digest,
-        "original_sha256_after": digest,
-    }
-
+    item = Item("source-1", "asset-cache", "source1_asset_cache", original)
+    directive = _directive(original, source_wav, item)
     from ArmoredSpeech import rvc_engine as rvc
 
     monkeypatch.setattr(audio_package, "_tool", lambda name, env_name: f"mock-{name}")
@@ -545,7 +410,6 @@ def test_batch_preflight_hashes_melody_model_and_index_only_once(tmp_path, monke
     monkeypatch.setattr(rvc, "MODELS_DIR", model_dir.parent)
     monkeypatch.setattr(rvc, "resolver_rvc_python", lambda: python_path)
     monkeypatch.setattr(rvc, "localizar_modelo", lambda voice: (model, index))
-
     original_sha_function = audio_package.sha256_file
     hash_counts: dict[Path, int] = {}
 
@@ -556,17 +420,12 @@ def test_batch_preflight_hashes_melody_model_and_index_only_once(tmp_path, monke
 
     monkeypatch.setattr(audio_package, "sha256_file", counted_sha)
     effect_hash = original_sha_function(effect_source)
-
     first = audio_package.preflight_audio_package(
-        directive,
-        item,
-        workspace_root=tmp_path,
-        effect_source_path=effect_source,
-        effect_source_sha256=effect_hash,
+        directive, item, workspace_root=tmp_path,
+        effect_source_path=effect_source, effect_source_sha256=effect_hash,
     )
     fingerprint = {
-        key: first[key]
-        for key in (
+        key: first[key] for key in (
             "rvc_python_path", "rvc_model_path", "rvc_model_sha256",
             "rvc_model_size", "rvc_model_mtime_ns", "rvc_model_inode",
             "rvc_index_path", "rvc_index_sha256",
@@ -574,68 +433,11 @@ def test_batch_preflight_hashes_melody_model_and_index_only_once(tmp_path, monke
         )
     }
     second = audio_package.preflight_audio_package(
-        directive,
-        item,
-        workspace_root=tmp_path,
-        effect_source_path=effect_source,
-        effect_source_sha256=effect_hash,
+        directive, item, workspace_root=tmp_path,
+        effect_source_path=effect_source, effect_source_sha256=effect_hash,
         rvc_asset_fingerprint=fingerprint,
     )
-
     assert first["rvc_model_sha256"] == second["rvc_model_sha256"] == original_sha_function(model)
     assert first["rvc_index_sha256"] == second["rvc_index_sha256"] == original_sha_function(index)
     assert hash_counts[model.resolve()] == 1
     assert hash_counts[index.resolve()] == 1
-
-
-
-def test_shared_final_audio_sha256_is_cached_across_package_validation(tmp_path, monkeypatch):
-    item_one = tmp_path / "item-one"
-    item_two = tmp_path / "item-two"
-    item_one.mkdir()
-    item_two.mkdir()
-    original_one, final_audio_one, _, payload_one = _package(item_one)
-    original_two, final_audio_two, _, payload_two = _package(item_two)
-    payload_two["source_id"] = "source-1"
-    payload_two["item_id"] = "telegram-2"
-    payload_two["original_path"] = str(original_two)
-    payload_two["original_sha256_before"] = _sha(original_two)
-    payload_two["original_sha256_after"] = _sha(original_two)
-    # Use the same immutable final Speech audio artifact to exercise batch hash caching.
-    payload_two["final_audio_track"] = dict(payload_one["final_audio_track"])
-
-    import ArmoredStudio.speech_handoff as handoff_module
-
-    real_sha = handoff_module.sha256_file
-    counted: dict[Path, int] = {}
-
-    def count_sha(path: Path) -> str:
-        resolved = Path(path).resolve()
-        counted[resolved] = counted.get(resolved, 0) + 1
-        return real_sha(path)
-
-    monkeypatch.setattr(handoff_module, "sha256_file", count_sha)
-    cache: dict[tuple[str, int, int, int, int], str] = {}
-
-    first = handoff_module.validate_audio_package(
-        payload_one,
-        workspace_root=tmp_path,
-        expected_source_id="source-1",
-        expected_item_id="telegram-1",
-        expected_original_path=original_one,
-        track_hash_cache=cache,
-    )
-    second = handoff_module.validate_audio_package(
-        payload_two,
-        workspace_root=tmp_path,
-        expected_source_id="source-1",
-        expected_item_id="telegram-2",
-        expected_original_path=original_two,
-        track_hash_cache=cache,
-    )
-
-    assert first.final_audio_sha256 == second.final_audio_sha256 == _sha(final_audio_one)
-    assert first.final_audio_track_path == second.final_audio_track_path == final_audio_one
-    assert counted[final_audio_one.resolve()] == 1
-    assert counted[original_one.resolve()] == 1
-    assert counted[original_two.resolve()] == 1
