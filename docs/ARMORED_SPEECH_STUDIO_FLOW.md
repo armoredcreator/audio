@@ -60,7 +60,8 @@ O Studio não deve chamar RVC nem aplicar novamente o efeito/mixagem quando rece
 - `ArmoredStudio/service.py`: fronteira pública `build(root).process(item, speech_payload=...)`.
 - `ArmoredStudio/unified.py`: orquestra análise e processamento; ainda possui decisão/fluxo de áudio e chama a conversão RVC.
 - `ArmoredStudio/analysis/audio_intelligence.py`: classificador de áudio paralelo que precisa ser aposentado do fluxo de produção depois de migrar e validar a decisão de Speech.
-- `ArmoredStudio/processing/rvc.py`: conversor RVC usado no Studio; a implementação testada deve ser reutilizada, não reescrita sem necessidade.
+- `armored_core/audio/rvc.py`: implementação comum do motor RVC; conserva a resolução do `.venv` da raiz e do mesmo diretório de modelos/índices em `ArmoredStudio/runtime/rvc`.
+- `ArmoredStudio/processing/rvc.py`: facade de compatibilidade para imports e CLI antigos. O fluxo v1 do Studio ainda invoca o conversor por essa facade; a transferência da invocação/decisão para Speech ainda não ocorreu.
 - `ArmoredStudio/processing/finalizer.py`: finalização audiovisual. Hoje recebe voz e efeito sonoro como entradas distintas, controla volumes/normalização, aplica cortes temporais e renderiza intro/vídeo principal.
 - `ArmoredStudio/speech_handoff.py`: valida o payload v1, identidade do item, caminhos dentro do workspace, legibilidade do WAV, SHA-256 do original e elegibilidade de RVC.
 - `ArmoredStudio/analysis/blackbar.py`, `veo_detector.py`, `gemini_detector.py`, `export_planner.py` e `export_plan_validator.py`: fluxo visual que permanece no Studio.
@@ -227,3 +228,10 @@ Esta foi uma auditoria estática do código remoto; não executei testes nem ren
 A decisão técnica específica sobre `audio_start`, a semântica da faixa de voz e do efeito e a estrutura proposta do pacote v2 está em [ADR — áudio Speech → Studio e alinhamento temporal](ADR_SPEECH_AUDIO_TIMELINE.md). Essa decisão é uma especificação para orientar a implementação, **não uma declaração de que o contrato v2 já foi codificado ou testado**.
 
 A implementação deve preservar o corte apenas na faixa de voz e manter o efeito iniciando no começo da parte principal. Speech prepara e valida as faixas e define a política/ganhos; Studio aplica apenas o plano temporal e compõe as faixas uma vez no render final. A responsabilidade de mover essa composição inteiramente para Speech só poderia ser reconsiderada se a ordem de fases mudasse, permitindo que Speech conhecesse o plano visual previamente. Essa mudança de ordem não é proposta aqui.
+
+
+## 14. Primeira extração estrutural do motor RVC — 17/10/2026
+
+Foi movida a implementação de baixo nível do motor RVC para `armored_core/audio/rvc.py`. `ArmoredStudio/processing/rvc.py` foi reduzido a uma facade de compatibilidade que reexporta a interface pública anterior. O caminho de modelo/índice continua apontando para o diretório existente `ArmoredStudio/runtime/rvc`, e a resolução do ambiente continua usando a `.venv` da raiz.
+
+Essa mudança é deliberadamente estrutural: o fluxo v1 ainda chama o conversor do mesmo modo por meio da facade; Speech ainda não executa RVC nem produz o pacote de faixas v2. Nenhum modelo, índice, asset ou arquivo de vídeo foi movido. O CI da branch passou em compilação e **73 testes** após essa extração e os novos testes temporais/de compatibilidade. Isso não substitui o E2E real no Windows com Melody.
