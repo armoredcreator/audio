@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -90,3 +91,12 @@ def test_batch_preflights_all_directives_and_inputs_before_first_package_build(t
     assert [item.telegram_message_id for item, _ in prepared] == [
         "telegram-1", "telegram-2", "telegram-3",
     ]
+    for _, package in prepared:
+        variants = package["audio_timeline_variants"]
+        assert set(variants) == {"NO_BANNER", "BANNER_PRESENT"}
+        assert variants["NO_BANNER"]["audio_timeline"]["video_start_seconds"] == 0.0
+        assert variants["BANNER_PRESENT"]["audio_timeline"]["video_start_seconds"] == 1.95
+        assert variants["BANNER_PRESENT"]["audio_timeline"]["audio_start_seconds"] == 0.09
+        manifest_path = Path(package["voice_track"]["path"]).parent / "package.json"
+        persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert set(persisted["audio_timeline_variants"]) == {"NO_BANNER", "BANNER_PRESENT"}
