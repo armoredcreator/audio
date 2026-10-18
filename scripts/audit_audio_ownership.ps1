@@ -21,7 +21,7 @@ Write-Output "AUDIO_OWNERSHIP_AUDIT=READ_ONLY"
 Write-Output ("REPOSITORY_ROOT=" + $RepoRoot)
 
 # Fail only for executable legacy ownership, not comments or the v5 handoff.
-$LegacyExecutionPattern = '(?i)(\bRVCInference\b|\bconverter_voz\s*\(|\bexecutar_no_rvc\s*\(|from\s+(?:ArmoredStudio\.)?processing\.rvc\b|import\s+.*audio_intelligence|ArmoredStudio[\\/]+(?:runtime[\\/]+rvc|analysis[\\/]+audio_intelligence|processing[\\/]+rvc)|ArmoredStudio[\\/]+assets[\\/]+efeitosonoro\.wav)'
+$LegacyExecutionPattern = '(?i)(\bRVCInference\b|\bconverter_voz\s*\(|\bexecutar_no_rvc\s*\(|from\s+(?:\.\s*)?(?:ArmoredStudio\.)?processing\.rvc\b|import\s+.*audio_intelligence|ArmoredStudio[\\/]+(?:runtime[\\/]+rvc|analysis[\\/]+audio_intelligence|processing[\\/]+rvc)|ArmoredStudio[\\/]+assets[\\/]+efeitosonoro\.wav)'
 $StudioPython = @(
     Get-ChildItem -LiteralPath $StudioRoot -Filter "*.py" -File -Recurse |
     Where-Object {
