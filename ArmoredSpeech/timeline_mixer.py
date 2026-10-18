@@ -156,7 +156,7 @@ def build_audio_filter_graph(
         "filter_graph": graph,
         "filter_graph_sha256": hashlib.sha256(graph.encode("utf-8")).hexdigest(),
         "output_label": output_label,
-        "visual_plan_sha256": visual_plan_digest(plan),
+        "visual_plan_sha256": visual_plan_digest({"video_start": float(video_start)}),
         "audio_start_seconds": round(audio_start, 6),
         "video_start_seconds": round(video_start, 6),
         "main_duration_seconds": round(main_duration, 6),
