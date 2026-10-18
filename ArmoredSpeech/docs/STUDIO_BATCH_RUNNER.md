@@ -4,13 +4,13 @@ O runner recebe um manifesto que declara um lote Speech completo e aprovado. Nã
 
 ## Responsabilidades e fluxo
 
-1. **Studio faz pré-análise visual read-only:** dimensões, barras, banner, marcas VEO e Gemini e plano visual. O detector de marca Gemini é local (OpenCV/template matching); ele não chama a API Google Gemini.
-2. **Speech valida as decisões persistidas:** identidade, original/WAV, classe, idioma, fala/música e elegibilidade RVC.
-3. **Speech prepara os artefatos de áudio:** quando elegível, executa RVC Melody; prepara faixa de voz ou silêncio, prepara uma faixa de efeito compartilhada e aplica a política de ganho uma única vez.
-4. **Speech compõe a timeline e o grafo de áudio:** trims, fades, sincronização, intro sonora, mixagem, `audio_filter_graph`, `audio_output_label` e as opções de codificação declaradas pelo contrato.
-5. **Handoff v5:** identidade, original e hash, caminhos/hashes/metadados das faixas `voice_track` e `effect_track`, grafo de áudio, timeline, plano visual assinado por hash e opções de renderização. Não é um AAC/M4A final pré-renderizado.
-6. O runner valida o lote e todos os pacotes antes do primeiro render. Plano/timeline divergentes, caminho fora do laboratório, hash incorreto, rota inconsistente ou artefato ausente bloqueiam o processamento.
-7. Studio valida o handoff, aplica um crop canônico na fonte e combina o grafo visual com o grafo de áudio do Speech em **uma única invocação FFmpeg para a renderização audiovisual final**.
+1. **Speech executa primeiro a fase completa do lote:** valida decisões persistidas, identidade, original/WAV, classe, idioma, fala/música e elegibilidade RVC, além de preflight dos ativos e ferramentas.
+2. **Speech prepara as faixas de todos os itens:** quando elegível, executa RVC Melody; prepara voz ou silêncio, prepara o efeito compartilhado e aplica a política de ganho uma única vez.
+3. **Speech prepara duas timelines por item, antes de Studio:** `NO_BANNER` (inícios em zero) e `BANNER_PRESENT` (corte do vídeo e trim da voz derivados do início de voz). Cada alternativa contém um grafo completo já construído por Speech. O contrato v5 inclui `audio_timeline_variants`.
+4. O runner valida todos os arquivos, hashes, grafos e as duas variantes de **todos** os itens. Se qualquer pacote/variante falhar, nenhuma execução do Studio é iniciada.
+5. **Só depois do Speech completo**, o Studio executa a análise visual somente de leitura. Ele seleciona a variante pronta com base exclusivamente na evidência visual de banner; não calcula cortes de áudio, filtros, volume, fades nem mixagem.
+6. O runner valida o plano visual com o início de vídeo declarado pela variante Speech selecionada e confere novamente a integridade dos originais.
+7. Studio aplica um crop canônico na fonte e combina o grafo visual com o grafo de áudio selecionado do Speech em **uma única invocação FFmpeg para a renderização audiovisual final**.
 8. O runner confere a existência do resultado, a identidade do item e o SHA-256 do original.
 
 A regra de uma chamada FFmpeg vale para a renderização audiovisual final. Speech continua autorizado a usar FFmpeg para extração e preparação/normalização de áudio antes dela.
