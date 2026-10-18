@@ -151,7 +151,7 @@ def main() -> int:
         print(f"LEGACY_MODULE_{module}={'PRESENT' if present else 'ABSENT'}")
     print(
         f"LEGACY_STUDIO_RVC_ASSET_FILES={result['legacy_studio_rvc_files']}; "
-        f"BYTES={result['legacy_studio_rvc_bytes']}; PRESERVED=True"
+        f"BYTES={result['legacy_studio_rvc_bytes']}"
     )
     print(
         f"SPEECH_RVC_PTH_FILES={result['speech_rvc_pth_files']}; "
@@ -164,7 +164,7 @@ def main() -> int:
         print("STATIC_AUDIO_OWNERSHIP_AUDIT=FAIL")
         return 3
     print("STATIC_AUDIO_OWNERSHIP_AUDIT=PASS")
-    print("Read-only audit only. No modules, assets, models, indices, or results were changed or deleted.")
+    print("Read-only audit only. No files were changed or deleted.")
     return 0
 
 
