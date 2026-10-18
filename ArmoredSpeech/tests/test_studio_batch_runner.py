@@ -254,7 +254,7 @@ def _fake_v5_package(root: Path, item, *, corrupt_effect_hash: bool = False) -> 
     effect_hash = _sha(effect)
     if corrupt_effect_hash:
         effect_hash = "0" * 64
-    plan = {"crop_final": None, "video_start": 0.0, "acoes": []}
+    plan = {"video_start": 0.0}
     audio = build_audio_filter_graph(
         visual_plan=plan,
         audio_start_seconds=0.0,
@@ -267,7 +267,7 @@ def _fake_v5_package(root: Path, item, *, corrupt_effect_hash: bool = False) -> 
         if key not in {"filter_graph", "output_label"}
     }
     timeline["final_audio_duration_seconds"] = 3.0
-    return {
+    package = {
         "contract_version": 5,
         "status": "READY",
         "source_id": str(item.source_id),
@@ -313,7 +313,35 @@ def _fake_v5_package(root: Path, item, *, corrupt_effect_hash: bool = False) -> 
         "prepared_video_duration_seconds": 1.0,
     }
 
-def test_real_runner_validates_entire_v5_batch_before_first_studio_call(tmp_path, monkeypatch):
+    variants = {}
+    for variant_name, video_start, audio_start, duration in (
+        ("NO_BANNER", 0.0, 0.0, 1.0),
+        ("BANNER_PRESENT", 0.5, 0.1, 0.5),
+    ):
+        variant_audio = build_audio_filter_graph(
+            visual_plan={"video_start": video_start},
+            audio_start_seconds=audio_start,
+            main_duration_seconds=duration,
+            intro=True,
+            intro_position="final",
+        )
+        variant_timeline = {
+            key: value for key, value in variant_audio.items()
+            if key not in {"filter_graph", "output_label"}
+        }
+        variant_timeline["final_audio_duration_seconds"] = duration + 2.0
+        variants[variant_name] = {
+            "timeline_variant": variant_name,
+            "audio_filter_graph": variant_audio["filter_graph"],
+            "audio_output_label": variant_audio["output_label"],
+            "audio_timeline": variant_timeline,
+            "prepared_video_duration_seconds": duration,
+        }
+    package.update(variants["NO_BANNER"])
+    package["audio_timeline_variants"] = variants
+    return package
+
+def test_real_runner_prepares_all_speech_variants_before_studio_analysis(tmp_path, monkeypatch):
     manifest_path, database, _ = _fixture(tmp_path, item_count=2)
     report_path = tmp_path / "storage" / "validation" / "v2-report.json"
     events = []
@@ -325,10 +353,13 @@ def test_real_runner_validates_entire_v5_batch_before_first_studio_call(tmp_path
 
     class FakeStudio:
         def analyze_visual(self, item):
-            return SimpleNamespace(plan={"crop_final": None, "video_start": 0.0, "acoes": []})
+            events.append(("visual-analysis", str(item.telegram_message_id)))
+            return SimpleNamespace(plan={"crop_final": None, "video_start": 0.0, "acoes": [], "detectores": {"banner": {"banner_detectado": False}}})
 
         def process(self, item, *, speech_payload=None, visual_analysis=None):
-            events.append(("studio", str(item.telegram_message_id)))
+            assert speech_payload["timeline_variant"] == "NO_BANNER"
+            assert "audio_timeline_variants" not in speech_payload
+            events.append(("studio-render", str(item.telegram_message_id)))
             destination = runner_module.Storage(tmp_path).result(
                 item.content_id,
                 item.affiliate_url,
@@ -355,8 +386,10 @@ def test_real_runner_validates_entire_v5_batch_before_first_studio_call(tmp_path
     assert len(report["processed"]) == 2
     assert events == [
         ("all-packages-prepared", 2),
-        ("studio", "telegram-1"),
-        ("studio", "telegram-2"),
+        ("visual-analysis", "telegram-1"),
+        ("visual-analysis", "telegram-2"),
+        ("studio-render", "telegram-1"),
+        ("studio-render", "telegram-2"),
     ]
 
 
