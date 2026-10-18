@@ -16,7 +16,7 @@ A arquitetura e o fluxo ponta a ponta estão em [docs/ARMORED_SPEECH_STUDIO_FLOW
 - Um único ambiente Python local (.venv) é usado no laboratório para Speech, Studio e RVC Melody.
 - Preservar originais, modelos/índices e assets. Não versionar vídeos, bancos locais, ambientes virtuais, credenciais nem saídas de `storage/`.
 - `armoredcreator-testbase`, `armoredcreator-test` e o repositório operacional ficam intocados. Esta branch não é produção aprovada.
-- Não remover ativos antigos de Studio até concluir os testes das rotas sem RVC e a auditoria seletiva de dependências.
+- O runtime do Studio não executa RVC, classificação ou política de áudio. Permanecem apenas a validação estrutural do contrato Speech e a composição audiovisual final com o grafo fornecido pelo Speech.
 
 ## Evidência E2E real — 17/10/2026
 
@@ -33,7 +33,7 @@ O teste Windows do item 5 passou com o contrato v5:
 Relatório: `storage/validation/speech-studio-v5-item5-20261017T185708Z.json`  
 Log: `storage/validation/speech-studio-v5-item5-20261017T185708Z.log`
 
-A evidência acima aprova o caminho real de narração PT-BR com Melody e a renderização v5 para esse item. **Ainda faltam testes E2E das classes sem RVC**, auditoria final de dependências/ativos e sincronização da documentação no checkout local. Os ativos legados permanecem preservados; a PR continua em draft e não mesclada.
+A evidência desse item aprova o caminho real PT-BR/Melody. Atualização de 18/10: o corpus com 17 vídeos concluiu a análise Speech e a renderização real Studio em 17/17; o usuário confirmou a inspeção audiovisual dos 17. O lote usou 9 rotas `RVC_MELODY` e 8 `EFFECT_ONLY`, preservou os hashes dos originais e produziu saídas válidas. Uma fixture sintética separada também passou por `NO_USABLE_NARRATION` → `EFFECT_ONLY`, com faixa de voz silenciosa e efeito audível nos WAVs diagnosticados. A auditoria estática retornou zero referências executáveis legadas, zero políticas de áudio inesperadas e `PASS`; `compileall` passou e `pytest` obteve 102 testes aprovados. As cópias locais antigas do Studio foram removidas seletivamente depois de confirmada a identidade SHA-256 com o Speech. Permanecem pendentes apenas a revisão final do diff, a confirmação de CI para as correções documentais recentes e a sincronização do checkout local. A PR segue draft e não mesclada.
 
 ## Comandos de validação
 
