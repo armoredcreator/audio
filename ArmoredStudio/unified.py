@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import shutil
 import uuid
@@ -171,10 +172,22 @@ class UnifiedStudio:
             raise RuntimeError(f"ArmoredSpeech handoff inválido: {exc}") from exc
 
         analysis = visual_analysis or self.analysis.analyze(source)
-        plan_digest = _visual_plan_digest(analysis.plan)
-        if plan_digest != package.visual_plan_sha256:
+        try:
+            declared_video_start = float(package.audio_timeline["video_start_seconds"])
+            visual_video_start = float(analysis.plan.get("video_start", 0) or 0)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("Plano temporal visual/Speech inválido; render bloqueado.") from exc
+        if (
+            not math.isfinite(visual_video_start)
+            or abs(visual_video_start - declared_video_start) > 1e-6
+        ):
             raise RuntimeError(
-                "O plano visual difere do plano usado pelo Speech ao compor o áudio; render bloqueado."
+                "O plano visual não usa a variante temporal selecionada pelo Speech; render bloqueado."
+            )
+        timing_digest = _visual_plan_digest({"video_start": declared_video_start})
+        if timing_digest != package.visual_plan_sha256:
+            raise RuntimeError(
+                "O digest temporal do pacote Speech não confere; render bloqueado."
             )
 
         intro = bool(package.audio_timeline.get("intro_enabled"))
