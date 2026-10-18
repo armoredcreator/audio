@@ -85,7 +85,7 @@ Critério de sucesso observável: `CORPUS_E2E=SUCCESS`, `STUDIO_SPEECH_BATCH=SUC
 Antes de executar mídia, rode as auditorias locais em modo somente leitura. A primeira procura referências executáveis a conversão RVC, classificação/mixagem legada e inventaria os ativos; a segunda confere o ambiente Python compartilhado e seus imports:
 
 ```powershell
-.\scripts\audit_audio_ownership.ps1
+.\.venv\Scripts\python.exe .\scripts\audit_audio_ownership.py --root .
 .\scripts\audit_shared_dependencies.ps1
 ```
 
