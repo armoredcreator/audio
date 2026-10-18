@@ -383,8 +383,12 @@ def test_real_runner_prepares_all_speech_variants_before_studio_analysis(tmp_pat
             destination.write_bytes(b"synthetic rendered video")
             return SimpleNamespace(result_path=destination)
 
+    def fake_build_studio(_root):
+        events.append(("studio-created", None))
+        return FakeStudio()
+
     monkeypatch.setattr(runner_module, "prepare_audio_packages_for_items", fake_prepare)
-    monkeypatch.setattr(runner_module, "build_studio", lambda _root: FakeStudio())
+    monkeypatch.setattr(runner_module, "build_studio", fake_build_studio)
 
     report = run_complete_batch(
         root=tmp_path,
@@ -401,6 +405,7 @@ def test_real_runner_prepares_all_speech_variants_before_studio_analysis(tmp_pat
     assert len(report["processed"]) == 2
     assert events == [
         ("all-packages-prepared", 2),
+        ("studio-created", None),
         ("visual-analysis", "telegram-1"),
         ("visual-analysis", "telegram-2"),
         ("studio-render", "telegram-1"),
@@ -423,14 +428,19 @@ def test_real_runner_blocks_all_studio_calls_if_any_v5_package_is_invalid(tmp_pa
 
     class FakeStudio:
         def analyze_visual(self, item):
+            events.append(("visual-analysis", str(item.telegram_message_id)))
             return SimpleNamespace(plan={"crop_final": None, "video_start": 0.0, "acoes": []})
 
         def process(self, item, *, speech_payload=None, visual_analysis=None):
-            events.append(("studio", str(item.telegram_message_id)))
+            events.append(("studio-render", str(item.telegram_message_id)))
             raise AssertionError("No Studio call is allowed when any v5 package is invalid")
 
+    def fake_build_studio(_root):
+        events.append(("studio-created", None))
+        return FakeStudio()
+
     monkeypatch.setattr(runner_module, "prepare_audio_packages_for_items", fake_prepare)
-    monkeypatch.setattr(runner_module, "build_studio", lambda _root: FakeStudio())
+    monkeypatch.setattr(runner_module, "build_studio", fake_build_studio)
 
     with pytest.raises(BatchManifestError, match="Pacote Speech inválido antes do início do Studio"):
         run_complete_batch(
