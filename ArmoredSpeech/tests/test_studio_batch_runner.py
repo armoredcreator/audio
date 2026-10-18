@@ -354,11 +354,25 @@ def test_real_runner_prepares_all_speech_variants_before_studio_analysis(tmp_pat
     class FakeStudio:
         def analyze_visual(self, item):
             events.append(("visual-analysis", str(item.telegram_message_id)))
-            return SimpleNamespace(plan={"crop_final": None, "video_start": 0.0, "acoes": [], "detectores": {"banner": {"banner_detectado": False}}})
+            has_banner = str(item.telegram_message_id) == "telegram-1"
+            return SimpleNamespace(plan={
+                "crop_final": None,
+                "video_start": 0.0,
+                "acoes": [],
+                "detectores": {"banner": {"banner_detectado": has_banner}},
+            })
 
         def process(self, item, *, speech_payload=None, visual_analysis=None):
-            assert speech_payload["timeline_variant"] == "NO_BANNER"
+            expected_variant = (
+                "BANNER_PRESENT"
+                if str(item.telegram_message_id) == "telegram-1"
+                else "NO_BANNER"
+            )
+            assert speech_payload["timeline_variant"] == expected_variant
             assert "audio_timeline_variants" not in speech_payload
+            assert float(visual_analysis.plan["video_start"]) == (
+                0.5 if expected_variant == "BANNER_PRESENT" else 0.0
+            )
             events.append(("studio-render", str(item.telegram_message_id)))
             destination = runner_module.Storage(tmp_path).result(
                 item.content_id,
@@ -383,6 +397,7 @@ def test_real_runner_prepares_all_speech_variants_before_studio_analysis(tmp_pat
     assert report["status"] == "SUCCESS"
     assert report["audio_contract_version"] == 5
     assert len(report["audio_packages"]) == 2
+    assert [package["timeline_variant"] for package in report["audio_packages"]] == ["BANNER_PRESENT", "NO_BANNER"]
     assert len(report["processed"]) == 2
     assert events == [
         ("all-packages-prepared", 2),
@@ -417,7 +432,7 @@ def test_real_runner_blocks_all_studio_calls_if_any_v5_package_is_invalid(tmp_pa
     monkeypatch.setattr(runner_module, "prepare_audio_packages_for_items", fake_prepare)
     monkeypatch.setattr(runner_module, "build_studio", lambda _root: FakeStudio())
 
-    with pytest.raises(BatchManifestError, match="Pacote final de áudio do Speech inválido"):
+    with pytest.raises(BatchManifestError, match="Pacote Speech inválido antes do início do Studio"):
         run_complete_batch(
             root=tmp_path,
             manifest_path=manifest_path,
