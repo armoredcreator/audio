@@ -94,38 +94,58 @@ if ($env:ARMORED_RVC_ROOT) {
     }
 }
 
-Write-Host "=== MIGRAÇÃO LOCAL DOS ATIVOS PARA ARMORED SPEECH ===" -ForegroundColor Cyan
-Write-Host "Origem dos modelos: $LegacyModels"
-Write-Host "Destino dos modelos: $SpeechModels"
-Write-Host "Origem do efeito:   $LegacyEffect"
-Write-Host "Destino do efeito:  $SpeechEffect"
-Write-Host "Esta operação copia e verifica SHA-256. Não apaga nem altera a origem." -ForegroundColor Yellow
+Write-Host "=== VALIDAR / MIGRAR ATIVOS LOCAIS PARA ARMORED SPEECH ===" -ForegroundColor Cyan
+Write-Host "Origem legada opcional: $LegacyModels"
+Write-Host "Destino canônico:       $SpeechModels"
+Write-Host "Efeito legado opcional: $LegacyEffect"
+Write-Host "Efeito canônico:        $SpeechEffect"
+Write-Host "Esta operação nunca executa RVC no Studio e nunca apaga arquivos."
 
-if (-not (Test-Path -LiteralPath $LegacyEffect -PathType Leaf)) {
-    throw "Efeito sonoro da origem não encontrado: $LegacyEffect"
+$LegacyModelsPresent = Test-Path -LiteralPath $LegacyModels -PathType Container
+$SpeechModelsPresent = Test-Path -LiteralPath $SpeechModels -PathType Container
+$LegacyEffectPresent = Test-Path -LiteralPath $LegacyEffect -PathType Leaf
+$SpeechEffectPresent = Test-Path -LiteralPath $SpeechEffect -PathType Leaf
+
+if ($LegacyModelsPresent) {
+    $SpeechModelCount = Copy-VerifiedTreeWithoutOverwrite -Source $LegacyModels -Destination $SpeechModels
 }
-if (-not (Test-Path -LiteralPath $LegacyModels -PathType Container)) {
-    throw "Modelos RVC da origem não encontrados: $LegacyModels"
-}
-
-$SpeechModelCount = Copy-VerifiedTreeWithoutOverwrite -Source $LegacyModels -Destination $SpeechModels
-
-$LegacyEffectHash = (Get-FileHash -LiteralPath $LegacyEffect -Algorithm SHA256).Hash.ToLowerInvariant()
-if (Test-Path -LiteralPath $SpeechEffect -PathType Leaf) {
-    $SpeechEffectHash = (Get-FileHash -LiteralPath $SpeechEffect -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($SpeechEffectHash -ne $LegacyEffectHash) {
-        throw "O efeito já existe no Speech com SHA-256 diferente. Nenhum arquivo foi sobrescrito."
+elseif ($SpeechModelsPresent) {
+    $SpeechModelFiles = @(Get-ChildItem -LiteralPath $SpeechModels -File -Recurse -Force)
+    if ($SpeechModelFiles.Count -eq 0) {
+        throw "A pasta canônica de modelos do Speech está vazia: $SpeechModels"
     }
-    Write-Host "EFEITO_JA_MIGRADO=True" -ForegroundColor Green
+    $SpeechModelCount = $SpeechModelFiles.Count
+    Write-Host "RVC_MODELS_ALREADY_CANONICAL_IN_SPEECH=True" -ForegroundColor Green
 }
 else {
-    New-Item -ItemType Directory -Path $SpeechAssets -Force | Out-Null
-    Copy-Item -LiteralPath $LegacyEffect -Destination $SpeechEffect
-    $SpeechEffectHash = (Get-FileHash -LiteralPath $SpeechEffect -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($SpeechEffectHash -ne $LegacyEffectHash) {
-        throw "SHA-256 do efeito não confere após a cópia."
+    throw "Modelos ausentes nas duas localizações. Restaure modelos/índices de um backup confiável diretamente em $SpeechModels; nenhuma cópia ou exclusão foi tentada."
+}
+
+if ($LegacyEffectPresent) {
+    $LegacyEffectHash = (Get-FileHash -LiteralPath $LegacyEffect -Algorithm SHA256).Hash.ToLowerInvariant()
+    if (Test-Path -LiteralPath $SpeechEffect -PathType Leaf) {
+        $SpeechEffectHash = (Get-FileHash -LiteralPath $SpeechEffect -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($SpeechEffectHash -ne $LegacyEffectHash) {
+            throw "O efeito já existe no Speech com SHA-256 diferente. Nenhum arquivo foi sobrescrito."
+        }
+        Write-Host "EFEITO_JA_MIGRADO=True" -ForegroundColor Green
     }
-    Write-Host "EFEITO_COPIADO_E_VERIFICADO=True" -ForegroundColor Green
+    else {
+        New-Item -ItemType Directory -Path $SpeechAssets -Force | Out-Null
+        Copy-Item -LiteralPath $LegacyEffect -Destination $SpeechEffect
+        $SpeechEffectHash = (Get-FileHash -LiteralPath $SpeechEffect -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($SpeechEffectHash -ne $LegacyEffectHash) {
+            throw "SHA-256 do efeito não confere após a cópia."
+        }
+        Write-Host "EFEITO_COPIADO_E_VERIFICADO=True" -ForegroundColor Green
+    }
+}
+elseif (Test-Path -LiteralPath $SpeechEffect -PathType Leaf) {
+    $SpeechEffectHash = (Get-FileHash -LiteralPath $SpeechEffect -Algorithm SHA256).Hash.ToLowerInvariant()
+    Write-Host "EFEITO_JA_CANONICO_NO_SPEECH=True" -ForegroundColor Green
+}
+else {
+    throw "Efeito sonoro ausente nas duas localizações. Restaure o arquivo confiável diretamente em $SpeechEffect; nenhuma exclusão foi tentada."
 }
 
 $MelodyModels = @(Get-ChildItem -LiteralPath (Join-Path $SpeechModels "melody") -Filter "*.pth" -File -ErrorAction SilentlyContinue)
@@ -140,5 +160,8 @@ Write-Host "RVC_MODEL_FILES=$SpeechModelCount"
 Write-Host "MELODY_MODELS=$($MelodyModels.Count)"
 Write-Host "MELODY_INDEXES=$($MelodyIndexes.Count)"
 Write-Host "EFFECT_SHA256=$SpeechEffectHash"
-Write-Host "LEGACY_ASSETS_PRESERVED=True"
+Write-Host "LEGACY_MODELS_SOURCE_PRESENT=$LegacyModelsPresent"
+Write-Host "LEGACY_EFFECT_SOURCE_PRESENT=$LegacyEffectPresent"
+Write-Host "STUDIO_AUDIO_RUNTIME_FALLBACK=False" -ForegroundColor Green
+Write-Host "O runtime canônico do projeto é ArmoredSpeech; o caminho legado só serve como origem opcional de cópia verificada."
 Write-Host "Não apague ainda ArmoredStudio\runtime\rvc nem o efeito antigo; só depois do E2E real com os novos caminhos."
