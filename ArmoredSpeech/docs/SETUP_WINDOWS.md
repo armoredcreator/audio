@@ -11,7 +11,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 
 O setup não cria um ambiente próprio do RVC. Não recrie nem troque a `.venv` testada sem necessidade.
 
-## 2. Copiar os ativos de áudio para Speech
+## 2. Provisionar e conferir os ativos canônicos do Speech
 
 Depois de atualizar a branch, execute:
 
@@ -19,7 +19,7 @@ Depois de atualizar a branch, execute:
 .\ArmoredSpeech\scripts\migrate_audio_assets.ps1
 ```
 
-O script copia `ArmoredStudio/runtime/rvc/models` para `ArmoredSpeech/runtime/rvc/models` e o efeito sonoro para `ArmoredSpeech/assets/efeitosonoro.wav`. Confere SHA-256 e bloqueia um destino existente com conteúdo diferente. Não copia o ambiente legado `env311`, não apaga a origem e não modifica vídeos.
+Os modelos/índices RVC e o efeito sonoro são binários locais e não fazem parte do Git. Os caminhos canônicos são `ArmoredSpeech/runtime/rvc/models` e `ArmoredSpeech/assets/efeitosonoro.wav`; o Studio não serve como fallback. O script de migração é compatível com dois cenários: copia e confere SHA-256 se os ativos antigos do Studio existirem, ou confirma os ativos já instalados no Speech se a origem antiga não existir. Se não houver ativos em nenhum caminho, ele falha sem criar nem apagar arquivos. Restaure os arquivos de um backup confiável diretamente nos caminhos canônicos do Speech.
 
 ## 3. Conferir os caminhos
 
@@ -46,4 +46,4 @@ Para testar RVC isoladamente, use uma saída que ainda não exista:
 
 ## 5. Limpeza do legado
 
-Não apague `ArmoredStudio/runtime/rvc` nem o efeito antigo durante a cópia. Primeiro rode a validação RVC, o E2E Speech → Studio com a nova localização, confira o vídeo e os hashes. Só então remova a cópia antiga manualmente. Os modelos, índices e ativos originais não devem ser descartados se a migração falhar.
+O código ativo do Studio não usa RVC nem procura modelos/efeitos na árvore antiga. No checkout Windows desta validação, as 14 cópias RVC e o efeito antigo do Studio foram comparados por SHA-256 com os ativos do Speech; só depois da confirmação dos E2Es foram removidas essas duplicatas locais. Não remova os modelos/índices canônicos do Speech, o efeito do Speech, os originais ou os dados de `storage/`.
