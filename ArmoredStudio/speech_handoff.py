@@ -283,9 +283,17 @@ def validate_audio_package(
             key: value for key, value in payload.items()
             if key != "audio_timeline_variants"
         }
+        variant_fields = {
+            "timeline_variant", "audio_filter_graph", "audio_output_label",
+            "audio_timeline", "prepared_video_duration_seconds",
+        }
         for variant_name in ("NO_BANNER", "BANNER_PRESENT"):
             variant = variants.get(variant_name)
-            if not isinstance(variant, dict) or variant.get("timeline_variant") != variant_name:
+            if (
+                not isinstance(variant, dict)
+                or set(variant) != variant_fields
+                or variant.get("timeline_variant") != variant_name
+            ):
                 raise SpeechHandoffError(f"Speech timeline variant {variant_name} is malformed")
             variant_payload = dict(base_payload)
             variant_payload.update(variant)
@@ -296,6 +304,17 @@ def validate_audio_package(
                 expected_item_id=expected_item_id,
                 expected_original_path=original,
                 track_hash_cache=track_hash_cache,
+            )
+        no_banner = variants["NO_BANNER"]
+        if any(
+            payload.get(field) != no_banner.get(field)
+            for field in (
+                "timeline_variant", "audio_filter_graph", "audio_output_label",
+                "audio_timeline", "prepared_video_duration_seconds",
+            )
+        ):
+            raise SpeechHandoffError(
+                "Speech top-level timeline must match the prevalidated NO_BANNER variant"
             )
 
     return ValidatedAudioPackage(
