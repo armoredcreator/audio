@@ -8,7 +8,9 @@ Speech provides all audio tracks and the exact audio filter subgraph.
 """
 
 import hashlib
+import json
 import math
+import os
 import re
 import wave
 from dataclasses import dataclass
@@ -220,7 +222,7 @@ def validate_audio_package(
     visual_plan_hash = timeline.get("visual_plan_sha256")
     graph_hash = timeline.get("filter_graph_sha256")
     if not _valid_sha256(visual_plan_hash) or not _valid_sha256(graph_hash):
-        raise SpeechHandoffError("Speech audio/visual plan graph hashes are missing or invalid")
+        raise SpeechHandoffError("Speech audio/visual timeline graph hashes are missing or invalid")
     if hashlib.sha256(graph.encode("utf-8")).hexdigest() != graph_hash.lower():
         raise SpeechHandoffError("Speech audio filter graph hash mismatch")
     if timeline.get("composition_owner") != "ArmoredSpeech":
@@ -248,12 +250,53 @@ def validate_audio_package(
     position = timeline.get("intro_position")
     if (intro_enabled and position not in {"inicio", "final"}) or (not intro_enabled and position is not None):
         raise SpeechHandoffError("Speech intro timeline metadata is inconsistent")
+
+    # A v5 package graph is bound to Speech's declared temporal scenario. The
+    # crop and other visual detector metadata are owned and validated by Studio
+    # after Speech has completed; they are intentionally not part of this digest.
+    canonical_timeline = json.dumps(
+        {"video_start": float(video_start)},
+        default=os.fspath,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    expected_timeline_hash = hashlib.sha256(canonical_timeline).hexdigest()
+    if visual_plan_hash.lower() != expected_timeline_hash:
+        raise SpeechHandoffError("Speech timeline digest does not match its declared video start")
+
     try:
         prepared_video_duration = float(payload["prepared_video_duration_seconds"])
     except (KeyError, TypeError, ValueError) as exc:
         raise SpeechHandoffError("Speech main video duration is invalid") from exc
     if not math.isfinite(prepared_video_duration) or abs(prepared_video_duration - main_duration) > 0.02:
         raise SpeechHandoffError("Speech main video duration does not match its timeline")
+
+    variants = payload.get("audio_timeline_variants")
+    if variants is not None:
+        expected_variants = {"NO_BANNER", "BANNER_PRESENT"}
+        if not isinstance(variants, dict) or set(variants) != expected_variants:
+            raise SpeechHandoffError(
+                "Speech must provide exactly NO_BANNER and BANNER_PRESENT timeline variants"
+            )
+        base_payload = {
+            key: value for key, value in payload.items()
+            if key != "audio_timeline_variants"
+        }
+        for variant_name in ("NO_BANNER", "BANNER_PRESENT"):
+            variant = variants.get(variant_name)
+            if not isinstance(variant, dict) or variant.get("timeline_variant") != variant_name:
+                raise SpeechHandoffError(f"Speech timeline variant {variant_name} is malformed")
+            variant_payload = dict(base_payload)
+            variant_payload.update(variant)
+            validate_audio_package(
+                variant_payload,
+                workspace_root=workspace,
+                expected_source_id=expected_source_id,
+                expected_item_id=expected_item_id,
+                expected_original_path=original,
+                track_hash_cache=track_hash_cache,
+            )
 
     return ValidatedAudioPackage(
         source_id=expected_source_id,
