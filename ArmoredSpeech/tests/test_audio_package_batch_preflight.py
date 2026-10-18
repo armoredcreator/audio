@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
-from ArmoredSpeech import audio_package
+from ArmoredSpeech import audio_package, timeline_mixer
 import ArmoredSpeech.studio_integration as integration
 
 
@@ -35,7 +35,7 @@ def test_batch_preflights_all_directives_and_inputs_before_first_package_build(t
 
     def fake_preflight(payload, item, **kwargs):
         events.append(("preflight", item.telegram_message_id))
-        return {"preflight_for": item.telegram_message_id}
+        return {"preflight_for": item.telegram_message_id, "video_duration_seconds": 5.0}
 
     def fake_prepare_effect(source, **kwargs):
         events.append(("shared-effect", "once"))
@@ -55,8 +55,17 @@ def test_batch_preflights_all_directives_and_inputs_before_first_package_build(t
         events.append(("build", item.telegram_message_id))
         assert kwargs["preflight"]["preflight_for"] == item.telegram_message_id
         assert kwargs["prepared_effect_track"]["_prepared_and_verified"] is True
-        return {"contract_version": 4, "item_id": item.telegram_message_id}
+        output_dir = Path(kwargs["output_dir"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        voice_path = output_dir / "voice.wav"
+        voice_path.write_bytes(b"synthetic prepared voice")
+        return {
+            "contract_version": 5,
+            "item_id": item.telegram_message_id,
+            "voice_track": {"path": str(voice_path)},
+        }
 
+    monkeypatch.setattr(timeline_mixer, "detect_voice_onset_seconds", lambda path: 0.12)
     monkeypatch.setattr(integration, "export_audio_directive", fake_export)
     monkeypatch.setattr(audio_package, "preflight_audio_package", fake_preflight)
     monkeypatch.setattr(audio_package, "prepare_effect_track", fake_prepare_effect)
