@@ -283,7 +283,7 @@ def prepare_audio_packages_for_items(
         manifest_path = package_dir / "package.json"
         temp_manifest_path = package_dir / "package.json.tmp"
         temp_manifest_path.write_text(
-            json.dumps(package, ensure_ascii=False, indent=2) + "\\n",
+            json.dumps(package, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
         temp_manifest_path.replace(manifest_path)
