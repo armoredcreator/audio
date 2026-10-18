@@ -79,3 +79,30 @@ Critério de sucesso observável: `CORPUS_E2E=SUCCESS`, `STUDIO_SPEECH_BATCH=SUC
 - Não remover os assets antigos antes de testar rotas não-RVC e revisar referências.
 - Preservar originais, corpus, manifestos, relatórios, pacotes e vídeos de evidência.
 - A PR #5 permanece em draft até a revisão final e os testes de rotas adicionais.
+
+## Auditoria isolada das classes sem RVC
+
+O módulo `ArmoredSpeech.prepare_audio_route_validation` escolhe no máximo um exemplar já existente no manifesto para cada classe sem RVC: `MUSIC_ONLY`, `NO_AUDIO`, `NOISE`, `NO_USABLE_NARRATION` e `FOREIGN_SPEECH`. Ele lê as decisões através de SQLite em modo read-only; preserva o manifesto-fonte e o banco; e atribui IDs de saída novos para bloquear sobrescrita de resultados anteriores. `PT_BR_NARRATION_WITH_MUSIC` não é selecionada por essa ferramenta porque tem fluxo separado de separação vocal, já exercitado nos itens 004 e 010.
+
+Use caminhos dentro da raiz isolada e um destino novo:
+
+```powershell
+$Root = (Get-Location).Path
+$RunDir = Join-Path $Root 'storage\validation\corpus14_20261017T203906621705Z'
+$SourceManifest = Join-Path $RunDir 'studio-manifest.json'
+$Database = Join-Path $Root 'storage\database\armored_speech_corpus14_20261017T203906621705Z.sqlite3'
+$Stamp = Get-Date -Format 'yyyyMMddTHHmmss'
+$TargetManifest = Join-Path $RunDir ("studio-manifest-no-rvc-" + $Stamp + ".json")
+
+.\.venv\Scripts\python.exe -m ArmoredSpeech.prepare_audio_route_validation --root . --source-manifest "$SourceManifest" --speech-database "$Database" --output-manifest "$TargetManifest" --stamp $Stamp
+```
+
+Confira `ROUTE_VALIDATION_MANIFEST_CREATED=True`, o número de itens, as classes selecionadas e `SQLITE_MUTATED=False`. `MISSING_CLASSES` informa as classes para as quais esse manifesto não tem candidato `READY`; não se deve inventar nem forçar uma classe. Se o manifesto for criado e houver itens, execute somente o manifesto recém-criado:
+
+```powershell
+$Report = Join-Path $RunDir ("studio-report-no-rvc-" + $Stamp + ".json")
+.\.venv\Scripts\python.exe -m ArmoredSpeech.studio_batch_runner --root . --manifest "$TargetManifest" --speech-database "$Database" --report "$Report"
+```
+
+A execução real deve concluir com `STUDIO_SPEECH_BATCH=SUCCESS`, `ORIGINALS_INTACT=True` e código de saída 0. Ouça/inspecione os resultados e confirme `route=EFFECT_ONLY`, `rvc_eligible=false`, faixa de voz silenciosa e efeito esperado. Isso verifica o comportamento real para cada classe encontrada; os testes unitários por si só não certificam áudio real. Não remova os ativos legados de Studio até todas as classes relevantes terem evidência.
+
