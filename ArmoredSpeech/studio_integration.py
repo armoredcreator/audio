@@ -113,15 +113,13 @@ def prepare_audio_packages_for_items(
     intro: bool = True,
     intro_position: str = "final",
 ) -> list[tuple[object, dict]]:
-    """Prepare Speech-owned v5 tracks and an audio filter graph for a whole batch.
+    """Prepare the complete Speech v5 batch before any Studio phase starts.
 
-    The caller supplies a read-only visual plan so Speech can calculate temporal
-    relationships. Speech owns audio decisions, RVC, effect preparation/gain,
-    synchronization, mix/fades and audio timeline construction. This function
-    may use FFmpeg for audio preparation, but never calls Studio or renders a
-    completed video. The v5 handoff contains validated canonical PCM voice and
-    effect tracks plus the Speech-owned graph used by the single final
-    audiovisual FFmpeg render.
+    Speech prepares voice/effect tracks and both temporal variants (embedded
+    banner present/absent), including each audio graph. Studio later selects
+    the appropriate already-built variant from visual evidence; it does not
+    compute audio timing or filters. This function may use FFmpeg for audio
+    preparation, but never calls Studio or renders a completed video.
     """
     from .audio_package import (
         preflight_audio_package,
