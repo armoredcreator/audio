@@ -118,7 +118,7 @@ class UnifiedStudio:
         return original, source
 
     def analyze_visual(self, item) -> AnalysisResult:
-        """Run the read-only visual preflight before Speech composes its timeline."""
+        """Run read-only visual analysis only after Speech has completed the batch."""
         _, source = self._source_for_item(item)
         return self.analysis.analyze(source)
 
