@@ -250,25 +250,14 @@ def run_complete_batch(
                     f"Destino já existe; lote bloqueado para preservar resultado anterior: {destination}"
                 )
 
-        studio = build_studio(root)
         if copy_only:
             # Synthetic copy-only mode tests the visual boundary without any
             # audio handoff; it does not pretend to validate Speech processing.
+            studio = build_studio(root)
             results = [studio.process(item) for item in items]
         else:
-            # First collect a complete, read-only visual plan for the batch.
-            # Studio is not allowed to inspect/classify/extract/process audio.
-            visual_analyses = {}
-            visual_plans = {}
-            for item in items:
-                identity = (str(item.source_id), str(item.telegram_message_id))
-                visual = studio.analyze_visual(item)
-                visual_analyses[identity] = visual
-                visual_plans[identity] = visual.plan
-
-            # Speech owns RVC, effect preparation/gain and the audio filter graph.
-            # Every item's voice/effect inputs and graph are validated before the
-            # one final FFmpeg audiovisual render starts.
+            # Speech owns the complete first phase. It prepares the voice/effect
+            # tracks plus BOTH timing graphs before any Studio method is invoked.
             safe_batch = re.sub(r"[^A-Za-z0-9_.-]+", "_", manifest["batch_id"]).strip("._-") or "batch"
             package_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
             package_root = root / "storage" / "validation" / "speech-audio-v5" / f"{safe_batch}-{package_stamp}"
@@ -291,15 +280,25 @@ def run_complete_batch(
                 workspace_root=root,
                 package_root=package_root,
                 effect_source_path=effect_source,
-                visual_plans=visual_plans,
                 intro=intro,
                 intro_position=intro_position,
             )
-            validated_payloads = []
+
             track_hash_cache: dict[tuple[str, int, int, int, int], str] = {}
+            speech_packages: list[tuple[object, dict]] = []
             for item, payload in prepared:
+                variants = payload.get("audio_timeline_variants")
+                if not isinstance(variants, dict) or set(variants) != {
+                    "NO_BANNER", "BANNER_PRESENT"
+                }:
+                    raise BatchManifestError(
+                        "Speech precisa preparar e entregar ambas as variantes temporais "
+                        "antes de iniciar o Studio."
+                    )
                 try:
-                    validated = validate_audio_package(
+                    # This validates the base package and both nested variants,
+                    # including track hashes, graph hashes, and timing digests.
+                    validate_audio_package(
                         payload,
                         workspace_root=root,
                         expected_source_id=str(item.source_id),
@@ -309,43 +308,65 @@ def run_complete_batch(
                     )
                 except SpeechHandoffError as exc:
                     raise BatchManifestError(
-                        f"Pacote final de áudio do Speech inválido antes do Studio: {exc}"
+                        f"Pacote Speech inválido antes do início do Studio: {exc}"
                     ) from exc
-                report["audio_packages"].append({
-                    "source_id": str(item.source_id),
-                    "item_id": str(item.telegram_message_id),
-                    "audio_class": payload.get("audio_class"),
-                    "route": payload.get("route"),
-                    "voice_track_path": str(validated.voice_track_path),
-                    "voice_track_sha256": validated.voice_sha256,
-                    "effect_track_path": str(validated.effect_track_path),
-                    "effect_track_sha256": validated.effect_sha256,
-                    "audio_filter_graph_sha256": validated.audio_timeline["filter_graph_sha256"],
-                    "audio_output_label": validated.audio_output_label,
-                    "visual_plan_sha256": validated.visual_plan_sha256,
-                    "original_sha256": validated.original_sha256,
-                })
-                validated_payloads.append((item, payload))
+                speech_packages.append((item, payload))
 
-            # The visual detector runs in Studio, but banner cut timing is
-            # measured by Speech from the original audio. Apply the returned
-            # visual start to the same visual plan whose digest Speech signed,
-            # and validate it before the first final render.
-            for item, payload in validated_payloads:
+            # STRICT PHASE BOUNDARY: no Studio object was built and no visual
+            # analysis ran until the whole Speech batch and both timing options
+            # for every item passed validation above.
+            studio = build_studio(root)
+            visual_analyses = {}
+            visual_plans = {}
+            for item, _payload in speech_packages:
                 identity = (str(item.source_id), str(item.telegram_message_id))
-                effective_plan = dict(visual_plans[identity])
+                visual = studio.analyze_visual(item)
+                visual_analyses[identity] = visual
+                visual_plans[identity] = visual.plan
+
+            # Studio contributes visual evidence only. It selects one graph
+            # already authored by Speech; it does not compute any audio timing
+            # values, filters, gain, fade, or mix.
+            selected_payloads: list[tuple[object, dict]] = []
+            for item, payload in speech_packages:
+                identity = (str(item.source_id), str(item.telegram_message_id))
+                visual_plan = dict(visual_plans[identity] or {})
+                detectors = visual_plan.get("detectores") or {}
+                banner = detectors.get("banner") if isinstance(detectors, dict) else None
+                banner_detected = bool(
+                    isinstance(banner, dict)
+                    and (banner.get("banner_detectado") or banner.get("detectado"))
+                )
+                variant_name = "BANNER_PRESENT" if banner_detected else "NO_BANNER"
+                variant = payload["audio_timeline_variants"][variant_name]
+                selected_payload = {
+                    key: value for key, value in payload.items()
+                    if key != "audio_timeline_variants"
+                }
+                selected_payload.update(variant)
+
                 try:
-                    speech_video_start = float(
-                        payload["audio_timeline"]["video_start_seconds"]
+                    validated = validate_audio_package(
+                        selected_payload,
+                        workspace_root=root,
+                        expected_source_id=str(item.source_id),
+                        expected_item_id=str(item.telegram_message_id),
+                        expected_original_path=Path(item.original_path),
+                        track_hash_cache=track_hash_cache,
                     )
-                except (KeyError, TypeError, ValueError) as exc:
+                    speech_video_start = float(
+                        selected_payload["audio_timeline"]["video_start_seconds"]
+                    )
+                except (SpeechHandoffError, KeyError, TypeError, ValueError) as exc:
                     raise BatchManifestError(
-                        f"Speech video timeline missing for {identity}"
+                        f"Variante temporal Speech inválida para {identity}: {exc}"
                     ) from exc
                 if speech_video_start < 0:
                     raise BatchManifestError(
                         f"Speech video timeline is negative for {identity}"
                     )
+
+                effective_plan = dict(visual_plan)
                 effective_plan["video_start"] = speech_video_start
                 plan_validation = validar_plano_exportacao(effective_plan)
                 if not plan_validation.get("valido"):
@@ -353,11 +374,12 @@ def run_complete_batch(
                         f"Plano visual com tempo Speech inválido para {identity}: "
                         + "; ".join(plan_validation.get("erros", []))
                     )
-                expected_plan_hash = payload["audio_timeline"]["visual_plan_sha256"]
-                if visual_plan_digest(effective_plan) != expected_plan_hash:
+                expected_timeline_hash = selected_payload["audio_timeline"]["visual_plan_sha256"]
+                if visual_plan_digest({"video_start": speech_video_start}) != expected_timeline_hash:
                     raise BatchManifestError(
-                        f"Plano visual não confere com o handoff Speech para {identity}"
+                        f"Digest temporal não confere com a variante Speech para {identity}"
                     )
+
                 visual_plans[identity] = effective_plan
                 visual_result = visual_analyses[identity]
                 if hasattr(visual_result, "__dataclass_fields__"):
@@ -367,14 +389,31 @@ def run_complete_batch(
                         validation=plan_validation,
                     )
                 else:
-                    # Lightweight test doubles use mutable SimpleNamespace objects.
                     visual_result.plan = effective_plan
                     visual_result.validation = plan_validation
+
+                report["audio_packages"].append({
+                    "source_id": identity[0],
+                    "item_id": identity[1],
+                    "audio_class": selected_payload.get("audio_class"),
+                    "route": selected_payload.get("route"),
+                    "timeline_variant": variant_name,
+                    "voice_track_path": str(validated.voice_track_path),
+                    "voice_track_sha256": validated.voice_sha256,
+                    "effect_track_path": str(validated.effect_track_path),
+                    "effect_track_sha256": validated.effect_sha256,
+                    "audio_filter_graph_sha256": validated.audio_timeline["filter_graph_sha256"],
+                    "audio_output_label": validated.audio_output_label,
+                    "audio_timeline_sha256": validated.visual_plan_sha256,
+                    "original_sha256": validated.original_sha256,
+                })
+                selected_payloads.append((item, selected_payload))
 
             if hasattr(studio, "engine"):
                 studio.engine._audio_track_hash_cache = track_hash_cache
 
-            # Recheck originals and timeline-plan correspondence before the first render.
+            # All visual analyses, selected graph variants and item packages
+            # are validated before the first render is permitted to start.
             changed_before_studio = [
                 (str(item.source_id), str(item.telegram_message_id))
                 for item in items
@@ -383,16 +422,17 @@ def run_complete_batch(
                 ]
             ]
             if changed_before_studio:
-                raise RuntimeError(f"Original mudou durante Speech; Studio bloqueado: {changed_before_studio}")
+                raise RuntimeError(
+                    f"Original mudou antes da primeira renderização; Studio bloqueado: {changed_before_studio}"
+                )
 
-            # All soundtracks are prepared/validated before any Studio render begins.
             results = [
                 studio.process(
                     item,
                     speech_payload=payload,
                     visual_analysis=visual_analyses[(str(item.source_id), str(item.telegram_message_id))],
                 )
-                for item, payload in validated_payloads
+                for item, payload in selected_payloads
             ]
 
         for item, result in zip(items, results, strict=True):
