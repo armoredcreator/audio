@@ -24,7 +24,7 @@ Na raiz do repositório, após atualizar a branch por fast-forward seguro:
 
 Os modelos/índices RVC e `efeitosonoro.wav` são assets locais fora do Git. O caminho canônico de runtime é `ArmoredSpeech/runtime/rvc/models` e `ArmoredSpeech/assets/efeitosonoro.wav`. O script de migração serve somente para um checkout antigo: se a cópia do Studio existir, ele a copia com verificação SHA-256 e sem sobrescrever destinos divergentes; se os ativos já estiverem no Speech e os caminhos antigos não existirem, ele valida os ativos canônicos e termina sem precisar da árvore Studio. Não há fallback de runtime para o Studio.
 
-Não remova os ativos legados do Studio antes de um E2E real com contrato v5 aprovado.
+No checkout Windows validado, os ativos duplicados do Studio foram removidos seletivamente após confirmação por SHA-256 e E2E aprovado. Não remova os ativos canônicos do Speech, os originais nem os dados/evidências sob `storage/`.
 
 ## Diagnóstico
 
