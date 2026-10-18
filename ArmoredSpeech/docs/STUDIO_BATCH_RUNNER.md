@@ -41,7 +41,7 @@ Item `source_teste` / mensagem `5` concluído em Windows:
 Relatório: `storage/validation/speech-studio-v5-item5-20261017T185708Z.json`  
 Log: `storage/validation/speech-studio-v5-item5-20261017T185708Z.log`
 
-O resultado comprova o caminho PT-BR/RVC v5 para esse item e preservação do original. Ainda é preciso testar cada classe sem RVC, revisar todas as rotas e terminar a auditoria de dependências antes de remover os ativos legados. Nenhum teste desta branch publica no Hub.
+O resultado comprova o caminho PT-BR/RVC v5 para esse item e a preservação do original. A evidência ampliada do corpus e das rotas sem RVC está registrada na seção "Evidência atualizada — 18/10/2026" abaixo. Nenhum teste desta branch publica no Hub.
 
 ## Teste E2E do corpus completo (14 vídeos)
 
@@ -97,7 +97,7 @@ Antes de executar mídia, rode as auditorias locais em modo somente leitura. A p
 .\scripts\audit_shared_dependencies.ps1
 ```
 
-Não apague ativos de Studio a partir da presença de arquivos. Confirme que os modelos/índices e o efeito existem no destino Speech, que o relatório não encontrou referências executáveis legadas e que as rotas reais passam antes de planejar uma limpeza seletiva.
+Esta auditoria é somente de leitura. Qualquer limpeza de cópias locais é uma etapa separada e exige hashes SHA-256 iguais aos assets canônicos do Speech e E2E aprovados. Não remova os modelos/índices canônicos do Speech, o efeito sonoro do Speech, os originais ou os relatórios/dados em storage/.
 
 O módulo `ArmoredSpeech.prepare_audio_route_validation` escolhe no máximo um exemplar já existente no manifesto para cada classe sem RVC: `MUSIC_ONLY`, `NO_AUDIO`, `NOISE`, `NO_USABLE_NARRATION` e `FOREIGN_SPEECH`. Ele lê as decisões através de SQLite em modo read-only; preserva o manifesto-fonte e o banco; e atribui IDs de saída novos para bloquear sobrescrita de resultados anteriores. `PT_BR_NARRATION_WITH_MUSIC` não é selecionada por essa ferramenta porque tem fluxo separado de separação vocal, já exercitado nos itens 004 e 010.
 
@@ -121,5 +121,5 @@ $Report = Join-Path $RunDir ("studio-report-no-rvc-" + $Stamp + ".json")
 .\.venv\Scripts\python.exe -m ArmoredSpeech.studio_batch_runner --root . --manifest "$TargetManifest" --speech-database "$Database" --report "$Report"
 ```
 
-A execução real deve concluir com `STUDIO_SPEECH_BATCH=SUCCESS`, `ORIGINALS_INTACT=True` e código de saída 0. Ouça/inspecione os resultados e confirme `route=EFFECT_ONLY`, `rvc_eligible=false`, faixa de voz silenciosa e efeito esperado. Isso verifica o comportamento real para cada classe encontrada; os testes unitários por si só não certificam áudio real. Não remova os ativos legados de Studio até todas as classes relevantes terem evidência.
+A execução real de cada classe selecionada deve concluir com `STUDIO_SPEECH_BATCH=SUCCESS`, `ORIGINALS_INTACT=True` e código de saída 0. Ouça/inspecione os resultados e confirme `route=EFFECT_ONLY`, faixa de voz silenciosa e efeito esperado. No checkout Windows validado, as rotas aplicáveis foram executadas e as cópias antigas do Studio foram removidas seletivamente após verificação SHA-256. A fixture sintética `NO_USABLE_NARRATION` não substitui uma amostra real de fala ininteligível.
 
