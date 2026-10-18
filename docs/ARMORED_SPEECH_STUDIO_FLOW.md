@@ -9,7 +9,7 @@ Esta branch de laboratório implementa a separação de responsabilidades antes 
 - ArmoredSpeech é o proprietário do processamento e das decisões de áudio.
 - ArmoredStudio é o proprietário das decisões visuais e da edição do vídeo.
 - O renderizador final combina os grafos criados pelos dois domínios em **uma chamada FFmpeg audiovisual por vídeo**, com **um único crop de origem**.
-- O E2E real do item 5 em 17/10/2026 passou no contrato v5: rota Melody, pacote Speech validado, renderização final H.264/AAC e SHA-256 original preservado. Ainda faltam testes de classes sem RVC e a auditoria final.
+- O E2E real do item 5 passou em 17/10; em 18/10 o corpus de 17 vídeos passou em Speech+Studio real (17/17), e uma fixture sintética `NO_USABLE_NARRATION` passou por `EFFECT_ONLY`. O usuário conferiu os 17 vídeos. A auditoria local passou e 102 testes passaram; o CI das atualizações documentais recentes ainda precisa ser confirmado.
 - A branch permanece experimental; o PR #5 está em draft e não foi mesclado. Nenhuma alteração foi aplicada ao repositório operacional ou às bases congeladas.
 
 ## 1. Responsabilidade exclusiva do ArmoredSpeech
@@ -89,11 +89,7 @@ Na raiz de `ArmoredAudioLab`, depois de atualizar esta branch por fast-forward s
 .\ArmoredSpeech\scripts\migrate_audio_assets.ps1
 ```
 
-O script copia modelos/índices RVC e `efeitosonoro.wav` dos caminhos antigos para:
-- `ArmoredSpeech\runtime\rvc\models\melody\`
-- `ArmoredSpeech\assets\efeitosonoro.wav`
-
-Ele confere SHA-256, não sobrescreve destinos diferentes e **não apaga nem altera a origem**. Não remova manualmente ativos antigos do Studio antes de um E2E real com contrato v5 aprovado. O banner visual permanece em Studio.
+Os binários RVC/índices e o efeito sonoro são ativos locais ignorados pelo Git. O script de migração é opcional: se encontrar os arquivos antigos do Studio, copia e verifica SHA-256 sem sobrescrever destinos diferentes; se a origem antiga não existir, valida os ativos já presentes nos caminhos canônicos `ArmoredSpeech\runtime\rvc\models\` e `ArmoredSpeech\assets\efeitosonoro.wav`. Se os arquivos faltarem em ambas as localizações, falha sem copiar nem apagar nada; restaure-os de um backup confiável diretamente no Speech. O runtime do Studio não usa nem procura os ativos antigos. Neste checkout, as duplicatas locais do Studio foram excluídas depois da verificação por hash e dos E2Es concluídos. O banner visual permanece no Studio.
 
 ## 7. Storage, isolamento e segurança
 
@@ -115,14 +111,13 @@ Em 17/10/2026, o usuário executou no Windows o runner real no contrato v5 para 
 - O usuário confirmou visualmente que a edição tratou e removeu a marca d'água Gemini neste vídeo.
 - Relatório: `storage/validation/speech-studio-v5-item5-20261017T185708Z.json`; log: `storage/validation/speech-studio-v5-item5-20261017T185708Z.log`.
 
-Esse teste valida o caminho real v5 de narração PT-BR/Melody nesse item, a saída audiovisual e a preservação do original. Não generaliza para todas as classes, modelos, vídeos ou detecções.
+Esse teste valida o caminho real v5 de narração PT-BR/Melody no item de referência. Atualização 18/10: 17/17 vídeos concluíram o E2E real Speech → Studio, com hashes dos originais mantidos; o usuário assistiu a todos e confirmou os resultados. Foram observadas 9 rotas `RVC_MELODY` e 8 rotas `EFFECT_ONLY`. Uma fixture sintética separada validou `NO_USABLE_NARRATION` → `EFFECT_ONLY`, com faixa de voz silenciosa e faixa de efeito com sinal. Essa fixture não substitui uma amostra real de fala ininteligível.
 
 ## 9. Próximos passos seguros
 
-1. Atualizar o checkout local por fast-forward seguro para os commits de documentação e executar a suíte completa de testes.
-2. Executar E2E isolados para cada rota sem RVC (música, sem áudio, ruído, fala estrangeira e fala com música), um cenário por vez, sem compartilhar nem resetar o SQLite experimental existente.
-3. Auditar referências a motores RVC/áudio antigos e dependências antes de qualquer remoção; manter os ativos legados preservados durante essa auditoria.
-4. Atualizar evidências/CI e revisar o diff completo. A PR #5 permanece em draft e não mesclada até a auditoria e os testes adicionais passarem.
+1. Sincronizar o checkout local por fast-forward seguro após as atualizações documentais/proteção do Git; repetir `compileall`, `pytest` e auditoria de ownership.
+2. Confirmar CI verde no HEAD atualizado e revisar o diff integral e o histórico de 301 commits reportados pelo GitHub.
+3. Não resetar nem limpar `storage/`; manter o PR #5 em draft até terminar a revisão de diff/histórico. A integração com o repositório operacional continua fora do escopo.
 
 ## 10. Segurança e isolamento
 
