@@ -73,10 +73,18 @@ O comando de inventário cria `storage/validation/corpus14_inventory_<batch-id>/
 
 Critério de sucesso observável: `CORPUS_E2E=SUCCESS`, `STUDIO_SPEECH_BATCH=SUCCESS`, `ITEMS=14/14`, `ORIGINALS_INTACT=True` e `ORIGINAL_SOURCE_HASHES_UNCHANGED=True`. CI e testes unitários validam o programa, mas não substituem a execução real com os 14 arquivos locais.
 
+## Evidência atualizada — 18/10/2026
+
+- Corpus de 17 entradas: Speech classificou 17/17 como `READY`; o runner real do Studio concluiu 17/17, com `ORIGINALS_INTACT=True`, saídas não vazias e hashes de origem iguais ao inventário. O usuário assistiu aos 17 resultados e confirmou que estavam corretos.
+- Rotas observadas: 9 `RVC_MELODY` e 8 `EFFECT_ONLY`. Os novos casos de música e fala estrangeira seguiram `EFFECT_ONLY`, sem RVC.
+- Uma fixture sintética separada concluiu `NO_USABLE_NARRATION` → `EFFECT_ONLY`; a faixa voz/silêncio tinha RMS/pico zero, o efeito tinha sinal e a saída renderizada existia. Isso valida a rota técnica, mas não equivale a uma amostra real de fala ininteligível.
+- Auditoria estática: zero referências executáveis legadas, zero políticas inesperadas no Studio e `STATIC_AUDIO_OWNERSHIP_AUDIT=PASS`. Localmente, `compileall` passou e `pytest` obteve 102 testes aprovados. Correções documentais e proteções Git recentes ainda precisam de CI verde e sincronização local.
+- Assets binários RVC/efeito não são versionados. Neste checkout, as cópias locais do Studio foram removidas seletivamente após comparar SHA-256 com os assets do Speech e concluir os E2Es; um checkout novo deve provisionar os assets canônicos em ArmoredSpeech.
+
 ## Segurança e isolamento
 
 - Sem escrita/leitura do banco operacional pelo runner, sem publicação e sem integração automática no repositório principal.
-- Não remover os assets antigos antes de testar rotas não-RVC e revisar referências.
+- O runtime do Studio não tem fallback de RVC nem de efeito sonoro legado. Os ativos antigos só são aceitos como origem opcional de uma cópia verificada; não são necessários para execução nem removidos pelo script. `storage/`, bancos locais, originais e evidências ficam fora do Git.
 - Preservar originais, corpus, manifestos, relatórios, pacotes e vídeos de evidência.
 - A PR #5 permanece em draft até a revisão final e os testes de rotas adicionais.
 
