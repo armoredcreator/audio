@@ -6,6 +6,17 @@ $RepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $StudioRoot = Join-Path $RepoRoot "ArmoredStudio"
 $SpeechRoot = Join-Path $RepoRoot "ArmoredSpeech"
 
+function Get-PortableRelativePath {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $FullPath = [System.IO.Path]::GetFullPath($Path)
+    $RootPrefix = $RepoRoot.TrimEnd([char[]]@([char]92, [char]47)) + [System.IO.Path]::DirectorySeparatorChar
+    if ($FullPath.StartsWith($RootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $FullPath.Substring($RootPrefix.Length)
+    }
+    return $FullPath
+}
+
 Write-Output "AUDIO_OWNERSHIP_AUDIT=READ_ONLY"
 Write-Output ("REPOSITORY_ROOT=" + $RepoRoot)
 
@@ -22,7 +33,7 @@ $LegacyHits = @(
         Select-String -LiteralPath $File.FullName -Pattern $LegacyExecutionPattern |
             ForEach-Object {
                 [pscustomobject]@{
-                    File = [System.IO.Path]::GetRelativePath($RepoRoot, $_.Path)
+                    File = Get-PortableRelativePath -Path $_.Path
                     Line = $_.LineNumber
                     Match = $_.Line.Trim()
                 }
@@ -35,7 +46,7 @@ $LegacyHits = @(
 $AudioPolicyPattern = '(?i)(\bamix\s*=|\bloudnorm\b|\bafade\s*=|\badelay\s*=|\bapad\s*=|\bsilencedetect\b|\baudio-separator\b|\bRVCInference\b|\bconverter_voz\s*\()'
 $UnexpectedPolicyHits = @(
     foreach ($File in $StudioPython) {
-        $Relative = [System.IO.Path]::GetRelativePath($StudioRoot, $File.FullName).Replace('\', '/')
+        $Relative = (Get-PortableRelativePath -Path $File.FullName).Substring($StudioRoot.Length - $RepoRoot.Length).TrimStart([char]92, [char]47).Replace('\', '/')
         if ($Relative -in @("speech_handoff.py", "processing/visual_finalizer.py")) {
             continue
         }
