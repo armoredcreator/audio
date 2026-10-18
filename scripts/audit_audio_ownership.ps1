@@ -33,7 +33,7 @@ $LegacyHits = @(
         Select-String -LiteralPath $File.FullName -Pattern $LegacyExecutionPattern |
             ForEach-Object {
                 [pscustomobject]@{
-                    File = Get-PortableRelativePath -Path $_.Path
+                    File = (Get-PortableRelativePath -Path $_.Path)
                     Line = $_.LineNumber
                     Match = $_.Line.Trim()
                 }
