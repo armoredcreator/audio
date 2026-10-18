@@ -29,7 +29,7 @@ Test-Path .\ArmoredSpeech\runtime\rvc\models\melody
 Test-Path .\ArmoredSpeech\assets\efeitosonoro.wav
 ```
 
-O diretório Melody deve conter ao menos um `.pth`; o índice `.index` é opcional. Se a variável `ARMORED_RVC_ROOT` estiver definida, ela continua sendo um override explícito e deve apontar para o conjunto de modelos pretendido.
+O diretório Melody deve conter ao menos um `.pth`; o índice `.index` é opcional. O motor RVC não lê `ARMORED_RVC_ROOT`: a raiz de execução é fixa em `ArmoredSpeech/runtime/rvc`. Não configure fallback para `ArmoredStudio/runtime/rvc`.
 
 ## 4. Validar
 
