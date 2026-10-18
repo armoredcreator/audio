@@ -42,10 +42,10 @@ O validador `ArmoredStudio/speech_handoff.py` é apenas a fronteira do contrato:
 
 O pipeline final é:
 
-1. Studio faz a pré-análise visual somente de leitura.
-2. Speech usa o plano visual como dado temporal e prepara as faixas e o grafo de áudio.
-3. O runner valida o lote completo e os hashes antes de começar qualquer render.
-4. O renderizador junta mecanicamente o grafo visual do Studio e o grafo de áudio do Speech e executa **uma única invocação FFmpeg para a composição audiovisual final**.
+1. Speech conclui primeiro o lote inteiro: classifica, valida, processa RVC quando autorizado, prepara as faixas e o efeito.
+2. Speech prepara e valida dois grafos/timelines por vídeo: `NO_BANNER` e `BANNER_PRESENT`. As alternativas usam as regras de sincronização do Speech, inclusive o trim da voz separado do início do efeito.
+3. Somente depois de todo o lote e das duas opções temporais estarem validados, o Studio inicia sua análise visual. Com base apenas na detecção visual do banner, seleciona uma opção já fornecida pelo Speech; não constrói nem altera o grafo de áudio.
+4. O runner valida o plano visual com o início temporal selecionado, confere a integridade dos originais e só então permite o render. O renderizador junta mecanicamente os grafos e executa **uma única invocação FFmpeg para a composição audiovisual final**.
 
 O grafo visual aplica o início/crop da fonte uma única vez, divide os frames já recortados para a cena principal e a intro visual e concatena o resultado. O grafo de áudio fornecido por Speech consome `[1:a]` (voz/silêncio) e `[2:a]` (efeito). Se houver intro visual, o banner é a entrada visual `[3:v]`.
 
