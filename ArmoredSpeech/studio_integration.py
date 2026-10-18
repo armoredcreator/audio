@@ -162,31 +162,16 @@ def prepare_audio_packages_for_items(
         )
         directives.append((item, payload))
 
-    # Audio owns onset/timing analysis. Studio's input plan is visual-only;
-    # Speech may provide the video cut derived from the audio onset when a visual
-    # banner is present, while its audio cut remains exclusively in the audio recipe.
-    from .timeline_mixer import detect_voice_onset_seconds
+    # Speech completes audio analysis and prepares both approved timing variants
+    # before Studio executes. The visual phase later selects one variant based only
+    # on its banner detector; it never recalculates audio cuts or filters.
+    from .timeline_mixer import build_audio_filter_graph, detect_voice_onset_seconds
 
-    effective_visual_plans: dict[tuple[str, str], dict] = {}
-    audio_starts: dict[tuple[str, str], float] = {}
+    voice_onsets: dict[tuple[str, str], float] = {}
     for item, directive_payload in directives:
         identity = (str(item.source_id), str(item.telegram_message_id))
-        plan = dict((visual_plans or {}).get(identity, {}) or {})
-        detectors = plan.get("detectores") or {}
-        banner = detectors.get("banner") if isinstance(detectors, dict) else None
-        banner_detected = bool(
-            isinstance(banner, dict)
-            and (banner.get("banner_detectado") or banner.get("detectado"))
-        )
-        if banner_detected:
-            source_wav = Path(str(directive_payload.get("audio_artifact_path") or ""))
-            voice_onset = detect_voice_onset_seconds(source_wav)
-            plan["video_start"] = max(1.95, voice_onset)
-            audio_starts[identity] = max(0.0, voice_onset - 0.03)
-        else:
-            plan["video_start"] = float(plan.get("video_start", 0.0) or 0.0)
-            audio_starts[identity] = 0.0
-        effective_visual_plans[identity] = plan
+        source_wav = Path(str(directive_payload.get("audio_artifact_path") or ""))
+        voice_onsets[identity] = detect_voice_onset_seconds(source_wav)
 
     # Preflight all source WAVs, original hashes, executable availability, video
     # durations, effect asset, and Melody model/index before running RVC on any item.
@@ -244,15 +229,64 @@ def prepare_audio_packages_for_items(
             voice="melody",
             preflight=preflight,
             prepared_effect_track=shared_effect_track,
-            visual_plan=effective_visual_plans[
-                (str(item.source_id), str(item.telegram_message_id))
-            ],
-            audio_start_seconds=audio_starts[
-                (str(item.source_id), str(item.telegram_message_id))
-            ],
+            visual_plan={"video_start": 0.0},
+            audio_start_seconds=0.0,
             intro=intro,
             intro_position=intro_position,
         )
+
+        # Both options refer to the same validated tracks, but Speech chooses
+        # the exact audio graph, voice trim, video start and durations now.
+        # Studio later selects a pre-built option using visual banner evidence.
+        video_duration = float(preflight["video_duration_seconds"])
+        voice_onset = voice_onsets[
+            (str(item.source_id), str(item.telegram_message_id))
+        ]
+        variants: dict[str, dict] = {}
+        variant_specs = (
+            ("NO_BANNER", 0.0, 0.0),
+            (
+                "BANNER_PRESENT",
+                max(1.95, voice_onset),
+                max(0.0, voice_onset - 0.03),
+            ),
+        )
+        for variant_name, video_start, audio_start in variant_specs:
+            main_duration = max(0.1, video_duration - video_start)
+            timeline = build_audio_filter_graph(
+                visual_plan={"video_start": float(video_start)},
+                audio_start_seconds=float(audio_start),
+                main_duration_seconds=main_duration,
+                intro=intro,
+                intro_position=intro_position,
+            )
+            timeline_metadata = {
+                key: value for key, value in timeline.items()
+                if key not in {"filter_graph", "output_label"}
+            }
+            timeline_metadata["final_audio_duration_seconds"] = (
+                main_duration + (2.0 if intro else 0.0)
+            )
+            variants[variant_name] = {
+                "timeline_variant": variant_name,
+                "audio_filter_graph": timeline["filter_graph"],
+                "audio_output_label": timeline["output_label"],
+                "audio_timeline": timeline_metadata,
+                "prepared_video_duration_seconds": round(main_duration, 6),
+            }
+
+        # Keep the plain/no-banner graph at the contract's top level for simple
+        # readers. The complete-batch runner requires and validates both variants.
+        package.update(variants["NO_BANNER"])
+        package["audio_timeline_variants"] = variants
+        package_dir = Path(package["voice_track"]["path"]).resolve().parent
+        manifest_path = package_dir / "package.json"
+        temp_manifest_path = package_dir / "package.json.tmp"
+        temp_manifest_path.write_text(
+            json.dumps(package, ensure_ascii=False, indent=2) + "\\n",
+            encoding="utf-8",
+        )
+        temp_manifest_path.replace(manifest_path)
         prepared.append((item, package))
 
     if sha256_file(effect_source_path).lower() != effect_source_hash.lower():
