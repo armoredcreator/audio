@@ -160,17 +160,6 @@ def prepare_audio_packages_for_items(
         )
         directives.append((item, payload))
 
-    # Speech completes audio analysis and prepares both approved timing variants
-    # before Studio executes. The visual phase later selects one variant based only
-    # on its banner detector; it never recalculates audio cuts or filters.
-    from .timeline_mixer import build_audio_filter_graph, detect_voice_onset_seconds
-
-    voice_onsets: dict[tuple[str, str], float] = {}
-    for item, directive_payload in directives:
-        identity = (str(item.source_id), str(item.telegram_message_id))
-        source_wav = Path(str(directive_payload.get("audio_artifact_path") or ""))
-        voice_onsets[identity] = detect_voice_onset_seconds(source_wav)
-
     # Preflight all source WAVs, original hashes, executable availability, video
     # durations, effect asset, and Melody model/index before running RVC on any item.
     preflights = []
@@ -200,6 +189,16 @@ def prepare_audio_packages_for_items(
                 "rvc_index_mtime_ns": preflight["rvc_index_mtime_ns"],
                 "rvc_index_inode": preflight["rvc_index_inode"],
             }
+
+    # Timing is computed only after every directive/input/model preflight passed.
+    # No Studio analysis is needed: Speech prepares both possible timelines now.
+    from .timeline_mixer import build_audio_filter_graph, detect_voice_onset_seconds
+
+    voice_onsets: dict[tuple[str, str], float] = {}
+    for item, directive_payload in directives:
+        identity = (str(item.source_id), str(item.telegram_message_id))
+        source_wav = Path(str(directive_payload.get("audio_artifact_path") or ""))
+        voice_onsets[identity] = detect_voice_onset_seconds(source_wav)
 
     # The effect is the same project asset for the entire batch. Normalize and
     # apply the approved gain once; every per-item contract refers to this shared,
