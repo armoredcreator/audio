@@ -37,10 +37,10 @@ Studio não reinterpreta os campos de política de áudio. Qualquer divergência
 
 ## 3. Um crop canônico e uma única renderização audiovisual final
 
-1. Studio faz uma pré-análise visual somente de leitura.
-2. Speech recebe o plano visual como dado temporal e prepara o pacote e o grafo de áudio.
-3. O runner prepara/valida todos os pacotes do lote antes de começar a renderização.
-4. O finalizador visual une o grafo de vídeo e o grafo de áudio assinado por Speech no mesmo `-filter_complex` e invoca FFmpeg **uma vez para a renderização audiovisual final**.
+1. Speech conclui primeiro a classificação, preflight, preparação de faixas e criação dos grafos do lote.
+2. Antes de Studio iniciar, Speech gera duas opções temporais completas por item: `NO_BANNER` e `BANNER_PRESENT`. A segunda incorpora o início de voz como trim próprio da faixa vocal e o corte da fonte; o efeito continua começando no início da parte principal.
+3. O runner valida os pacotes e ambas as opções para todos os itens. Só então Studio analisa os visuais e seleciona uma opção pronta com base no detector de banner; não pode alterar os filtros nem recalcular a timeline de áudio.
+4. Depois de validar a opção selecionada e o plano visual, o finalizador une o grafo de vídeo e o grafo de áudio escolhido por Speech no mesmo `-filter_complex` e invoca FFmpeg **uma vez para a renderização audiovisual final**.
 
 Essa regra não proíbe etapas preparatórias próprias do Speech que usem FFmpeg para extrair ou normalizar áudio, nem a conversão RVC. O que foi eliminado é a renderização intermediária de uma faixa final de áudio que depois seria combinada ao vídeo em outra chamada.
 
