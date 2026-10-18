@@ -22,7 +22,7 @@ Na raiz do repositório, após atualizar a branch por fast-forward seguro:
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-O script de migração copia modelos/índices do RVC e o efeito dos caminhos antigos para `ArmoredSpeech/runtime/rvc/models` e `ArmoredSpeech/assets/efeitosonoro.wav`, verifica SHA-256 e não apaga nem sobrescreve a origem. Se o destino já existir com conteúdo diferente, bloqueia.
+Os modelos/índices RVC e `efeitosonoro.wav` são assets locais fora do Git. O caminho canônico de runtime é `ArmoredSpeech/runtime/rvc/models` e `ArmoredSpeech/assets/efeitosonoro.wav`. O script de migração serve somente para um checkout antigo: se a cópia do Studio existir, ele a copia com verificação SHA-256 e sem sobrescrever destinos divergentes; se os ativos já estiverem no Speech e os caminhos antigos não existirem, ele valida os ativos canônicos e termina sem precisar da árvore Studio. Não há fallback de runtime para o Studio.
 
 Não remova os ativos legados do Studio antes de um E2E real com contrato v5 aprovado.
 
@@ -47,4 +47,4 @@ Evidências locais:
 - Relatório: `storage/validation/speech-studio-v5-item5-20261017T185708Z.json`
 - Log: `storage/validation/speech-studio-v5-item5-20261017T185708Z.log`
 
-Este E2E valida apenas o caminho PT-BR elegível para Melody no item de teste. Antes de remover ativos legados ou integrar no repositório operacional, ainda é preciso validar E2E as classes sem RVC e finalizar a auditoria de dependências. Os ativos antigos permanecem preservados.
+Esse E2E validou o caminho PT-BR/Melody no item de referência. Atualização de 18/10: o corpus de 17 vídeos também concluiu o render real em Studio, e a validação sintética separada de `NO_USABLE_NARRATION` completou a rota `EFFECT_ONLY`; a auditoria de ownership passou e 102 testes passaram localmente. As cópias locais antigas do Studio foram removidas após verificação SHA-256 e testes; o RVC e o efeito canônicos do Speech foram preservados. A PR segue draft até a revisão final do diff e do CI após a sincronização destas correções.
