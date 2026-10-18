@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-"""Prepare Speech-owned audio tracks and contract v5 packages for a complete batch.
+"""Prepare Speech-owned audio tracks and both contract v5 timeline variants.
 
-This module does not call Studio or render video. It reads Speech-owned SQLite
-decisions, prepares/validates audio inputs, and returns tracks plus the audio
-filter graph for Studio's single final audiovisual render.
+This module completes audio preparation and validates timeline alternatives before
+any Studio analysis. Studio later selects a precomputed alternative using visual
+banner evidence; it does not author audio timing or filters.
 """
 
 import hashlib
+import json
 import os
 import re
 from pathlib import Path
