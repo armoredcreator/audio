@@ -82,6 +82,15 @@ Critério de sucesso observável: `CORPUS_E2E=SUCCESS`, `STUDIO_SPEECH_BATCH=SUC
 
 ## Auditoria isolada das classes sem RVC
 
+Antes de executar mídia, rode as auditorias locais em modo somente leitura. A primeira procura referências executáveis a conversão RVC, classificação/mixagem legada e inventaria os ativos; a segunda confere o ambiente Python compartilhado e seus imports:
+
+```powershell
+.\scripts\audit_audio_ownership.ps1
+.\scripts\audit_shared_dependencies.ps1
+```
+
+Não apague ativos de Studio a partir da presença de arquivos. Confirme que os modelos/índices e o efeito existem no destino Speech, que o relatório não encontrou referências executáveis legadas e que as rotas reais passam antes de planejar uma limpeza seletiva.
+
 O módulo `ArmoredSpeech.prepare_audio_route_validation` escolhe no máximo um exemplar já existente no manifesto para cada classe sem RVC: `MUSIC_ONLY`, `NO_AUDIO`, `NOISE`, `NO_USABLE_NARRATION` e `FOREIGN_SPEECH`. Ele lê as decisões através de SQLite em modo read-only; preserva o manifesto-fonte e o banco; e atribui IDs de saída novos para bloquear sobrescrita de resultados anteriores. `PT_BR_NARRATION_WITH_MUSIC` não é selecionada por essa ferramenta porque tem fluxo separado de separação vocal, já exercitado nos itens 004 e 010.
 
 Use caminhos dentro da raiz isolada e um destino novo:
