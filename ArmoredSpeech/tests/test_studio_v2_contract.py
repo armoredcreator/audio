@@ -216,7 +216,7 @@ def test_studio_rejects_package_composed_for_different_visual_plan(tmp_path, mon
             AssertionError("Mismatched visual/audio timelines must not render")
         ),
     )
-    with pytest.raises(RuntimeError, match="plano visual difere"):
+    with pytest.raises(RuntimeError, match="variante temporal selecionada pelo Speech"):
         studio.process(
             item,
             speech_payload=payload,
