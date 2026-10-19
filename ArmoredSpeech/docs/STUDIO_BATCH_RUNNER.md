@@ -1,82 +1,125 @@
-# Executor isolado ArmoredSpeech → ArmoredStudio
+# Speech batch → Studio visual renderer (contract v5)
 
-Este executor é **exclusivo do AudioLab**. Ele não inicia Sync, Vision, Stock, IA, Hub nem publicação. Recebe um manifesto explícito do lote aprovado e completo do Speech, lê as decisões READY somente pela ponte de contrato e chama a fronteira pública `ArmoredStudio.service.build(root).process(item, speech_payload=...)`.
+O runner recebe um manifesto que declara um lote Speech completo e aprovado. Não descobre lote parcial pelo SQLite operacional, não abre banco de produção e bloqueia destinos já existentes.
 
-## O que impede processamento prematuro
+## Responsabilidades e fluxo
 
-O executor só aceita um manifesto JSON com:
-- `schema_version: 1`;
-- `phase: "ARMORED_SPEECH"`;
-- `phase_status: "COMPLETE"`;
-- `approved: true`;
-- `expected_item_count` igual ao tamanho exato da lista `items`;
-- IDs únicos `source_id + telegram_message_id`;
-- todos os itens no estado `IA`, que é a fronteira imediatamente anterior ao Studio;
-- caminho de cada original dentro do workspace de item e hash SHA-256 igual ao declarado.
+1. **Speech executa primeiro a fase completa do lote:** valida decisões persistidas, identidade, original/WAV, classe, idioma, fala/música e elegibilidade RVC, além de preflight dos ativos e ferramentas.
+2. **Speech prepara as faixas de todos os itens:** quando elegível, executa RVC Melody; prepara voz ou silêncio, prepara o efeito compartilhado e aplica a política de ganho uma única vez.
+3. **Speech prepara duas timelines por item, antes de Studio:** `NO_BANNER` (inícios em zero) e `BANNER_PRESENT` (corte do vídeo e trim da voz derivados do início de voz). Cada alternativa contém um grafo completo já construído por Speech. O contrato v5 inclui `audio_timeline_variants`.
+4. O runner valida todos os arquivos, hashes, grafos e as duas variantes de **todos** os itens. Se qualquer pacote/variante falhar, nenhuma execução do Studio é iniciada.
+5. **Só depois do Speech completo**, o Studio executa a análise visual somente de leitura. Ele seleciona a variante pronta com base exclusivamente na evidência visual de banner; não calcula cortes de áudio, filtros, volume, fades nem mixagem.
+6. O runner valida o plano visual com o início de vídeo declarado pela variante Speech selecionada e confere novamente a integridade dos originais.
+7. Studio aplica um crop canônico na fonte e combina o grafo visual com o grafo de áudio selecionado do Speech em **uma única invocação FFmpeg para a renderização audiovisual final**.
+8. O runner confere a existência do resultado, a identidade do item e o SHA-256 do original.
 
-Antes da primeira chamada ao Studio, `process_items_with_speech(...)` faz preflight de todos os registros Speech e exige decisão `READY` e artefatos disponíveis. O validador do Studio verifica novamente o contrato, identidade, WAV legível, caminhos, hashes e elegibilidade RVC. Se qualquer item do lote não estiver pronto, nenhum item é enviado ao Studio.
+A regra de uma chamada FFmpeg vale para a renderização audiovisual final. Speech continua autorizado a usar FFmpeg para extração e preparação/normalização de áudio antes dela.
 
-**Importante:** o manifesto representa a lista integral aprovada pelo operador para esse lote; o executor não consegue adivinhar se uma lista arbitrária representa toda a coleta histórica. Gere/revise esse manifesto só depois de a fase Speech declarar conclusão.
+## Comandos
 
-## Manifesto de exemplo
-
-Salve dentro do root do laboratório, por exemplo em `storage/validation/speech-phase-complete.json`. Os caminhos podem ser absolutos ou relativos ao root.
-
-```json
-{
-  "schema_version": 1,
-  "phase": "ARMORED_SPEECH",
-  "phase_status": "COMPLETE",
-  "approved": true,
-  "allow_copy_only": true,
-  "batch_id": "speech-lote-validado-001",
-  "expected_item_count": 1,
-  "items": [
-    {
-      "content_id": "source1_12345",
-      "telegram_message_id": "12345",
-      "source_id": "source1",
-      "state": "IA",
-      "workspace": "storage/Videos GRUPO_FONTE_1/12345",
-      "original_path": "storage/Videos GRUPO_FONTE_1/12345/12345_finallinkoriginal.mp4",
-      "original_sha256": "COLOQUE_AQUI_OS_64_CARACTERES_SHA256_REAIS",
-      "affiliate_name": "produto",
-      "affiliate_url": "https://shopee.com.br/product/123"
-    }
-  ]
-}
-```
-
-O valor de `original_sha256` acima é deliberadamente um placeholder, não um hash utilizável. Calcule o hash real do arquivo e confirme a lista antes de executar.
-
-O SQLite indicado deve ser o banco **experimental** do ArmoredSpeech dentro do mesmo root do laboratório. Não passe banco, credenciais, sessão nem configuração do ArmoredCreator de produção.
-
-## Primeiro teste: somente handoff/contrato
-
-O modo `--copy-only` chama o serviço real do Studio, valida o handoff e copia bytes do original para uma saída de teste. Ele **não** executa detecção visual, FFmpeg, composição, RVC nem prova qualidade do vídeo. Só pode ser usado quando o manifesto contém `"allow_copy_only": true`.
+Na raiz do laboratório:
 
 ```powershell
-Set-Location 'C:\Users\Administrador\Downloads\ArmoredAudioLab'
-.\.venv\Scripts\python.exe -m ArmoredSpeech.studio_batch_runner `
-  --root . `
-  --manifest .\storage\validation\speech-phase-complete.json `
-  --speech-database .\storage\database\armored_speech_experimental.db `
-  --copy-only
+.\.venv\Scripts\python.exe -m compileall -q ArmoredSpeech ArmoredStudio armored_core
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ArmoredSpeech.studio_batch_runner --root . --manifest '.\storage\validation\<manifesto-aprovado>\manifest.json' --speech-database '.\storage\database\<sqlite-isolado>.sqlite3'
 ```
 
-Ajuste apenas o caminho do SQLite para o nome real do banco experimental. O relatório JSON é gravado em `storage/validation/` e informa modo, lote, itens, caminhos de saída e integridade dos originais. Em caso de falha, o executor grava status `FAILED` e propaga erro; não apaga WAVs de Speech.
+O teste real não deve usar `--copy-only`. Escolha um manifesto já revisado e um banco de Speech experimental correspondente; não use `storage/database/armoredcreator.db`. Antes de executar, confira o HEAD, hashes dos originais, ativos necessários e inexistência do destino. Gere relatório/log novos por tentativa; não apague evidências nem sobrescreva resultados anteriores.
 
-## Execução real
+## E2E v5 confirmado em 17/10/2026
 
-A execução sem `--copy-only` tenta análise visual/áudio e processamento real. Antes dela, confirme a presença e a identidade dos assets oficiais `ArmoredStudio/assets/banner.png` e `ArmoredStudio/assets/efeitosonoro.wav`, FFmpeg e modelo/índice Melody. Use primeiro uma lista pequena, revisada e de cópias isoladas. Não execute a publicação; Hub permanece fora do escopo. Um `SUCCESS` neste runner comprova o lote processado e a integridade registrada dos originais, mas a precisão de VEO/Gemini/barras pretas e a qualidade auditiva ainda exigem avaliação por caso.
+Item `source_teste` / mensagem `5` concluído em Windows:
+- Runner: `STUDIO_SPEECH_BATCH=SUCCESS`, `MODE=REAL_STUDIO`, `ITEMS=1`, `ORIGINALS_INTACT=True`, exit code `0`.
+- Classificação/rota: `PT_BR_NARRATION` → `RVC_MELODY`.
+- Pacote criado e validado: `voice.wav`, `_shared/effect.wav` e `package.json`.
+- Vídeo de saída: `storage/Videos GRUPO_FONTE_teste/5/5_finaldomeulinknovo.mp4`.
+- Saída: H.264 1080×1920, 11,420 s; áudio AAC estéreo 44.100 Hz, 11,401 s.
+- Hash do original antes/depois: `c489fcaae803f36407c82dde3b93ff68077001ef5607909081a2c6555bee15a1`; igual ao manifesto.
+- O usuário confirmou visualmente o tratamento que removeu a marca d'água Gemini neste item.
 
-## Garantias e limitações
+Relatório: `storage/validation/speech-studio-v5-item5-20261017T185708Z.json`  
+Log: `storage/validation/speech-studio-v5-item5-20261017T185708Z.log`
 
-- Nunca infere conclusão olhando somente para o número de registros READY no SQLite.
-- Não acessa o banco do Coordinator nem inicia integrações externas.
-- Não aceita originais fora do root ou fora do workspace declarado.
-- Recusa destinos Studio já existentes antes da primeira chamada, preservando resultados anteriores.
-- Recalcula hash dos originais antes e depois; saída precisa existir, ser não vazia e permanecer no root.
-- Preflight bloqueia o lote inteiro se faltar decisão READY/artefato em qualquer item.
-- Não apaga fontes, WAVs Speech, modelo, índice nem assets.
-- O executor não prova classificação correta do Speech nem aprova automaticamente o lote histórico: isso depende da fase Speech e da revisão do manifesto.
+O resultado comprova o caminho PT-BR/RVC v5 para esse item e a preservação do original. A evidência ampliada do corpus e das rotas sem RVC está registrada na seção "Evidência atualizada — 18/10/2026" abaixo. Nenhum teste desta branch publica no Hub.
+
+## Teste E2E do corpus completo (14 vídeos)
+
+O smoke E2E de um único item não substitui a validação do corpus. O teste dos 14 começa por uma etapa **somente de inventário**; revise a lista antes de processar mídia.
+
+**1. Inventariar e hashear os candidatos, sem análise de áudio, cópias de vídeo ou SQLite novo:**
+
+```powershell
+.\.venv\Scripts\python.exe -m ArmoredSpeech.corpus_e2e_runner --root . --video-root .\storage --expected-count 14 --list-only
+```
+
+A saída deve mostrar `CORPUS_DISCOVERED=14/14`, cada caminho e hash, e `INPUTS_JSON=...`. Abra a lista/relatório e confirme que são os 14 vídeos-fontes pretendidos, sem saídas renderizadas ou duplicatas. A descoberta não encontrar exatamente 14 é uma condição de bloqueio; não processe a lista errada.
+
+**2. Somente depois de confirmar os 14 caminhos**, execute o lote real substituindo o placeholder pelo caminho exato impresso em `INPUTS_JSON`:
+
+```powershell
+.\.venv\Scripts\python.exe -m ArmoredSpeech.corpus_e2e_runner --root . --inputs-json ".\storage\validation\corpus14_inventory_<batch-id>\inputs.json" --expected-count 14 --render
+```
+
+Esse segundo comando:
+
+- exige exatamente 14 caminhos MP4 existentes, únicos e dentro do laboratório;
+- cria cópias byte-a-byte em um namespace exclusivo, um SQLite experimental novo e artefatos Speech derivados, sem modificar vídeos-fonte;
+- classifica e prepara os 14 pelo ArmoredSpeech; só começa o render real se todos os 14 estiverem `READY`, todos os WAVs forem válidos, hashes dos originais estiverem íntegros e os ativos passarem no preflight;
+- executa o runner real v5 para o lote completo. Os pacotes de áudio são validados antes do primeiro render; o Studio faz uma renderização audiovisual final por item;
+- não limpa nem sobrescreve execuções anteriores, não usa `storage/database/armoredcreator.db` e não publica no Hub.
+
+O comando de inventário cria `storage/validation/corpus14_inventory_<batch-id>/inputs.json` e `inventory-report.json`. O processamento cria `storage/validation/corpus14_<batch-id>/speech-report.json` e `studio-report.json`; os vídeos finais ficam em `storage/Videos GRUPO_FONTE_corpus14_<batch-id>/`. Se algum item falhar durante Speech, o render de Studio de todo o lote é bloqueado e o relatório identifica classe/status/erro; nenhum vídeo do lote começa a ser renderizado.
+
+Critério de sucesso observável: `CORPUS_E2E=SUCCESS`, `STUDIO_SPEECH_BATCH=SUCCESS`, `ITEMS=14/14`, `ORIGINALS_INTACT=True` e `ORIGINAL_SOURCE_HASHES_UNCHANGED=True`. CI e testes unitários validam o programa, mas não substituem a execução real com os 14 arquivos locais.
+
+## Evidência atualizada — 18/10/2026
+
+- Corpus de 17 entradas: Speech classificou 17/17 como `READY`; o runner real do Studio concluiu 17/17, com `ORIGINALS_INTACT=True`, saídas não vazias e hashes de origem iguais ao inventário. O usuário assistiu aos 17 resultados e confirmou que estavam corretos.
+- Rotas observadas: 9 `RVC_MELODY` e 8 `EFFECT_ONLY`. Os novos casos de música e fala estrangeira seguiram `EFFECT_ONLY`, sem RVC.
+- Uma fixture sintética separada concluiu `NO_USABLE_NARRATION` → `EFFECT_ONLY`; a faixa voz/silêncio tinha RMS/pico zero, o efeito tinha sinal e a saída renderizada existia. Isso valida a rota técnica, mas não equivale a uma amostra real de fala ininteligível.
+- Auditoria estática: zero referências executáveis legadas, zero políticas inesperadas no Studio e `STATIC_AUDIO_OWNERSHIP_AUDIT=PASS`. Localmente, `compileall` passou e `pytest` obteve 102 testes aprovados. Correções documentais e proteções Git recentes ainda precisam de CI verde e sincronização local.
+- Assets binários RVC/efeito não são versionados. Neste checkout, as cópias locais do Studio foram removidas seletivamente após comparar SHA-256 com os assets do Speech e concluir os E2Es; um checkout novo deve provisionar os assets canônicos em ArmoredSpeech.
+
+## Segurança e isolamento
+
+- Sem escrita/leitura do banco operacional pelo runner, sem publicação e sem integração automática no repositório principal.
+- O runtime do Studio não tem fallback de RVC nem de efeito sonoro legado. Os ativos antigos só são aceitos como origem opcional de uma cópia verificada; não são necessários para execução nem removidos pelo script. `storage/`, bancos locais, originais e evidências ficam fora do Git.
+- Preservar originais, corpus, manifestos, relatórios, pacotes e vídeos de evidência.
+- A PR #5 permanece em draft até a revisão final e os testes de rotas adicionais.
+
+## Auditoria isolada das classes sem RVC
+
+Antes de executar mídia, rode as auditorias locais em modo somente leitura. A primeira procura referências executáveis a conversão RVC, classificação/mixagem legada e inventaria os ativos; a segunda confere o ambiente Python compartilhado e seus imports:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\audit_audio_ownership.py --root .
+.\scripts\audit_shared_dependencies.ps1
+```
+
+Esta auditoria é somente de leitura. Qualquer limpeza de cópias locais é uma etapa separada e exige hashes SHA-256 iguais aos assets canônicos do Speech e E2E aprovados. Não remova os modelos/índices canônicos do Speech, o efeito sonoro do Speech, os originais ou os relatórios/dados em storage/.
+
+O módulo `ArmoredSpeech.prepare_audio_route_validation` escolhe no máximo um exemplar já existente no manifesto para cada classe sem RVC: `MUSIC_ONLY`, `NO_AUDIO`, `NOISE`, `NO_USABLE_NARRATION` e `FOREIGN_SPEECH`. Ele lê as decisões através de SQLite em modo read-only; preserva o manifesto-fonte e o banco; e atribui IDs de saída novos para bloquear sobrescrita de resultados anteriores. `PT_BR_NARRATION_WITH_MUSIC` não é selecionada por essa ferramenta porque tem fluxo separado de separação vocal, já exercitado nos itens 004 e 010.
+
+Use caminhos dentro da raiz isolada e um destino novo:
+
+```powershell
+$Root = (Get-Location).Path
+$RunDir = Join-Path $Root 'storage\validation\corpus14_20261017T203906621705Z'
+$SourceManifest = Join-Path $RunDir 'studio-manifest.json'
+$Database = Join-Path $Root 'storage\database\armored_speech_corpus14_20261017T203906621705Z.sqlite3'
+$Stamp = Get-Date -Format 'yyyyMMddTHHmmss'
+$TargetManifest = Join-Path $RunDir ("studio-manifest-no-rvc-" + $Stamp + ".json")
+
+.\.venv\Scripts\python.exe -m ArmoredSpeech.prepare_audio_route_validation --root . --source-manifest "$SourceManifest" --speech-database "$Database" --output-manifest "$TargetManifest" --stamp $Stamp
+```
+
+Confira `ROUTE_VALIDATION_MANIFEST_CREATED=True`, o número de itens, as classes selecionadas e `SQLITE_MUTATED=False`. `MISSING_CLASSES` informa as classes para as quais esse manifesto não tem candidato `READY`; não se deve inventar nem forçar uma classe. Se o manifesto for criado e houver itens, execute somente o manifesto recém-criado:
+
+```powershell
+$Report = Join-Path $RunDir ("studio-report-no-rvc-" + $Stamp + ".json")
+.\.venv\Scripts\python.exe -m ArmoredSpeech.studio_batch_runner --root . --manifest "$TargetManifest" --speech-database "$Database" --report "$Report"
+```
+
+A execução real de cada classe selecionada deve concluir com `STUDIO_SPEECH_BATCH=SUCCESS`, `ORIGINALS_INTACT=True` e código de saída 0. Ouça/inspecione os resultados e confirme `route=EFFECT_ONLY`, faixa de voz silenciosa e efeito esperado. No checkout Windows validado, as rotas aplicáveis foram executadas e as cópias antigas do Studio foram removidas seletivamente após verificação SHA-256. A fixture sintética `NO_USABLE_NARRATION` não substitui uma amostra real de fala ininteligível.
+

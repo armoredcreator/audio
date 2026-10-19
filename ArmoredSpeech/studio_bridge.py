@@ -54,6 +54,7 @@ class SpeechAudioDirective:
     music_detected: bool | None
     confidence: float | None
     rvc_eligible: bool
+    rvc_candidate_eligible: bool
     requires_vocal_separation: bool
     original_sha256_before: str | None = None
     original_sha256_after: str | None = None
@@ -74,6 +75,7 @@ class SpeechAudioDirective:
             "music_detected": self.music_detected,
             "confidence": self.confidence,
             "rvc_eligible": self.rvc_eligible,
+            "rvc_candidate_eligible": self.rvc_candidate_eligible,
             "requires_vocal_separation": self.requires_vocal_separation,
             "original_sha256_before": self.original_sha256_before,
             "original_sha256_after": self.original_sha256_after,
@@ -157,8 +159,14 @@ def export_audio_directive(
 
     language = row["language"]
     is_pt = (language or "").strip().lower() in {"pt", "pt-br", "pt_br"}
-    # Fail closed: mixed speech/music remains ineligible until a separately
-    # validated vocal-separation artifact is part of a future contract version.
+    # A mixed item is only a candidate. It is not RVC-ready until Speech has
+    # supplied or created a separately validated vocal-separation receipt.
+    rvc_candidate_eligible = (
+        audio_class in {"PT_BR_NARRATION", "PT_BR_NARRATION_WITH_MUSIC"}
+        and is_pt
+        and bool(row["speech_detected"])
+        and bool(row["rvc_eligible"])
+    )
     rvc_eligible = (
         audio_class == "PT_BR_NARRATION"
         and is_pt
@@ -180,6 +188,7 @@ def export_audio_directive(
         music_detected=music_detected,
         confidence=confidence,
         rvc_eligible=rvc_eligible,
+        rvc_candidate_eligible=rvc_candidate_eligible,
         requires_vocal_separation=audio_class == "PT_BR_NARRATION_WITH_MUSIC",
         original_sha256_before=before,
         original_sha256_after=after,

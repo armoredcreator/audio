@@ -8,6 +8,7 @@ a Coordinator/production database.
 """
 
 import argparse
+from dataclasses import replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -20,7 +21,10 @@ from typing import Any
 from armored_core.models import Item, State
 from armored_core.storage import Storage
 from ArmoredStudio.service import build as build_studio
-from .studio_integration import process_items_with_speech
+from ArmoredStudio.speech_handoff import validate_audio_package, SpeechHandoffError
+from ArmoredStudio.analysis.export_plan_validator import validar_plano_exportacao
+from .timeline_mixer import visual_plan_digest
+from .studio_integration import prepare_audio_packages_for_items
 
 
 class BatchManifestError(RuntimeError):
@@ -211,7 +215,9 @@ def run_complete_batch(
         "phase": "ARMORED_SPEECH_TO_STUDIO",
         "status": "RUNNING",
         "mode": "COPY_ONLY_TEST" if copy_only else "REAL_STUDIO",
+        "audio_contract_version": 0 if copy_only else 5,
         "expected_item_count": manifest["expected_item_count"],
+        "audio_packages": [],
         "processed": [],
         "originals_intact": None,
         "started_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -244,14 +250,190 @@ def run_complete_batch(
                     f"Destino já existe; lote bloqueado para preservar resultado anterior: {destination}"
                 )
 
-        studio = build_studio(root)
-        # This function preflights every READY Speech directive before its first
-        # Studio call. Missing/blocked items therefore fail the entire batch closed.
-        results = process_items_with_speech(
-            studio,
-            items,
-            speech_database=speech_database,
-        )
+        if copy_only:
+            # Synthetic copy-only mode tests the visual boundary without any
+            # audio handoff; it does not pretend to validate Speech processing.
+            studio = build_studio(root)
+            results = [studio.process(item) for item in items]
+        else:
+            # Speech owns the complete first phase. It prepares the voice/effect
+            # tracks plus BOTH timing graphs before any Studio method is invoked.
+            safe_batch = re.sub(r"[^A-Za-z0-9_.-]+", "_", manifest["batch_id"]).strip("._-") or "batch"
+            package_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            package_root = root / "storage" / "validation" / "speech-audio-v5" / f"{safe_batch}-{package_stamp}"
+            configured_effect = os.getenv("ARMORED_SPEECH_EFFECT", "").strip()
+            effect_source = (
+                Path(configured_effect).expanduser()
+                if configured_effect
+                else root / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
+            )
+            if not effect_source.is_file():
+                raise BatchManifestError(
+                    "Efeito sonoro não encontrado no ArmoredSpeech. Execute "
+                    "ArmoredSpeech/scripts/migrate_audio_assets.ps1 antes do teste real."
+                )
+            intro = os.getenv("ARMORED_STUDIO_INTRO", "1") != "0"
+            intro_position = os.getenv("ARMORED_STUDIO_INTRO_POSITION", "final")
+            prepared = prepare_audio_packages_for_items(
+                items,
+                speech_database=speech_database,
+                workspace_root=root,
+                package_root=package_root,
+                effect_source_path=effect_source,
+                intro=intro,
+                intro_position=intro_position,
+            )
+
+            track_hash_cache: dict[tuple[str, int, int, int, int], str] = {}
+            speech_packages: list[tuple[object, dict]] = []
+            for item, payload in prepared:
+                variants = payload.get("audio_timeline_variants")
+                if not isinstance(variants, dict) or set(variants) != {
+                    "NO_BANNER", "BANNER_PRESENT"
+                }:
+                    raise BatchManifestError(
+                        "Speech precisa preparar e entregar ambas as variantes temporais "
+                        "antes de iniciar o Studio."
+                    )
+                try:
+                    # This validates the base package and both nested variants,
+                    # including track hashes, graph hashes, and timing digests.
+                    validate_audio_package(
+                        payload,
+                        workspace_root=root,
+                        expected_source_id=str(item.source_id),
+                        expected_item_id=str(item.telegram_message_id),
+                        expected_original_path=Path(item.original_path),
+                        track_hash_cache=track_hash_cache,
+                    )
+                except SpeechHandoffError as exc:
+                    raise BatchManifestError(
+                        f"Pacote Speech inválido antes do início do Studio: {exc}"
+                    ) from exc
+                speech_packages.append((item, payload))
+
+            # STRICT PHASE BOUNDARY: no Studio object was built and no visual
+            # analysis ran until the whole Speech batch and both timing options
+            # for every item passed validation above.
+            studio = build_studio(root)
+            visual_analyses = {}
+            visual_plans = {}
+            for item, _payload in speech_packages:
+                identity = (str(item.source_id), str(item.telegram_message_id))
+                visual = studio.analyze_visual(item)
+                visual_analyses[identity] = visual
+                visual_plans[identity] = visual.plan
+
+            # Studio contributes visual evidence only. It selects one graph
+            # already authored by Speech; it does not compute any audio timing
+            # values, filters, gain, fade, or mix.
+            selected_payloads: list[tuple[object, dict]] = []
+            for item, payload in speech_packages:
+                identity = (str(item.source_id), str(item.telegram_message_id))
+                visual_plan = dict(visual_plans[identity] or {})
+                detectors = visual_plan.get("detectores") or {}
+                banner = detectors.get("banner") if isinstance(detectors, dict) else None
+                banner_detected = bool(
+                    isinstance(banner, dict)
+                    and (banner.get("banner_detectado") or banner.get("detectado"))
+                )
+                variant_name = "BANNER_PRESENT" if banner_detected else "NO_BANNER"
+                variant = payload["audio_timeline_variants"][variant_name]
+                selected_payload = {
+                    key: value for key, value in payload.items()
+                    if key != "audio_timeline_variants"
+                }
+                selected_payload.update(variant)
+
+                try:
+                    validated = validate_audio_package(
+                        selected_payload,
+                        workspace_root=root,
+                        expected_source_id=str(item.source_id),
+                        expected_item_id=str(item.telegram_message_id),
+                        expected_original_path=Path(item.original_path),
+                        track_hash_cache=track_hash_cache,
+                    )
+                    speech_video_start = float(
+                        selected_payload["audio_timeline"]["video_start_seconds"]
+                    )
+                except (SpeechHandoffError, KeyError, TypeError, ValueError) as exc:
+                    raise BatchManifestError(
+                        f"Variante temporal Speech inválida para {identity}: {exc}"
+                    ) from exc
+                if speech_video_start < 0:
+                    raise BatchManifestError(
+                        f"Speech video timeline is negative for {identity}"
+                    )
+
+                effective_plan = dict(visual_plan)
+                effective_plan["video_start"] = speech_video_start
+                plan_validation = validar_plano_exportacao(effective_plan)
+                if not plan_validation.get("valido"):
+                    raise BatchManifestError(
+                        f"Plano visual com tempo Speech inválido para {identity}: "
+                        + "; ".join(plan_validation.get("erros", []))
+                    )
+                expected_timeline_hash = selected_payload["audio_timeline"]["visual_plan_sha256"]
+                if visual_plan_digest({"video_start": speech_video_start}) != expected_timeline_hash:
+                    raise BatchManifestError(
+                        f"Digest temporal não confere com a variante Speech para {identity}"
+                    )
+
+                visual_plans[identity] = effective_plan
+                visual_result = visual_analyses[identity]
+                if hasattr(visual_result, "__dataclass_fields__"):
+                    visual_analyses[identity] = replace(
+                        visual_result,
+                        plan=effective_plan,
+                        validation=plan_validation,
+                    )
+                else:
+                    visual_result.plan = effective_plan
+                    visual_result.validation = plan_validation
+
+                report["audio_packages"].append({
+                    "source_id": identity[0],
+                    "item_id": identity[1],
+                    "audio_class": selected_payload.get("audio_class"),
+                    "route": selected_payload.get("route"),
+                    "timeline_variant": variant_name,
+                    "voice_track_path": str(validated.voice_track_path),
+                    "voice_track_sha256": validated.voice_sha256,
+                    "effect_track_path": str(validated.effect_track_path),
+                    "effect_track_sha256": validated.effect_sha256,
+                    "audio_filter_graph_sha256": validated.audio_timeline["filter_graph_sha256"],
+                    "audio_output_label": validated.audio_output_label,
+                    "audio_timeline_sha256": validated.visual_plan_sha256,
+                    "original_sha256": validated.original_sha256,
+                })
+                selected_payloads.append((item, selected_payload))
+
+            if hasattr(studio, "engine"):
+                studio.engine._audio_track_hash_cache = track_hash_cache
+
+            # All visual analyses, selected graph variants and item packages
+            # are validated before the first render is permitted to start.
+            changed_before_studio = [
+                (str(item.source_id), str(item.telegram_message_id))
+                for item in items
+                if _sha256(Path(item.original_path)) != original_hashes[
+                    (str(item.source_id), str(item.telegram_message_id))
+                ]
+            ]
+            if changed_before_studio:
+                raise RuntimeError(
+                    f"Original mudou antes da primeira renderização; Studio bloqueado: {changed_before_studio}"
+                )
+
+            results = [
+                studio.process(
+                    item,
+                    speech_payload=payload,
+                    visual_analysis=visual_analyses[(str(item.source_id), str(item.telegram_message_id))],
+                )
+                for item, payload in selected_payloads
+            ]
 
         for item, result in zip(items, results, strict=True):
             identity = (str(item.source_id), str(item.telegram_message_id))

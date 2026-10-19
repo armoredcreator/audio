@@ -13,7 +13,7 @@ ACOES_PERMITIDAS = [
 def validar_plano_exportacao(plano):
     resultado = {"valido": True, "erros": []}
 
-    obrigatorios = ["crop_final", "video_start", "audio_start", "acoes"]
+    obrigatorios = ["crop_final", "video_start", "acoes"]
     for campo in obrigatorios:
         if campo not in plano:
             resultado["valido"] = False
@@ -54,7 +54,7 @@ def validar_plano_exportacao(plano):
                         resultado["valido"] = False
                         resultado["erros"].append("crop_final ultrapassa altura original")
 
-    for campo in ("video_start", "audio_start"):
+    for campo in ("video_start",):
         valor = plano.get(campo, 0)
         if not isinstance(valor, (int, float)) or valor < 0:
             resultado["valido"] = False

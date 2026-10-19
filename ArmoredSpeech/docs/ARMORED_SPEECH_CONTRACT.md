@@ -25,7 +25,7 @@ O caminho é sempre registrado no SQLite junto de `source_id` e `item_id`. Não 
 | Classe | RVC | Preparação | Comportamento final esperado no Studio |
 |---|---:|---|---|
 | `PT_BR_NARRATION` | Sim | WAV extraído | RVC na narração PT-BR |
-| `PT_BR_NARRATION_WITH_MUSIC` | **Bloqueado no v1** | separação pode gerar um stem vocal, mas ele ainda não é aprovado para RVC | Studio usa a rota conservadora; liberar RVC somente após validação explícita do stem |
+| `PT_BR_NARRATION_WITH_MUSIC` | Só após validação do stem | Speech separa voz e música, verifica duração/energia e grava recibo com hashes da origem, stem e modelo | RVC Melody recebe somente o stem vocal validado; se a separação falhar, o lote falha explicitamente em vez de silenciar a voz |
 | `MUSIC_ONLY` | Não | WAV de referência | silenciar áudio original e aplicar o efeito sonoro existente |
 | `NOISE` | Não | WAV de referência | silenciar áudio original e aplicar o efeito sonoro existente |
 | `NO_AUDIO` | Não | WAV silencioso determinístico | aplicar efeito sonoro sem RVC |
@@ -34,6 +34,8 @@ O caminho é sempre registrado no SQLite junto de `source_id` e `item_id`. Não 
 | `UNKNOWN` | **Bloqueado** | não liberar WAV como aprovado | pendência/erro; nunca presumir elegibilidade |
 
 A classificação `FOREIGN_SPEECH` está incluída como proteção inicial. A rota final de fala estrangeira precisa ser confirmada antes de integração com Studio.
+
+Para classe mista, `rvc_eligible` no payload continua falso até Speech validar um recibo de separação vocal. `rvc_candidate_eligible` registra apenas a possibilidade inicial baseada na decisão persistida. O render usa o stem vocal separado, não o WAV misturado; ausência de recibo válido dispara erro explícito antes do primeiro RVC.
 
 ## SQLite / contrato com Studio
 
@@ -55,6 +57,10 @@ A tabela experimental `armored_speech_results` é propriedade exclusiva do Armor
 - Se Studio falhar, preservar o WAV para retry.
 - Não gerar vídeo final nem publicar no Telegram nesta fase.
 
-## Estado real desta branch
+## Estado real desta branch e E2E v5
 
-O runner, o registro SQLite e o contrato de dados são experimentais. O classificador automático usa Whisper para idioma, Silero VAD para atividade de fala e AudioSet/AST para evidência de música; existe também um modo opcional de manifesto revisado. A classificação ainda precisa de benchmark e avaliação auditiva reproduzíveis em exemplos rotulados antes de declarar o ArmoredSpeech pronto ou portar o código para produção. A tabela SQLite desta branch é experimental e não é o schema real do ArmoredCreator.
+O runner, o registro SQLite e o contrato de dados continuam experimentais; a tabela SQLite desta branch não é o schema operacional do ArmoredCreator. O classificador automático usa Whisper para idioma, Silero VAD para atividade de fala e AudioSet/AST para evidência de música; existe também um modo opcional de manifesto revisado.
+
+Em 17/10/2026, o E2E real no Windows aprovou o contrato v5 para o item `source_teste/5`: `PT_BR_NARRATION` → `RVC_MELODY`, `STUDIO_SPEECH_BATCH=SUCCESS`, `ORIGINALS_INTACT=True` e renderização H.264/AAC. O hash do original antes/depois coincidiu com o manifesto (`c489fcaae803f36407c82dde3b93ff68077001ef5607909081a2c6555bee15a1`). O relatório fica em `storage/validation/speech-studio-v5-item5-20261017T185708Z.json`.
+
+O resultado comprova somente esse caminho de narração PT-BR. É necessário avaliar as classes sem RVC e fazer benchmark/classificação com exemplos rotulados antes de declarar o ArmoredSpeech pronto para produção. Não levar esta base nem o runner experimental para o repositório operacional por causa de um único E2E bem-sucedido.

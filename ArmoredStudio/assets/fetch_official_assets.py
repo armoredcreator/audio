@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Materialize the exact official Studio assets into this disposable lab checkout.
+"""Materialize the exact official visual Studio banner into this disposable lab checkout.
 
 No credentials are used. Downloads are accepted only when their Git blob SHA-1
 matches the immutable blob IDs from armoredcreator/armoredcreator:main.
@@ -16,7 +16,6 @@ from pathlib import Path
 
 ASSETS = {
     "banner.png": "a85ca5d090f1a074a22ef272f8ee7d5f683fbee2",
-    "efeitosonoro.wav": "ca5f879c6631845e80108195af33c172858d31d2",
 }
 BLOB_API = "https://api.github.com/repos/armoredcreator/armoredcreator/git/blobs"
 
