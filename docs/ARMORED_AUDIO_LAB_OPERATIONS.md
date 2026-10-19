@@ -1,9 +1,9 @@
 # ArmoredAudioLab — manual canônico de arquitetura, operação e limpeza
 
-**Versão:** 1.0 | **Revisão:** 19/10/2026  
+**Versão:** 1.1 | **Revisão:** 19/10/2026  
 **Repositório:** armoredcreator/audio  
-**Branch de laboratório:** feature/speech-studio-batch-runner-20261016  
-**Merge da PR #5:** 35896f1174dfc373fa8c5e6767dc6e54ebdfdd5e  
+**Branch de laboratório atual:** `test/armoredstudio-speech-integration-20261015`  
+**Último merge de consolidação (PR #7):** `3e6969eeb4c42d747989fc3d865f1edfd72a92b6`  
 **Contrato ativo Speech → Studio:** v5
 
 Este é o documento único de referência operacional detalhada. O README da raiz é um índice. Os documentos técnicos anteriores são atalhos para este manual; o relatório de áudio de 15/10 e o README de amostras continuam auxiliares/históricos.
@@ -16,10 +16,10 @@ Este é o documento único de referência operacional detalhada. O README da rai
 
 - A PR #4 adicionou o runner explícito de lote Speech → Studio e foi mesclada na branch de integração do laboratório; commit 5d0a51b254bb284a25aec48435f1513c337f12e6.
 - A PR #5 estabeleceu o contrato v5, a ordem lote-completo Speech antes de Studio e os dois E2Es focais descritos abaixo; seu trabalho também foi integrado à árvore de laboratório.
-- A PR #6 unificou a preparação WAV e o cálculo de SHA-256 em arquivo. Seu commit na branch feature é f919225aa755b9c0a198110d789e511b091d8583; a árvore de código coincide com a branch de integração usada nesta etapa. A referência histórica de 112 testes descreve uma versão anterior.
+- A PR #6 unificou a preparação WAV e o cálculo de SHA-256 em arquivo. O commit `f919225aa755b9c0a198110d789e511b091d8583` pertence à branch feature `feature/speech-studio-batch-runner-20261016` e permanece como referência histórica; as alterações correspondentes já estavam na árvore do laboratório antes da PR #7. A contagem de 112 testes é histórica, não representa a versão atual.
 - Nesta rodada, a auditoria encontrou duplicações comprovadas na materialização dos assets oficiais, no cálculo de hash canônico do plano visual, na validação de limites de caminhos e na configuração de subprocessos no Windows. Esses helpers foram centralizados em armored_core, mantendo os wrappers públicos já usados pelo restante do código.
 - O workflow do CI agora observa alterações em ArmoredSpeech/**, ArmoredStudio/**, armored_core/**, scripts/** e nos arquivos de configuração/documentação listados no próprio workflow, tanto em push como em pull request.
-- No commit de código 5b3b4357a8ec547ea53a18624605faea5179517e, o GitHub Actions concluiu compileall e **127 testes aprovados** (execução de push #39336338244). O erro encontrado numa revisão intermediária foi corrigido antes desse resultado; não use o resultado daquela revisão falha como estado atual.
+- No commit de consolidação atual `3e6969eeb4c42d747989fc3d865f1edfd72a92b6`, os dois workflows do GitHub Actions concluíram com sucesso: **127 testes aprovados**, incluindo `compileall` ([testes isolados](https://github.com/armoredcreator/audio/actions/runs/39336661372)) e o workflow de [diagnósticos de áudio](https://github.com/armoredcreator/audio/actions/runs/39336661228). A falha de uma revisão intermediária foi corrigida antes dessa versão validada.
 
 A revisão de módulos não encontrou um candidato seguro para exclusão como “órfão”: os processadores por manifesto/modelo, runners de lote/corpus, separador isolado e diagnósticos têm contratos ou usos próprios. Foram mantidos em vez de removidos por inferência nominal.
 
@@ -57,7 +57,7 @@ O AudioLab valida Speech → Studio; não substitui Coordinator, não reinicia c
 6. Não publicar no Hub nem integrar em produção nesta etapa.
 7. Não executar git reset --hard, git clean ou exclusões recursivas genéricas.
 8. Preservar storage, originais, SQLite experimental, manifestos, relatórios, pacotes, saídas e ativos canônicos.
-9. ArmoredStudio/assets/README.md era um arquivo local fora do Git com texto antigo que atribuía o efeito sonoro ao Studio. Após revisão, foi corrigido para identificar o banner como asset visual e o efeito/RVC como propriedade de Speech; esta versão será versionada para que o checkout atualizado não retenha um arquivo untracked divergente.
+9. No checkout local anterior foi identificado `ArmoredStudio/assets/README.md` com texto antigo que atribuía o efeito sonoro ao Studio. O conteúdo desse arquivo local deve ser reconciliado explicitamente com o Git; não presumir que ele já esteja versionado nem substituí-lo/apagá-lo durante a atualização. O banner é responsabilidade visual do Studio; o efeito sonoro e o RVC pertencem ao Speech.
 10. Não remover a .venv testada, bancos, vídeos ou evidências durante a limpeza local.
 
 ---
@@ -214,7 +214,7 @@ Contradições resolvidas: v5 é o contrato ativo; PRs de laboratório não sign
 
 ## 9. Sincronização e limpeza local segura
 
-Objetivo: fazer os arquivos versionados em C:\Users\Administrador\Downloads\ArmoredAudioLab corresponderem à branch remota feature/speech-studio-batch-runner-20261016, incluindo este manual. Dados locais ignorados são preservados intencionalmente.
+Objetivo: fazer os arquivos versionados em `C:\Users\Administrador\Downloads\ArmoredAudioLab` corresponderem à branch remota `test/armoredstudio-speech-integration-20261015`, incluindo este manual. Dados locais ignorados são preservados intencionalmente.
 
 ### Inventariar antes de trocar de branch
 
@@ -234,7 +234,7 @@ Só prossiga se não houver alterações versionadas locais a preservar:
 
 ~~~powershell
 git fetch origin
-$Target = 'feature/speech-studio-batch-runner-20261016'
+$Target = 'test/armoredstudio-speech-integration-20261015'
 $LocalBranch = git branch --list $Target
 if ($LocalBranch) { git switch $Target } else { git switch --track -c $Target "origin/$Target" }
 git merge --ff-only "origin/$Target"
@@ -268,7 +268,7 @@ Paridade significa LOCAL_HEAD igual a REMOTE_HEAD, git diff sem diferenças em a
 
 ## 10. Integração futura no repositório operacional
 
-O AudioLab está fechado como laboratório, mas a integração operacional é separada. Não editar main diretamente nem copiar módulos sem auditoria do layout real.
+O AudioLab permanece isolado como laboratório; a consolidação compartilhada desta rodada está integrada e passou no CI, mas isso não equivale a declarar validados todos os cenários E2E. A integração operacional é uma etapa separada. Não editar `main` diretamente nem copiar módulos sem auditoria do layout real.
 
 1. Criar branch exclusiva no repositório operacional e revisar arquitetura, dependências, Coordinator e schema SQLite real.
 2. Manter Coordinator como composition root e SQLite como source of truth; não adicionar filas/sistemas paralelos.
@@ -285,7 +285,7 @@ O AudioLab está fechado como laboratório, mas a integração operacional é se
 - Contrato Speech → Studio v5 e runner de lote validados, com Speech completando todo o lote antes de Studio iniciar.
 - E2Es focais reais EFFECT_ONLY e RVC_MELODY passaram na ordem atual e preservaram os originais.
 - Consolidação das implementações duplicadas de SHA-256 de arquivo, Git blob SHA-1/materialização de assets, digest canônico do plano visual, contenção de caminhos e opções de subprocesso Windows.
-- CI em commit de código 5b3b4357a8ec547ea53a18624605faea5179517e: compileall passou e 127 testes passaram. Execução push #39336338244: https://github.com/armoredcreator/audio/actions/runs/39336338244.
+- CI no merge atual da PR #7, commit `3e6969eeb4c42d747989fc3d865f1edfd72a92b6`: `compileall` e **127 testes** passaram ([workflow de testes](https://github.com/armoredcreator/audio/actions/runs/39336661372)); o [workflow de diagnósticos de áudio](https://github.com/armoredcreator/audio/actions/runs/39336661228) também passou.
 - Filtros do workflow corrigidos para que alterações do Studio, armored_core e scripts também iniciem a suíte em pull requests.
 - Não foram removidos módulos sem prova de que eram órfãos; banco, mídia original e assets não foram incluídos nem alterados.
 - E2E EFFECT_ONLY pós-correção passou, selecionou NO_BANNER, produziu H.264/AAC válido e preservou o original.
@@ -294,4 +294,4 @@ O AudioLab está fechado como laboratório, mas a integração operacional é se
 - SQLite, originais, resultados, ativos canônicos e evidências preservados.
 - Repositórios operacionais e branch main do AudioLab não foram alterados por esta etapa.
 
-**Estado em 19/10/2026:** E2Es focais e PR de laboratório concluídos. A atividade imediata é consolidar documentação e alinhar o checkout local. A integração operacional começa só depois de revisar os arquivos locais extras e abrir uma mudança separada.
+**Estado em 19/10/2026:** PR #7 mesclada na branch `test/armoredstudio-speech-integration-20261015`; os dois workflows do merge passaram, incluindo 127 testes e `compileall`. A documentação agora aponta para a branch e o commit corretos. A evidência E2E atual inclui os dois casos focais pós-correção (EFFECT_ONLY e RVC_MELODY); o lote inteiro de 17 vídeos não foi reexecutado após essa correção, e `BANNER_PRESENT` não tem E2E com mídia real porque nenhum vídeo do corpus contém banner. A sincronização local pode ser feita por fast-forward após inventariar alterações locais, preservando `storage`, `.venv`, assets e evidências. A integração operacional continua sendo uma mudança futura e separada.
