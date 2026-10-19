@@ -7,6 +7,7 @@ subgraph. The visual renderer combines this subgraph with its visual graph for
 one final audiovisual FFmpeg render; Studio does not create audio policy.
 """
 
+import hashlib
 import math
 import wave
 from pathlib import Path
