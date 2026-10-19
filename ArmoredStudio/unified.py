@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import math
@@ -19,7 +18,7 @@ from .analysis.veo_detector import detect_fast as detectar_veo
 from .analysis.gemini_detector import detect_fast as detectar_gemini
 from .analysis.export_planner import criar_plano_exportacao
 from .analysis.export_plan_validator import validar_plano_exportacao
-from armored_core.integrity import sha256_file
+from armored_core.integrity import canonical_json_sha256, sha256_file
 
 
 @dataclass(frozen=True)
@@ -35,15 +34,8 @@ class AnalysisResult:
 
 
 def _visual_plan_digest(plan: dict[str, Any] | None) -> str:
-    """Hash a visual plan while encoding path-like detector metadata as paths."""
-    raw = json.dumps(
-        plan or {},
-        default=os.fspath,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
+    """Keep Studio's compatibility adapter on the shared canonical digest."""
+    return canonical_json_sha256(plan or {})
 
 
 class AnalysisEngine:
