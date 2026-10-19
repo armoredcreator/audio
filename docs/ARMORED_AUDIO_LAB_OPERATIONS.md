@@ -48,7 +48,7 @@ O AudioLab valida Speech → Studio; não substitui Coordinator, não reinicia c
 6. Não publicar no Hub nem integrar em produção nesta etapa.
 7. Não executar git reset --hard, git clean ou exclusões recursivas genéricas.
 8. Preservar storage, originais, SQLite experimental, manifestos, relatórios, pacotes, saídas e ativos canônicos.
-9. Preservar ArmoredStudio/assets/README.md local até rever seu conteúdo e decidir expressamente se será versionado.
+9. ArmoredStudio/assets/README.md era um arquivo local fora do Git com texto antigo que atribuía o efeito sonoro ao Studio. Após revisão, foi corrigido para identificar o banner como asset visual e o efeito/RVC como propriedade de Speech; esta versão será versionada para que o checkout atualizado não retenha um arquivo untracked divergente.
 10. Não remover a .venv testada, bancos, vídeos ou evidências durante a limpeza local.
 
 ---
