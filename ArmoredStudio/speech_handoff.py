@@ -15,6 +15,8 @@ import re
 import wave
 from dataclasses import dataclass
 from pathlib import Path
+
+from armored_core.path_utils import path_is_within
 from typing import Any
 from armored_core.integrity import sha256_file as _shared_sha256_file
 
@@ -28,11 +30,8 @@ def sha256_file(path: Path) -> str:
 
 
 def _is_within(path: Path, root: Path) -> bool:
-    try:
-        path.resolve(strict=True).relative_to(root.resolve(strict=True))
-        return True
-    except (OSError, ValueError):
-        return False
+    """Keep the module's established API while sharing root-boundary checks."""
+    return path_is_within(path, root)
 
 
 def _valid_sha256(value: object) -> bool:

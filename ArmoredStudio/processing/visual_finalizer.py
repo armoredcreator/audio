@@ -10,10 +10,10 @@ invokes FFmpeg once for the final audiovisual render.
 import json
 from pathlib import Path
 import subprocess
-import sys
 from typing import Any
 
 from .tool_paths import resolve_executable
+from armored_core.subprocess_utils import windows_hidden_kwargs
 
 VIDEO_PRESET = "medium"
 VIDEO_CRF = "18"
@@ -36,12 +36,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _windows_hidden_kwargs():
-    if sys.platform != "win32":
-        return {}
-    startupinfo = subprocess.STARTUPINFO()
-    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    startupinfo.wShowWindow = subprocess.SW_HIDE
-    return {"startupinfo": startupinfo, "creationflags": subprocess.CREATE_NO_WINDOW}
+    """Preserve caller compatibility while sharing platform-specific options."""
+    return windows_hidden_kwargs()
 
 
 def _validate_file(path: Path, description: str) -> None:

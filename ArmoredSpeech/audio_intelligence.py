@@ -9,6 +9,8 @@ from typing import Any
 
 import numpy as np
 
+from armored_core.subprocess_utils import windows_hidden_kwargs
+
 
 class AudioMode:
     NO_AUDIO = "NO_AUDIO"
@@ -65,13 +67,8 @@ class AudioIntelligenceResult:
 
 
 def _windows_hidden_kwargs() -> dict[str, Any]:
-    import sys
-    if sys.platform != "win32":
-        return {}
-    startupinfo = subprocess.STARTUPINFO()
-    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    startupinfo.wShowWindow = subprocess.SW_HIDE
-    return {"startupinfo": startupinfo, "creationflags": subprocess.CREATE_NO_WINDOW}
+    """Preserve caller compatibility while sharing platform-specific options."""
+    return windows_hidden_kwargs()
 
 
 class AudioIntelligence:
