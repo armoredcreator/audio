@@ -10,7 +10,6 @@ batch to the real Studio renderer. It never cleans previous artifacts.
 
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -19,6 +18,7 @@ import shutil
 import sqlite3
 import sys
 from typing import Any
+from armored_core.integrity import sha256_file as _shared_sha256_file
 
 
 class CorpusBatchError(RuntimeError):
@@ -26,11 +26,7 @@ class CorpusBatchError(RuntimeError):
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return _shared_sha256_file(path)
 
 
 def _inside(path: Path, root: Path) -> bool:

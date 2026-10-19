@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +7,7 @@ from typing import Protocol, Sequence
 
 from .contracts import AudioClass, SpeechDecision, SpeechStatus
 from .registry import SCHEMA, record_result
+from armored_core.integrity import sha256_file as _shared_sha256_file
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,11 +26,7 @@ class SpeechProcessor(Protocol):
 
 
 def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return _shared_sha256_file(path)
 
 
 def wav_path_for(video_path: Path) -> Path:

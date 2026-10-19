@@ -2,7 +2,6 @@ from __future__ import annotations
 
 """Validated, lab-confined vocal separation used by ArmoredSpeech."""
 
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,6 +13,7 @@ import wave
 from typing import Any
 
 import numpy as np
+from armored_core.integrity import sha256_file as _shared_sha256_file
 
 
 class VocalSeparationError(RuntimeError):
@@ -21,11 +21,7 @@ class VocalSeparationError(RuntimeError):
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return _shared_sha256_file(path)
 
 
 def _inside(path: Path, root: Path) -> bool:

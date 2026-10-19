@@ -10,7 +10,6 @@ a Coordinator/production database.
 import argparse
 from dataclasses import replace
 from datetime import datetime, timezone
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -25,6 +24,7 @@ from ArmoredStudio.speech_handoff import validate_audio_package, SpeechHandoffEr
 from ArmoredStudio.analysis.export_plan_validator import validar_plano_exportacao
 from .timeline_mixer import visual_plan_digest
 from .studio_integration import prepare_audio_packages_for_items
+from armored_core.integrity import sha256_file as _shared_sha256_file
 
 
 class BatchManifestError(RuntimeError):
@@ -32,11 +32,7 @@ class BatchManifestError(RuntimeError):
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return _shared_sha256_file(path)
 
 
 def _inside(path: Path, root: Path) -> bool:
