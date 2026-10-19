@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+
+from armored_core.path_utils import path_is_within
 import re
 import sys
 from typing import Any
@@ -36,11 +38,8 @@ def _sha256(path: Path) -> str:
 
 
 def _inside(path: Path, root: Path) -> bool:
-    try:
-        path.resolve(strict=True).relative_to(root.resolve(strict=True))
-        return True
-    except (OSError, ValueError):
-        return False
+    """Keep the module's established API while sharing root-boundary checks."""
+    return path_is_within(path, root)
 
 
 def _rooted_path(root: Path, value: object, label: str) -> Path:

@@ -12,7 +12,16 @@ Este é o documento único de referência operacional detalhada. O README da rai
 
 ## 1. Estado atual e evidências
 
-A PR #5 foi mesclada na branch feature/speech-studio-batch-runner-20261016. O merge commit é 35896f1174dfc373fa8c5e6767dc6e54ebdfdd5e. A execução de CI #751 pós-merge terminou com sucesso. O CI #749 no HEAD anterior passou por compileall e pytest, com 112 testes aprovados. No checkout Windows, o usuário também confirmou compileall, 112 testes e STATIC_AUDIO_OWNERSHIP_AUDIT=PASS.
+### Histórico e validação atual
+
+- A PR #4 adicionou o runner explícito de lote Speech → Studio e foi mesclada na branch de integração do laboratório; commit 5d0a51b254bb284a25aec48435f1513c337f12e6.
+- A PR #5 estabeleceu o contrato v5, a ordem lote-completo Speech antes de Studio e os dois E2Es focais descritos abaixo; seu trabalho também foi integrado à árvore de laboratório.
+- A PR #6 unificou a preparação WAV e o cálculo de SHA-256 em arquivo. Seu commit na branch feature é f919225aa755b9c0a198110d789e511b091d8583; a árvore de código coincide com a branch de integração usada nesta etapa. A referência histórica de 112 testes descreve uma versão anterior.
+- Nesta rodada, a auditoria encontrou duplicações comprovadas na materialização dos assets oficiais, no cálculo de hash canônico do plano visual, na validação de limites de caminhos e na configuração de subprocessos no Windows. Esses helpers foram centralizados em armored_core, mantendo os wrappers públicos já usados pelo restante do código.
+- O workflow do CI agora observa alterações em ArmoredSpeech/**, ArmoredStudio/**, armored_core/**, scripts/** e nos arquivos de configuração/documentação listados no próprio workflow, tanto em push como em pull request.
+- No commit de código 5b3b4357a8ec547ea53a18624605faea5179517e, o GitHub Actions concluiu compileall e **127 testes aprovados** (execução de push #39336338244). O erro encontrado numa revisão intermediária foi corrigido antes desse resultado; não use o resultado daquela revisão falha como estado atual.
+
+A revisão de módulos não encontrou um candidato seguro para exclusão como “órfão”: os processadores por manifesto/modelo, runners de lote/corpus, separador isolado e diagnósticos têm contratos ou usos próprios. Foram mantidos em vez de removidos por inferência nominal.
 
 ### E2E focal real após a correção da ordem
 
@@ -199,7 +208,7 @@ A leitura dos dez Markdown do commit de merge encontrou conteúdo útil, mas rep
 
 requirements-analysis.txt e requirements-separation.txt são manifests ativos de dependências, não documentação narrativa, e não devem ser apagados.
 
-Contradições resolvidas: v5 é o contrato ativo; PR #5 foi mesclada na branch de laboratório, não no main nem em produção; 112 testes é o total final relatado, 102 é histórico; nenhum dos 17 vídeos tem banner; o E2E de 17 é anterior à correção da ordem; os E2Es focais de 19/10 validam a ordem atual; o corpus com 14 entradas é exemplo do runner, não a contagem do corpus histórico; o merge não autoriza port para produção.
+Contradições resolvidas: v5 é o contrato ativo; PRs de laboratório não significam merge no main nem no repositório operacional; 127 testes é o resultado do commit de consolidação desta rodada, 116 e 112 são contagens históricas de versões anteriores e 102 é ainda mais antigo; nenhum dos 17 vídeos tem banner; o E2E de 17 é anterior à correção da ordem; os E2Es focais de 19/10 validam a ordem atual; o corpus com 14 entradas é exemplo do runner, não a contagem do corpus histórico; nada autoriza port para produção.
 
 ---
 
@@ -273,8 +282,12 @@ O AudioLab está fechado como laboratório, mas a integração operacional é se
 
 ## 11. Critérios de aceitação
 
-- PR #5 mesclada na branch de laboratório e CI pós-merge #751 bem-sucedido.
-- compileall, 112 testes e auditoria de ownership passaram no checkout Windows relatado.
+- Contrato Speech → Studio v5 e runner de lote validados, com Speech completando todo o lote antes de Studio iniciar.
+- E2Es focais reais EFFECT_ONLY e RVC_MELODY passaram na ordem atual e preservaram os originais.
+- Consolidação das implementações duplicadas de SHA-256 de arquivo, Git blob SHA-1/materialização de assets, digest canônico do plano visual, contenção de caminhos e opções de subprocesso Windows.
+- CI em commit de código 5b3b4357a8ec547ea53a18624605faea5179517e: compileall passou e 127 testes passaram. Execução push #39336338244: https://github.com/armoredcreator/audio/actions/runs/39336338244.
+- Filtros do workflow corrigidos para que alterações do Studio, armored_core e scripts também iniciem a suíte em pull requests.
+- Não foram removidos módulos sem prova de que eram órfãos; banco, mídia original e assets não foram incluídos nem alterados.
 - E2E EFFECT_ONLY pós-correção passou, selecionou NO_BANNER, produziu H.264/AAC válido e preservou o original.
 - E2E RVC_MELODY pós-correção passou, selecionou NO_BANNER, gerou saída confirmada pelo usuário como correta e preservou o original.
 - Nenhum banner no corpus registrado com honestidade; BANNER_PRESENT coberto por testes automatizados, sem alegar E2E real.

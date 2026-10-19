@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+
+from armored_core.path_utils import path_is_within
 import re
 import shutil
 import sqlite3
@@ -30,11 +32,8 @@ def _sha256(path: Path) -> str:
 
 
 def _inside(path: Path, root: Path) -> bool:
-    try:
-        Path(path).resolve(strict=True).relative_to(Path(root).resolve(strict=True))
-        return True
-    except (OSError, ValueError):
-        return False
+    """Keep the module's established API while sharing root-boundary checks."""
+    return path_is_within(path, root)
 
 
 def _relative(path: Path, root: Path) -> str:

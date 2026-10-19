@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+
+from armored_core.path_utils import path_is_within
 import shutil
 import subprocess
 import sys
@@ -25,11 +27,8 @@ def _sha256(path: Path) -> str:
 
 
 def _inside(path: Path, root: Path) -> bool:
-    try:
-        Path(path).resolve().relative_to(Path(root).resolve(strict=True))
-        return True
-    except (OSError, ValueError):
-        return False
+    """Keep the module's established API while sharing root-boundary checks."""
+    return path_is_within(path, root, strict_path=False)
 
 
 def _resolve_executable(name: str, env_var: str) -> str:
