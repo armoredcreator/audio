@@ -8,6 +8,9 @@ on:
       - "armored_core/**"
       - "scripts/**"
       - "pyproject.toml"
+      - "README.md"
+      - "ArmoredSpeech/README.md"
+      - "docs/**"
       - ".github/workflows/armoredspeech-tests.yml"
   pull_request:
     paths:
@@ -16,6 +19,9 @@ on:
       - "armored_core/**"
       - "scripts/**"
       - "pyproject.toml"
+      - "README.md"
+      - "ArmoredSpeech/README.md"
+      - "docs/**"
       - ".github/workflows/armoredspeech-tests.yml"
 
 jobs:
