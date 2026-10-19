@@ -5,11 +5,16 @@ on:
     paths:
       - "ArmoredSpeech/**"
       - "ArmoredStudio/**"
+      - "armored_core/**"
+      - "scripts/**"
       - "pyproject.toml"
       - ".github/workflows/armoredspeech-tests.yml"
   pull_request:
     paths:
       - "ArmoredSpeech/**"
+      - "ArmoredStudio/**"
+      - "armored_core/**"
+      - "scripts/**"
       - "pyproject.toml"
       - ".github/workflows/armoredspeech-tests.yml"
 

@@ -1,23 +1,21 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import shutil
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
+from armored_core.integrity import sha256_file as _shared_sha256_file
+
 
 DEFAULT_MODEL = "UVR-MDX-NET-Voc_FT.onnx"
 
 
 def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    """Keep the script's public name while sharing the bounded-memory helper."""
+    return _shared_sha256_file(path)
 
 
 def main() -> int:
