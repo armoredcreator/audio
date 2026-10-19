@@ -13,4 +13,4 @@ Regras principais:
 - Não usar banco operacional nem fallback para ativos do Studio.
 - Preservar originais, SQLite experimental, manifestos, pacotes e evidências em storage.
 
-No commit validado nesta rodada, o CI passou a compilação e 127 testes. Comandos, configuração, testes, E2E e segurança ficam no manual canônico; não replique instruções em documentos paralelos.
+No merge de consolidação `3e6969eeb4c42d747989fc3d865f1edfd72a92b6`, o CI passou `compileall` e 127 testes; os dois workflows estão vinculados no manual canônico. Comandos, configuração, testes, E2E e segurança ficam nesse manual; não replique instruções em documentos paralelos.

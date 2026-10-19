@@ -16,7 +16,7 @@ Este manual é a fonte operacional detalhada. Os documentos técnicos anteriores
 - A preparação WAV e o SHA-256 de arquivos foram unificados em helpers compartilhados.
 - Nesta rodada, os duplicados comprovados de materialização de assets oficiais, digest canônico do plano visual, contenção de caminhos e opções de subprocesso Windows foram centralizados em armored_core, mantendo os wrappers usados por outros módulos.
 - O workflow de testes agora dispara em push e pull request quando mudam ArmoredSpeech, ArmoredStudio, armored_core ou scripts.
-- No commit de código 5b3b4357a8ec547ea53a18624605faea5179517e, o CI passou compileall e **127 testes**: [execução 39336338244](https://github.com/armoredcreator/audio/actions/runs/39336338244).
+- No merge atual da PR #7 (`3e6969eeb4c42d747989fc3d865f1edfd72a92b6`), o CI passou `compileall` e **127 testes** ([testes isolados](https://github.com/armoredcreator/audio/actions/runs/39336661372)); o [workflow de diagnósticos de áudio](https://github.com/armoredcreator/audio/actions/runs/39336661228) também passou.
 - Os dois E2Es focais pós-correção continuam sendo a evidência real atual: EFFECT_ONLY e RVC_MELODY, ambos NO_BANNER, preservando os originais.
 - A revisão não encontrou módulo que pudesse ser removido com segurança apenas por parecer antigo; as ferramentas de manifesto, modelo, lote/corpus, separação individual e diagnóstico mantêm usos distintos.
 
