@@ -25,13 +25,27 @@ class ArmoredStudio:
         self.storage = Storage(self.root)
         self.engine = UnifiedStudio(self.root, self.storage)
 
-    def process(self, item: Item, *, speech_payload: dict | None = None) -> StudioResult:
+    def analyze_visual(self, item: Item):
+        """Read-only visual preflight; does not inspect or process source audio."""
+        return self.engine.analyze_visual(item)
+
+    def process(
+        self,
+        item: Item,
+        *,
+        speech_payload: dict | None = None,
+        visual_analysis=None,
+    ) -> StudioResult:
         if os.getenv("ARMORED_STUDIO_FORCE_COPY") != "1":
             ffmpeg = os.getenv("ARMORED_FFMPEG", "ffmpeg")
             if not shutil.which(ffmpeg):
                 raise RuntimeError("FFmpeg não encontrado")
 
-        result_path, _details = self.engine.process(item, speech_payload=speech_payload)
+        result_path, _details = self.engine.process(
+            item,
+            speech_payload=speech_payload,
+            visual_analysis=visual_analysis,
+        )
         # Studio reads ORIGINAL directly unless a durable WORKING artifact
         # already exists. It does not manufacture a byte-identical copy.
         return StudioResult(

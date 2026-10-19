@@ -2,6 +2,7 @@
 .venv/
 videos/
 outputs/
+storage/
 ArmoredSpeech/runtime/venv/
 ArmoredSpeech/runtime/cache/
 ArmoredSpeech/runtime/models/
@@ -18,6 +19,12 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+
+# Private/local ArmoredSpeech runtime resources; never commit RVC weights/indexes.
+ArmoredSpeech/runtime/rvc/
+
+# Private/local canonical Speech effect asset; provision outside Git.
+ArmoredSpeech/assets/efeitosonoro.wav
 
 # Private/local ArmoredStudio runtime resources; never commit binaries or model weights.
 ArmoredStudio/assets/banner.png

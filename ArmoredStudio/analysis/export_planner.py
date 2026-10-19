@@ -1,5 +1,5 @@
 """
-ARMOREDSTUDIO V1 - EXPORT PLANNER
+ARMOREDSTUDIO visual export planner
 
 Responsabilidade única:
     Consolidar os resultados independentes dos detectores em UM plano final.
@@ -9,7 +9,7 @@ Regras V1:
     - VEO: remove a caixa detectada escolhendo a maior região retangular
       contínua que não contém a marca.
     - Gemini: mesma regra geométrica de exclusão da caixa detectada.
-    - Banner: mantém corte temporal de vídeo e áudio separadamente.
+    - Banner: registra somente a detecção visual; Speech fornece o corte de áudio.
     - Todas as restrições espaciais são consolidadas em UM crop_final.
     - Não usa crop VEO fixo, 9:16, scale, resize ou padding.
     - Não executa FFmpeg.
@@ -129,23 +129,29 @@ def _intersect(a: Crop, b: Crop) -> Optional[Crop]:
 
 
 def _box_from_center(resultado: Optional[Dict[str, Any]]) -> Optional[Box]:
-    """Converte Gemini (centro/largura/altura) em caixa absoluta."""
+    """Converte a marca Gemini selecionada para uma caixa espacial real."""
     if not resultado or not resultado.get("gemini"):
         return None
+
+    # FAST may return independent Gemini 1 / Gemini 2 matches. Use the actual
+    # winning detector scale so a smaller mark gets a smaller exclusion box.
+    detectors = resultado.get("detectors")
+    selected_name = resultado.get("detector")
+    if isinstance(detectors, dict) and isinstance(detectors.get(selected_name), dict):
+        resultado = detectors[selected_name]
+        if not resultado.get("gemini"):
+            return None
 
     try:
         cx = _float(resultado.get("x"))
         cy = _float(resultado.get("y"))
-        # IMPORTANTE: Gemini FAST usa width/height para as dimensoes
-        # ORIGINAIS DO VIDEO. Elas NAO sao o tamanho da estrela.
-        # A caixa espacial da marca usa o tamanho do template FAST,
-        # escalado para a largura real do video.
         W = _int(resultado.get("width", 0))
         H = _int(resultado.get("height", 0))
         if W <= 0 or H <= 0:
             return None
-
-        base = 61.0
+        base = _float(resultado.get("template_size_720", 61.0), 61.0)
+        if base <= 0:
+            return None
         escala = float(W) / 720.0
         w = base * escala
         h = base * escala
@@ -280,7 +286,6 @@ def criar_plano_exportacao(
     video_info: Dict[str, Any],
     blackbar_result: Optional[Dict[str, Any]],
     banner_result: Optional[Dict[str, Any]],
-    banner_cut_result: Optional[Dict[str, Any]] = None,
     veo_result: Optional[Dict[str, Any]] = None,
     gemini_result: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -352,41 +357,17 @@ def criar_plano_exportacao(
             acoes.append("remover_gemini")
 
     # ------------------------------------------------------------
-    # 4. BANNER / TEMPO
+    # 4. BANNER DETECTADO VISUALMENTE
+    # O instante de corte é decidido por Speech a partir do áudio original.
+    # Studio registra a evidência visual e prepara somente os filtros de imagem.
     # ------------------------------------------------------------
     video_start = 0.0
-    audio_start = 0.0
-
     banner_detectado = bool(
         banner_result
-        and (
-            banner_result.get("banner_detectado")
-            or banner_result.get("detectado")
-        )
+        and (banner_result.get("banner_detectado") or banner_result.get("detectado"))
     )
-
-    if banner_detectado and banner_cut_result:
-        video_start = max(
-            0.0,
-            _float(
-                banner_cut_result.get(
-                    "corte_video",
-                    banner_cut_result.get("video_start", 0),
-                )
-            ),
-        )
-        audio_start = max(
-            0.0,
-            _float(
-                banner_cut_result.get(
-                    "corte_audio",
-                    banner_cut_result.get("audio_start", 0),
-                )
-            ),
-        )
-
-        if video_start > 0.0 or audio_start > 0.0:
-            acoes.append("remover_banner")
+    if banner_detectado:
+        acoes.append("remover_banner")
 
     # ------------------------------------------------------------
     # 5. CROP FINAL
@@ -420,20 +401,18 @@ def criar_plano_exportacao(
     transformacao = bool(
         crop_final is not None
         or video_start > 0.0
-        or audio_start > 0.0
+        or banner_detectado
     )
 
     return {
         "transformacao": transformacao,
         "crop_final": crop_final,
         "video_start": video_start,
-        "audio_start": audio_start,
         "acoes": list(dict.fromkeys(acoes)),
         "video_info": video_info,
         "detectores": {
             "blackbar": blackbar_result,
             "banner": banner_result,
-            "banner_cut": banner_cut_result,
             "veo": veo_result,
             "gemini": gemini_result,
         },

@@ -1,60 +1,7 @@
-# ArmoredSpeech — contrato experimental
+# Referência do contrato ArmoredSpeech → ArmoredStudio
 
-## Posição no fluxo histórico
+Esta página foi consolidada no [Manual canônico do ArmoredAudioLab](../../docs/ARMORED_AUDIO_LAB_OPERATIONS.md).
 
-`ArmoredSync` completo → `ArmoredVision` completo → `ArmoredStock` completo → `ArmoredIA` → **ArmoredSpeech completo** → ArmoredStudio → ArmoredHub.
+O contrato ativo para a renderização audiovisual é o v5. O documento antigo descrevia estados, campos e limitações do protótipo anterior; não deve ser tratado como instrução operacional atual. Consulte o manual para fronteira de responsabilidade, matriz de rotas, campos do pacote v5, ordem de preflight, validação fail-closed e evidências reais de 19/10/2026.
 
-ArmoredSpeech é um lote histórico por fonte. Não faz processamento item a item intercalado com IA/Studio/Hub e não publica nada no Telegram. Esta branch é um protótipo isolado; ainda não integra o repositório de produção.
-
-## Arquivos
-
-O original nunca é alterado. O WAV derivado fica junto do item, com o mesmo nome-base e extensão diferente:
-
-```text
-storage/
-└── Videos GRUPO_FONTE_1/
-    └── 291/
-        ├── 291_finallinkoriginal.mp4
-        └── 291_finallinkoriginal.wav
-```
-
-O caminho é sempre registrado no SQLite junto de `source_id` e `item_id`. Não separar em pastas de “narrados” e “mutados”; a rota é lógica e vem da classificação persistida.
-
-## Rotas de áudio para o Studio
-
-| Classe | RVC | Preparação | Comportamento final esperado no Studio |
-|---|---:|---|---|
-| `PT_BR_NARRATION` | Sim | WAV extraído | RVC na narração PT-BR |
-| `PT_BR_NARRATION_WITH_MUSIC` | **Bloqueado no v1** | separação pode gerar um stem vocal, mas ele ainda não é aprovado para RVC | Studio usa a rota conservadora; liberar RVC somente após validação explícita do stem |
-| `MUSIC_ONLY` | Não | WAV de referência | silenciar áudio original e aplicar o efeito sonoro existente |
-| `NOISE` | Não | WAV de referência | silenciar áudio original e aplicar o efeito sonoro existente |
-| `NO_AUDIO` | Não | WAV silencioso determinístico | aplicar efeito sonoro sem RVC |
-| `NO_USABLE_NARRATION` | Não | WAV de referência, se houver | silenciar áudio original e aplicar efeito sonoro |
-| `FOREIGN_SPEECH` | Não | WAV de referência | não enviar para RVC PT-BR; silenciar e aplicar efeito conforme regra do projeto |
-| `UNKNOWN` | **Bloqueado** | não liberar WAV como aprovado | pendência/erro; nunca presumir elegibilidade |
-
-A classificação `FOREIGN_SPEECH` está incluída como proteção inicial. A rota final de fala estrangeira precisa ser confirmada antes de integração com Studio.
-
-## SQLite / contrato com Studio
-
-A tabela experimental `armored_speech_results` é propriedade exclusiva do ArmoredSpeech. Ela guarda:
-- `source_id`, `item_id`: identidade e origem do item;
-- `video_path`, `wav_path`: caminhos dos arquivos;
-- `audio_class`, `language`, `speech_detected`, `music_detected`, `confidence`;
-- `rvc_eligible`: decisão explícita e fail-closed;
-- `status`, hashes do original antes/depois e erro.
-
-**ArmoredStudio não deve consultar diretamente essa tabela nem importar módulos internos do Speech.** Nesta branch, o produtor do contrato está em `ArmoredSpeech/studio_bridge.py`, a entrega por item/lote em `ArmoredSpeech/studio_integration.py`, e a validação/consumo pertencem ao Studio (`ArmoredStudio/speech_handoff.py` e `ArmoredStudio/unified.py`). O pré-check do lote bloqueia a primeira chamada ao Studio se algum item não estiver pronto. Isso comprova a ligação de código e os testes de contrato, mas não certifica a conversão real RVC/Melody, a renderização completa no ambiente local nem uma integração com o repositório de produção. ArmoredSpeech não escolhe destino do Hub: o roteamento continua ligado ao `source_id` e à configuração de destino já existente.
-
-## Segurança e limpeza
-
-- Não modificar, renomear ou mover o MP4 original.
-- Confirmar SHA-256 antes/depois do processamento.
-- Erro de classificação, separação ou WAV ausente não libera RVC.
-- Não excluir WAV ao terminar ArmoredSpeech. Preservar até o Studio confirmar que concluiu e não precisa mais dele.
-- Se Studio falhar, preservar o WAV para retry.
-- Não gerar vídeo final nem publicar no Telegram nesta fase.
-
-## Estado real desta branch
-
-O runner, o registro SQLite e o contrato de dados são experimentais. O classificador automático usa Whisper para idioma, Silero VAD para atividade de fala e AudioSet/AST para evidência de música; existe também um modo opcional de manifesto revisado. A classificação ainda precisa de benchmark e avaliação auditiva reproduzíveis em exemplos rotulados antes de declarar o ArmoredSpeech pronto ou portar o código para produção. A tabela SQLite desta branch é experimental e não é o schema real do ArmoredCreator.
+O repositório continua sendo laboratório isolado. A existência do contrato v5 não autoriza, por si só, integração no repositório operacional.

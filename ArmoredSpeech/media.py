@@ -1,12 +1,44 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
-import tempfile
 import wave
 from pathlib import Path
 
 from .contracts import AudioClass, SpeechDecision
+from .vocal_separation import separate_vocal_stem
+
+
+def _resolve_ffmpeg() -> str:
+    configured = os.getenv("ARMORED_FFMPEG", "").strip()
+    if configured:
+        candidate = Path(configured).expanduser()
+        if candidate.is_file():
+            return str(candidate.resolve())
+        discovered = shutil.which(configured)
+        if discovered:
+            return discovered
+        raise RuntimeError(f"Configured FFmpeg was not found: {configured}")
+    executable = shutil.which("ffmpeg")
+    if executable is None:
+        raise RuntimeError("FFMPEG_NOT_FOUND")
+    return executable
+
+
+def _workspace_root_for(video_path: Path) -> Path:
+    configured = os.getenv("ARMORED_ROOT", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    video = Path(video_path).expanduser().resolve()
+    return next(
+        (
+            parent for parent in video.parents
+            if (parent / "ArmoredSpeech").is_dir()
+            and (parent / "ArmoredStudio").is_dir()
+        ),
+        Path(__file__).resolve().parents[1],
+    )
 
 
 def prepare_wav_asset(
@@ -17,67 +49,46 @@ def prepare_wav_asset(
     model: str = "UVR-MDX-NET-Voc_FT.onnx",
     timeout_seconds: int = 7200,
 ) -> None:
-    """Create the WAV sidecar without touching the source video."""
+    """Create a derived WAV and, for mixed speech, a verified vocal-stem receipt.
+
+    The MP4 is never modified. A READY mixed item has a non-silent WAV sidecar
+    and a receipt bound to the source hash and separation model.
+    """
+    video_path = Path(video_path).expanduser().resolve(strict=True)
+    wav_path = Path(wav_path).expanduser().resolve()
     wav_path.parent.mkdir(parents=True, exist_ok=True)
-    ffmpeg = shutil.which("ffmpeg")
-    if ffmpeg is None:
-        raise RuntimeError("FFMPEG_NOT_FOUND")
 
-    with tempfile.TemporaryDirectory(prefix="armoredspeech-") as temporary:
-        temp_dir = Path(temporary)
-        if decision.needs_vocal_separation:
-            separator = shutil.which("audio-separator")
-            if separator is None:
-                raise RuntimeError("AUDIO_SEPARATOR_NOT_FOUND")
-            raw_wav = temp_dir / "source.wav"
-            output_dir = temp_dir / "separated"
-            output_dir.mkdir()
-            extracted = subprocess.run(
-                [ffmpeg, "-nostdin", "-y", "-i", str(video_path), "-vn",
-                 "-ac", "2", "-ar", "44100", str(raw_wav)],
-                capture_output=True, text=True, timeout=timeout_seconds,
-            )
-            if extracted.returncode != 0:
-                raise RuntimeError(f"FFMPEG_EXTRACT_FAILED: {extracted.stderr[-1200:]}")
-            separated = subprocess.run(
-                [separator, str(raw_wav), "--model_filename", model,
-                 "--output_dir", str(output_dir), "--output_format", "WAV"],
-                capture_output=True, text=True, timeout=timeout_seconds,
-            )
-            if separated.returncode != 0:
-                raise RuntimeError(f"SEPARATION_FAILED: {separated.stderr[-1200:]}")
-            candidates = [
-                path for path in output_dir.rglob("*.wav")
-                if "vocal" in path.name.lower()
-            ]
-            if len(candidates) != 1:
-                raise RuntimeError(
-                    f"EXPECTED_ONE_VOCALS_STEM_FOUND_{len(candidates)}; refusing to guess"
-                )
-            normalized = subprocess.run(
-                [ffmpeg, "-nostdin", "-y", "-i", str(candidates[0]),
-                 "-vn", "-ac", "1", "-ar", "16000", str(wav_path)],
-                capture_output=True, text=True, timeout=timeout_seconds,
-            )
-            if normalized.returncode != 0:
-                raise RuntimeError(f"WAV_NORMALIZATION_FAILED: {normalized.stderr[-1200:]}")
-            return
-
-        # Non-RVC classes retain a reference WAV for Studio/debugging. Studio
-        # must use the SQLite decision, not infer RVC eligibility from file existence.
-        extracted = subprocess.run(
-            [ffmpeg, "-nostdin", "-y", "-i", str(video_path), "-vn",
-             "-ac", "1", "-ar", "16000", str(wav_path)],
-            capture_output=True, text=True, timeout=timeout_seconds,
+    if decision.needs_vocal_separation:
+        separate_vocal_stem(
+            video_path,
+            output_wav=wav_path,
+            workspace_root=_workspace_root_for(video_path),
+            model_filename=model,
+            timeout_seconds=timeout_seconds,
         )
-        if extracted.returncode == 0 and wav_path.is_file() and wav_path.stat().st_size:
-            return
-        if decision.audio_class is not AudioClass.NO_AUDIO:
-            raise RuntimeError(f"FFMPEG_EXTRACT_FAILED: {extracted.stderr[-1200:]}")
+        return
 
-        # A no-audio item still receives a deterministic silent WAV sidecar.
-        with wave.open(str(wav_path), "wb") as output:
-            output.setnchannels(1)
-            output.setsampwidth(2)
-            output.setframerate(16000)
-            output.writeframes(b"\x00\x00" * 16000)
+    ffmpeg = _resolve_ffmpeg()
+    extracted = subprocess.run(
+        [
+            ffmpeg, "-nostdin", "-y", "-i", str(video_path), "-vn",
+            "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(wav_path),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout_seconds,
+        check=False,
+    )
+    if extracted.returncode == 0 and wav_path.is_file() and wav_path.stat().st_size > 44:
+        return
+    if decision.audio_class is not AudioClass.NO_AUDIO:
+        raise RuntimeError(f"FFMPEG_EXTRACT_FAILED: {(extracted.stderr or '')[-1200:]}")
+
+    # A no-audio item still receives a deterministic silent WAV sidecar.
+    with wave.open(str(wav_path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(16000)
+        output.writeframes(b"\x00\x00" * 16000)
