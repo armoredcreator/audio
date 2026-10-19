@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
-import tempfile
-import wave
 from pathlib import Path
 from typing import Any
 
 from .contracts import AudioClass, SpeechDecision
+from .media import prepare_wav_asset
 
 
 class ManifestProcessor:
@@ -67,67 +64,11 @@ class ManifestProcessor:
         return decision
 
     def prepare_wav(self, video_path: Path, wav_path: Path, decision: SpeechDecision) -> None:
-        wav_path.parent.mkdir(parents=True, exist_ok=True)
-        ffmpeg = shutil.which("ffmpeg")
-        if ffmpeg is None:
-            raise RuntimeError("FFMPEG_NOT_FOUND")
-
-        with tempfile.TemporaryDirectory(prefix="armoredspeech-") as temporary:
-            temp_dir = Path(temporary)
-            raw_wav = temp_dir / "source.wav"
-            if decision.needs_vocal_separation:
-                separator = shutil.which("audio-separator")
-                if separator is None:
-                    raise RuntimeError("AUDIO_SEPARATOR_NOT_FOUND")
-                output_dir = temp_dir / "separated"
-                output_dir.mkdir()
-                extracted = subprocess.run(
-                    [ffmpeg, "-nostdin", "-y", "-i", str(video_path), "-vn",
-                     "-ac", "2", "-ar", "44100", str(raw_wav)],
-                    capture_output=True, text=True, timeout=self.timeout_seconds,
-                )
-                if extracted.returncode != 0:
-                    raise RuntimeError(f"FFMPEG_EXTRACT_FAILED: {extracted.stderr[-1200:]}")
-                separated = subprocess.run(
-                    [separator, str(raw_wav), "--model_filename", self.model,
-                     "--output_dir", str(output_dir), "--output_format", "WAV"],
-                    capture_output=True, text=True, timeout=self.timeout_seconds,
-                )
-                if separated.returncode != 0:
-                    raise RuntimeError(f"SEPARATION_FAILED: {separated.stderr[-1200:]}")
-                candidates = [
-                    path for path in output_dir.rglob("*.wav")
-                    if "vocal" in path.name.lower()
-                ]
-                if len(candidates) != 1:
-                    raise RuntimeError(
-                        f"EXPECTED_ONE_VOCALS_STEM_FOUND_{len(candidates)}; refusing to guess"
-                    )
-                vocal_source = candidates[0]
-                normalized = subprocess.run(
-                    [ffmpeg, "-nostdin", "-y", "-i", str(vocal_source),
-                     "-vn", "-ac", "1", "-ar", "16000", str(wav_path)],
-                    capture_output=True, text=True, timeout=self.timeout_seconds,
-                )
-                if normalized.returncode != 0:
-                    raise RuntimeError(f"WAV_NORMALIZATION_FAILED: {normalized.stderr[-1200:]}")
-                return
-
-            # For all non-RVC classes, keep a local extracted track for diagnosis
-            # and Studio metadata; Studio must ignore it for RVC and mute the MP4.
-            extracted = subprocess.run(
-                [ffmpeg, "-nostdin", "-y", "-i", str(video_path), "-vn",
-                 "-ac", "1", "-ar", "16000", str(wav_path)],
-                capture_output=True, text=True, timeout=self.timeout_seconds,
-            )
-            if extracted.returncode == 0 and wav_path.is_file() and wav_path.stat().st_size:
-                return
-            if decision.audio_class is not AudioClass.NO_AUDIO:
-                raise RuntimeError(f"FFMPEG_EXTRACT_FAILED: {extracted.stderr[-1200:]}")
-            # A no-audio item still gets a valid silent WAV sidecar so the
-            # downstream contract has a deterministic artifact to inspect.
-            with wave.open(str(wav_path), "wb") as output:
-                output.setnchannels(1)
-                output.setsampwidth(2)
-                output.setframerate(16000)
-                output.writeframes(b"\x00\x00" * 16000)
+        """Delegate WAV preparation to the canonical Speech media implementation."""
+        prepare_wav_asset(
+            video_path,
+            wav_path,
+            decision,
+            model=self.model,
+            timeout_seconds=self.timeout_seconds,
+        )

@@ -19,6 +19,7 @@ from .analysis.veo_detector import detect_fast as detectar_veo
 from .analysis.gemini_detector import detect_fast as detectar_gemini
 from .analysis.export_planner import criar_plano_exportacao
 from .analysis.export_plan_validator import validar_plano_exportacao
+from armored_core.integrity import sha256_file
 
 
 @dataclass(frozen=True)
@@ -129,7 +130,7 @@ class UnifiedStudio:
         visual_analysis: AnalysisResult | None = None,
     ):
         original, source = self._source_for_item(item)
-        original_hash = hashlib.sha256(original.read_bytes()).hexdigest()
+        original_hash = sha256_file(original)
         destination = Path(
             self.storage.result(
                 item.content_id, item.affiliate_url, item.affiliate_name,
@@ -149,7 +150,7 @@ class UnifiedStudio:
             self._test_copy(source, output)
             if not output.is_file() or output.stat().st_size <= 0:
                 raise RuntimeError("Studio produziu uma saída de teste inválida")
-            if hashlib.sha256(original.read_bytes()).hexdigest() != original_hash:
+            if sha256_file(original) != original_hash:
                 raise RuntimeError("O original foi alterado durante o processamento")
             output.replace(destination)
             return destination, {"mode": "test-copy", "plan": None}
@@ -220,7 +221,7 @@ class UnifiedStudio:
 
         if not output.is_file() or output.stat().st_size <= 0:
             raise RuntimeError("Studio produziu uma saída inválida")
-        if hashlib.sha256(original.read_bytes()).hexdigest() != original_hash:
+        if sha256_file(original) != original_hash:
             raise RuntimeError("O original foi alterado durante o processamento")
         output.replace(destination)
         return destination, analysis

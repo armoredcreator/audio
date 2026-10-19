@@ -6,7 +6,6 @@ This module is used only by the isolated lab's whole-batch runner. It does not
 publish, mutate the original video, or invoke ArmoredStudio.
 """
 
-import hashlib
 import json
 import os
 import shutil
@@ -16,6 +15,7 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from armored_core.integrity import sha256_file as _shared_sha256_file
 
 
 class AudioPackageError(RuntimeError):
@@ -31,11 +31,7 @@ class WaveMetadata:
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return _shared_sha256_file(path)
 
 
 def _inside(path: Path, root: Path) -> bool:

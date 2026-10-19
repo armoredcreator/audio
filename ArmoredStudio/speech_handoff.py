@@ -16,6 +16,7 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from armored_core.integrity import sha256_file as _shared_sha256_file
 
 
 class SpeechHandoffError(RuntimeError):
@@ -23,11 +24,7 @@ class SpeechHandoffError(RuntimeError):
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return _shared_sha256_file(path)
 
 
 def _is_within(path: Path, root: Path) -> bool:
