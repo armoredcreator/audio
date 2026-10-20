@@ -917,3 +917,7 @@ Os testes sintéticos do executor injetam Vision/IA/Speech/Studio determinístic
 
 Quando uma reserva existente está em `WAITING_VISION` sem URL e uma nova passagem do Sync descobre o link para a mesma identidade `(source_id, telegram_message_id)`, o Core tenta enriquecer a reserva existente. Se a URL já estiver representada por outro item, a atualização do link e a transição para `DUPLICATE` ocorrem na mesma transação SQLite; o Sync não pode voltar a transicionar o item para `RECEIVED` com base em um estado antigo lido antes da atualização. O ID original da reserva e os eventos permanecem preservados.
 
+#### 16.5 Ownership local dos assets de RVC/áudio
+
+O código de `ArmoredSpeech/rvc_engine.py` já define `ArmoredSpeech/runtime/rvc/models` como caminho canônico, e o WAV de efeito fica em `ArmoredSpeech/assets/efeitosonoro.wav`. Os arquivos são binários locais ignorados pelo Git; por isso, a migração não os transporta pelo repositório. O script `scripts/migrate_rvc_assets_to_speech.ps1` copia apenas modelos/índices RVC e o efeito sonoro canônico. Ele não copia o ambiente Python legado do Studio, banner, credenciais, bases, vídeos ou outputs; não remove arquivos do Studio e não sobrescreve destinos divergentes. Primeiro execute sem `-Apply` para auditar plano/conflitos e hashes; só use `-Apply` depois de revisar o relatório.
+
