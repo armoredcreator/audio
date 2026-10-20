@@ -882,3 +882,11 @@ A branch de migração adiciona uma correção com testes:
 
 Esta proteção só pode ser considerada aprovada depois dos testes CI e dos testes locais do AudioLab. Não deve ser executada sobre o banco operacional como teste de migração.
 
+#### 16.2 Estados explícitos de hand-off Speech e saída segura do Studio
+
+O Core do AudioLab oferece agora os estados duráveis `SPEECH` (IA concluída, aguardando o lote Speech) e `STUDIO_COMPLETE` (renderização concluída, publicação proibida nesta execução de laboratório). `Pipeline.run(..., stop_after_ia=True)` persiste o caption e termina em `SPEECH`, sem chamar Studio. `Pipeline.run(..., stop_after_studio=True)` grava o resultado, termina em `STUDIO_COMPLETE` e retorna antes do bloco de Hub/publicação. Reentrada nesses estados é bloqueada, impedindo que a recuperação pule etapas ou publique acidentalmente.
+
+O runner de contrato v5 do Speech/Studio continua sendo a implementação canônica de preparação de áudio, variantes temporais, validação de pacotes e renderização; seus manifests aceitam o estado novo `SPEECH` e continuam aceitando `IA` para fixtures legadas. Isso não substitui o teste real de Speech/RVC/Ollama: esses componentes precisam de runtime/assets locais e são verificados separadamente.
+
+Os testes de estágio usam SQLite temporário e verificam que a saída no limite Studio não chama Publisher, que o original permanece idêntico e que estados de hand-off não repetem trabalho.
+

@@ -106,9 +106,10 @@ def load_complete_batch(
             raise BatchManifestError(f"Identidade duplicada no manifest: {identity}")
         identities.add(identity)
 
-        if data.get("state") != State.IA.value:
+        if data.get("state") not in {State.IA.value, State.SPEECH.value}:
             raise BatchManifestError(
-                f"Item {identity}: state precisa ser IA, pois Studio só começa após o lote Speech"
+                f"Item {identity}: state precisa ser IA (lote legado) ou SPEECH "
+                "para o hand-off explícito do pipeline"
             )
 
         workspace = _rooted_path(root, data.get("workspace"), f"Item {identity} workspace")

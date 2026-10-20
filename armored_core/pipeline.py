@@ -32,6 +32,8 @@ class Pipeline:
         item_id: str,
         *,
         stop_after_vision: bool = False,
+        stop_after_ia: bool = False,
+        stop_after_studio: bool = False,
         retry_waiting_vision: bool = False,
     ) -> None:
         item = self.db.get(item_id)
@@ -42,6 +44,16 @@ class Pipeline:
                 item_id, "PIPELINE", "DUPLICATE_SKIP",
                 duplicate_of=item.duplicate_of_content_id,
                 reason="candidate-already-represented-by-canonical-product",
+            )
+            return
+        if item.state in {State.SPEECH, State.STUDIO_COMPLETE}:
+            # These are durable hand-off states. Speech/Studio run as an
+            # explicit versioned batch outside Pipeline; never auto-skip the
+            # contract boundary or fall through to a publisher.
+            self.trace.emit(
+                item_id, "PIPELINE", "STAGE_HANDOFF_WAIT",
+                state=item.state.value,
+                reason="explicit-speech-studio-boundary",
             )
             return
         # WAITING_VISION is deliberately not retried by normal runs. An explicit
@@ -100,11 +112,14 @@ class Pipeline:
                 raise FileNotFoundError(f"immutable-original-missing: {item.original_path}")
             if item.state == State.RECEIVED:
                 if str(item.affiliate_url or "").strip():
-                    next_state = (
-                        State.IA
-                        if self.ia is not None
+                    ia_enabled = (
+                        self.ia is not None
                         and os.getenv("ARMORED_IA_ENABLED", "1") == "1"
                         and os.getenv("ARMORED_IA_CAPTION_ENABLED", "1") == "1"
+                    )
+                    next_state = (
+                        State.IA if ia_enabled
+                        else State.SPEECH if stop_after_ia
                         else State.STUDIO
                     )
                     self.db.transition(item_id, next_state, "vision-gate-complete")
@@ -116,6 +131,13 @@ class Pipeline:
                         new_state=next_state.value,
                         reason="vision-gate-complete",
                     )
+                    if next_state == State.SPEECH:
+                        self.trace.emit(
+                            item_id, "PIPELINE", "END",
+                            state=State.SPEECH.value,
+                            stop_after_ia=True,
+                        )
+                        return
                 else:
                     self.db.transition(item_id, State.VISION, "pipeline-start")
                     self.trace.emit(item_id, "PIPELINE", "TRANSITION", old_state=State.RECEIVED.value, new_state=State.VISION.value, reason="pipeline-start")
@@ -209,8 +231,19 @@ class Pipeline:
                     self.db.transition(item_id, State.IA, "vision-complete")
                     self.trace.emit(item_id, "VISION", "TRANSITION", old_state=State.VISION.value, new_state=State.IA.value, reason="vision-complete")
                 else:
-                    self.db.transition(item_id, State.STUDIO, "vision-complete")
-                    self.trace.emit(item_id, "VISION", "TRANSITION", old_state=State.VISION.value, new_state=State.STUDIO.value, reason="vision-complete")
+                    next_state = State.SPEECH if stop_after_ia else State.STUDIO
+                    self.db.transition(item_id, next_state, "vision-complete")
+                    self.trace.emit(
+                        item_id, "VISION", "TRANSITION",
+                        old_state=State.VISION.value, new_state=next_state.value,
+                        reason="vision-complete",
+                    )
+                    if next_state == State.SPEECH:
+                        self.trace.emit(
+                            item_id, "PIPELINE", "END",
+                            state=State.SPEECH.value, stop_after_ia=True,
+                        )
+                        return
             item = self.db.get(item_id)
             if item.state == State.IA:
                 self.log.info("[PIPELINE][ITEM %s] ARMOREDIA iniciando", item.content_id)
@@ -263,8 +296,19 @@ class Pipeline:
                         raise RuntimeError("armored-ia-empty-caption")
                     self.db.set_caption(item_id, str(caption))
                     self.trace.emit(item_id, "IA", "RESULT", caption=True)
-                self.db.transition(item_id, State.STUDIO, "ia-complete")
-                self.trace.emit(item_id, "IA", "TRANSITION", old_state=State.IA.value, new_state=State.STUDIO.value, reason="ia-complete")
+                next_state = State.SPEECH if stop_after_ia else State.STUDIO
+                reason = "ia-complete-awaiting-speech" if stop_after_ia else "ia-complete"
+                self.db.transition(item_id, next_state, reason)
+                self.trace.emit(
+                    item_id, "IA", "TRANSITION",
+                    old_state=State.IA.value, new_state=next_state.value, reason=reason,
+                )
+                if stop_after_ia:
+                    self.trace.emit(
+                        item_id, "PIPELINE", "END",
+                        state=State.SPEECH.value, stop_after_ia=True,
+                    )
+                    return
 
             item = self.db.get(item_id)
             if item.state == State.STUDIO:
@@ -287,7 +331,21 @@ class Pipeline:
                         working=bool(studio.working_path),
                         result_exists=studio.result_path.is_file(),
                     )
-                self.log.info("[PIPELINE][ITEM %s] STUDIO/RVC concluído result=%s", item_id, studio.result_path)
+                self.log.info("[PIPELINE][ITEM %s] STUDIO concluído result=%s", item_id, studio.result_path)
+                if stop_after_studio:
+                    self.db.transition(item_id, State.STUDIO_COMPLETE, "studio-complete-lab-boundary")
+                    self.trace.emit(
+                        item_id, "STUDIO", "TRANSITION",
+                        old_state=State.STUDIO.value,
+                        new_state=State.STUDIO_COMPLETE.value,
+                        reason="studio-complete-lab-boundary",
+                    )
+                    self.trace.emit(
+                        item_id, "PIPELINE", "END",
+                        state=State.STUDIO_COMPLETE.value,
+                        publication_disabled=True,
+                    )
+                    return
                 self.db.transition(item_id, State.PUBLISHING, "studio-complete")
                 self.trace.emit(item_id, "STUDIO", "TRANSITION", old_state=State.STUDIO.value, new_state=State.PUBLISHING.value, reason="studio-complete")
 
