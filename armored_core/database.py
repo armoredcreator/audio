@@ -641,9 +641,8 @@ class Database:
 
             rows = self.conn.execute(
                 "SELECT content_id, ia_context_json FROM items "
-                "WHERE content_id<>? AND affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'' "
+                "WHERE affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'' "
                 "ORDER BY created_at, content_id",
-                (content_id,),
             ).fetchall()
             historical_owner = None
             for row in rows:

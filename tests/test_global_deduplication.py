@@ -114,3 +114,61 @@ def test_product_claim_is_shared_by_independent_database_connections(tmp_path: P
     ).fetchone()["owner_content_id"] == first
     db1.close()
     db2.close()
+
+
+def test_pipeline_blocks_duplicate_before_ia_and_studio(tmp_path: Path):
+    from armored_core.pipeline import Pipeline
+    from armored_core.services import VisionResult
+    from armored_core.storage import Storage
+
+    root = tmp_path / "lab"
+    storage = Storage(root)
+    db = Database(storage.database / "lab.sqlite3")
+    context = {"shopId": "333", "itemId": "444"}
+    owner = db.reserve_item(
+        "owner", source_id="source1", original_url="https://s.shopee.com.br/owner",
+        original_path=root / "owner.mp4",
+    )
+    db.set_vision(
+        owner, "Owner product", "https://affiliate.invalid/owner",
+        affiliate_urls=("https://affiliate.invalid/owner",), ia_context=context,
+    )
+
+    candidate_path = root / "candidate.mp4"
+    candidate_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate_path.write_bytes(b"immutable-test-original")
+    candidate = db.reserve_item(
+        "candidate", source_id="source2", original_url="https://shopee.com.br/product/333/444",
+        original_path=candidate_path,
+    )
+    db.transition(candidate, State.VISION, "fixture-ready-for-vision")
+
+    class Vision:
+        def identify(self, _item):
+            return VisionResult(
+                "Same product", "https://affiliate.invalid/new",
+                affiliate_urls=("https://affiliate.invalid/new",), ia_context=context,
+            )
+
+    class Studio:
+        calls = 0
+        def process(self, _item):
+            self.calls += 1
+            raise AssertionError("duplicate must not reach Studio")
+
+    class IA:
+        calls = 0
+        def generate_caption(self, _context):
+            self.calls += 1
+            raise AssertionError("duplicate must not reach IA")
+
+    studio, ia = Studio(), IA()
+    Pipeline(db, storage, Vision(), studio, publisher=None, ia=ia).run(candidate)
+
+    assert db.get(candidate).state is State.DUPLICATE
+    assert db.get(candidate).duplicate_of_content_id == owner
+    assert db.get(candidate).affiliate_url is None
+    assert studio.calls == 0
+    assert ia.calls == 0
+    assert candidate_path.read_bytes() == b"immutable-test-original"
+    db.close()
