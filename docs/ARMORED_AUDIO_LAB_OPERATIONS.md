@@ -1,10 +1,10 @@
 # ArmoredAudioLab — manual canônico de arquitetura, operação e evidências
 
-**Versão:** 2.0  
-**Revisão:** 19/10/2026 (horário local de São Paulo)  
+**Versão:** 2.1  
+**Revisão:** 20/10/2026 (horário local de São Paulo)  
 **Repositório:** armoredcreator/audio  
 **Branch estável de laboratório:** test/armoredstudio-speech-integration-20261015  
-**HEAD de referência:** 23b398d8150a79bb59299733c5340db307b4119c  
+**Base de código consolidada antes da auditoria Sync:** a2af33c378c12a4599c7fe8bf6de3cb541575d86  
 **Contrato ativo Speech → Studio:** v5  
 **Finalidade:** validar a separação de responsabilidades entre Speech (áudio) e Studio (visual/renderização) antes de uma futura integração operacional.
 
@@ -601,27 +601,27 @@ O objetivo da próxima fase é ampliar o AudioLab para verificar o fluxo desde a
 
 | Referência | HEAD consultado | Função na auditoria |
 |---|---|---|
-| [armoredcreator-test / main](https://github.com/armoredcreator/armoredcreator-test/tree/main) | \`385a9d49c1d5a07cd9c0fd76ed16a7e421500e5a\` | Base congelada para comparar o Sync antigo e contratos históricos |
-| [armoredcreator / main](https://github.com/armoredcreator/armoredcreator/tree/main) | \`c9eeefe2449b5de26b3534c94090032313c9c8e8\` | Implementação atual examinada em modo de leitura |
-| [audio / branch de integração do laboratório](https://github.com/armoredcreator/audio/tree/test/armoredstudio-speech-integration-20261015) | Antes desta auditoria: \`b07aed6af3f93730988d56c63ce9d9f0efebc990\` | Base estável com Speech/Studio E2E aprovados |
+| [armoredcreator-test / main](https://github.com/armoredcreator/armoredcreator-test/tree/main) | `385a9d49c1d5a07cd9c0fd76ed16a7e421500e5a` | Base congelada para comparar o Sync antigo e contratos históricos |
+| [armoredcreator / main](https://github.com/armoredcreator/armoredcreator/tree/main) | `c9eeefe2449b5de26b3534c94090032313c9c8e8` | Implementação atual examinada em modo de leitura |
+| [audio / branch de integração do laboratório](https://github.com/armoredcreator/audio/tree/test/armoredstudio-speech-integration-20261015) | Antes desta auditoria: `b07aed6af3f93730988d56c63ce9d9f0efebc990` | Base estável com Speech/Studio E2E aprovados |
 
 Os hashes identificam os snapshots examinados; a auditoria não altera essas referências. Os ativos binários, bancos e vídeos locais não são clonados nem adicionados ao Git como parte desse inventário.
 
 ### 15.2 Achado prioritário: o dedupe atual é por fonte, não global
 
-Na base congelada, \`ArmoredSync/service.py\` verifica se a URL original já existe em \`items\` comparando \`LOWER(TRIM(original_url))\`, **sem filtrar \`source_id\`**. Isso deduplica a mesma string de URL entre os conteúdos já registrados, mesmo quando os Telegram IDs são diferentes. É uma proteção limitada à URL textual exata, mas a regra é global. [Código congelado](https://github.com/armoredcreator/armoredcreator-test/blob/main/ArmoredSync/service.py#L258-L274).
+Na base congelada, `ArmoredSync/service.py` verifica se a URL original já existe em `items` comparando `LOWER(TRIM(original_url))`, **sem filtrar `source_id`**. Isso deduplica a mesma string de URL entre os conteúdos já registrados, mesmo quando os Telegram IDs são diferentes. É uma proteção limitada à URL textual exata, mas a regra é global. [Código congelado](https://github.com/armoredcreator/armoredcreator-test/blob/main/ArmoredSync/service.py#L258-L274).
 
-Na versão atual, \`ArmoredSync/service.py\` consulta \`items\` com \`WHERE source_id=? AND LOWER(TRIM(original_url))=LOWER(TRIM(?))\`. Ou seja, o mesmo texto de link é considerado novo quando está em outra fonte. O teste atual \`test_shopee_url_deduplication_is_source_scoped\` declara esse comportamento como esperado: a URL já registrada na fonte 1 é marcada existente na fonte 1, mas não na fonte 2. [Implementação atual](https://github.com/armoredcreator/armoredcreator/blob/main/ArmoredSync/service.py#L302-L365) · [Teste multisource](https://github.com/armoredcreator/armoredcreator/blob/main/tests/test_multisource_routing.py#L76-L98).
+Na versão atual, `ArmoredSync/service.py` consulta `items` com `WHERE source_id=? AND LOWER(TRIM(original_url))=LOWER(TRIM(?))`. Ou seja, o mesmo texto de link é considerado novo quando está em outra fonte. O teste atual `test_shopee_url_deduplication_is_source_scoped` declara esse comportamento como esperado: a URL já registrada na fonte 1 é marcada existente na fonte 1, mas não na fonte 2. [Implementação atual](https://github.com/armoredcreator/armoredcreator/blob/main/ArmoredSync/service.py#L302-L365) · [Teste multisource](https://github.com/armoredcreator/armoredcreator/blob/main/tests/test_multisource_routing.py#L76-L98).
 
-Isso entra em conflito com o contrato de conteúdo global informado para o pipeline de várias fontes: a identidade da mensagem Telegram precisa continuar sendo \`(source_id, telegram_message_id)\`, mas a identidade do produto/link que não pode passar repetido para as fases de aprovação precisa ser global. Aumentar o número de fontes não deve aumentar o número de vezes que o mesmo produto passa por Vision/Stock/IA.
+Isso entra em conflito com o contrato de conteúdo global informado para o pipeline de várias fontes: a identidade da mensagem Telegram precisa continuar sendo `(source_id, telegram_message_id)`, mas a identidade do produto/link que não pode passar repetido para as fases de aprovação precisa ser global. Aumentar o número de fontes não deve aumentar o número de vezes que o mesmo produto passa por Vision/Stock/IA.
 
 #### Há uma segunda lacuna, independente da primeira
 
 A checagem atual compara apenas a URL recebida como texto, com trim e diferença de maiúsculas/minúsculas. Não compara uma identidade de produto canônica. URLs curtas, redirecionadas ou diferentes que terminem no mesmo produto podem escapar dessa verificação textual.
 
-A Vision já consegue resolver uma URL e extrair \`shop_id\` e \`item_id\` por meio de \`ArmoredVision/modules/v1/shopee_resolver.py\`. Em seguida busca o produto exato e retorna campos de produto em \`ia_context\`. Porém, \`ArmoredVision/service.py\` não verifica se o mesmo par \`(shopId, itemId)\` já foi aprovado por outra fonte antes de retornar um novo \`VisionResult\`. [Resolver de produto](https://github.com/armoredcreator/armoredcreator/blob/main/ArmoredVision/modules/v1/shopee_resolver.py) · [Identificação Vision](https://github.com/armoredcreator/armoredcreator/blob/main/ArmoredVision/service.py#L41-L116).
+A Vision já consegue resolver uma URL e extrair `shop_id` e `item_id` por meio de `ArmoredVision/modules/v1/shopee_resolver.py`. Em seguida busca o produto exato e retorna campos de produto em `ia_context`. Porém, `ArmoredVision/service.py` não verifica se o mesmo par `(shopId, itemId)` já foi aprovado por outra fonte antes de retornar um novo `VisionResult`. [Resolver de produto](https://github.com/armoredcreator/armoredcreator/blob/main/ArmoredVision/modules/v1/shopee_resolver.py) · [Identificação Vision](https://github.com/armoredcreator/armoredcreator/blob/main/ArmoredVision/service.py#L41-L116).
 
-A tabela operacional, por sua vez, tem uma identidade única para \`(source_id, telegram_message_id)\`, não para URL nem produto. Isso protege contra a ingestão repetida da mesma mensagem Telegram, mas não protege contra duas mensagens/fontes que apontem para o mesmo produto. [Migração/índice de identidade da base](https://github.com/armoredcreator/armoredcreator/blob/main/armored_core/database.py#L155-L213).
+A tabela operacional, por sua vez, tem uma identidade única para `(source_id, telegram_message_id)`, não para URL nem produto. Isso protege contra a ingestão repetida da mesma mensagem Telegram, mas não protege contra duas mensagens/fontes que apontem para o mesmo produto. [Migração/índice de identidade da base](https://github.com/armoredcreator/armoredcreator/blob/main/armored_core/database.py#L155-L213).
 
 **Conclusão inicial:** os duplicados entre fontes são uma lacuna real no contrato implementado, confirmada por código e teste. URLs distintas para o mesmo produto também podem passar porque falta uma barreira global por identidade canônica. A auditoria estática demonstra essa possibilidade; quantos duplicados históricos existem e quais registros são equivalentes só pode ser medido em uma cópia/snapshot do SQLite, sem inferir quantidades antes da consulta.
 
@@ -629,28 +629,28 @@ A tabela operacional, por sua vez, tem uma identidade única para \`(source_id, 
 
 Não confundir identidade de mensagem, identidade de URL e identidade de produto. São três chaves com funções diferentes:
 
-1. **Identidade de mensagem:** \`(source_id, telegram_message_id)\`. Continua sendo a chave de idempotência para reprocessar a mesma mensagem Telegram e preservar topic/checkpoints.
+1. **Identidade de mensagem:** `(source_id, telegram_message_id)`. Continua sendo a chave de idempotência para reprocessar a mesma mensagem Telegram e preservar topic/checkpoints.
 2. **Identidade de URL de entrada:** chave normalizada conservadora, global entre fontes, para detectar o mesmo link textual apresentado com diferenças de formatação que sejam comprovadamente irrelevantes. Não remover parâmetros de URL por palpite; cada normalização precisa de testes explícitos.
-3. **Identidade canônica de produto:** \`(shop_id, item_id)\`, obtida pelo resolver Shopee. Esta é a barreira global definitiva antes de aceitar o produto para download/Stock e IA. Links curtos diferentes que resolvem para o mesmo produto devem convergir à mesma identidade.
+3. **Identidade canônica de produto:** `(shop_id, item_id)`, obtida pelo resolver Shopee. Esta é a barreira global definitiva antes de aceitar o produto para download/Stock e IA. Links curtos diferentes que resolvem para o mesmo produto devem convergir à mesma identidade.
 
 O hash SHA-256 de um vídeo pode ser recolhido como sinal de auditoria de mídia repetida, mas não deve, sozinho, se transformar em regra de supressão de produto: dois posts podem conter o mesmo vídeo por motivos diferentes. Dedupe de produto, dedupe de link e cópia de mídia idêntica devem continuar categorias distintas no relatório.
 
 #### Gate exigido no pipeline
 
-- Sync bloqueia novamente links globais já representados, sem condicionar essa verificação a \`source_id\`.
+- Sync bloqueia novamente links globais já representados, sem condicionar essa verificação a `source_id`.
 - Vision obtém a identidade canônica e, **antes de declarar o item aprovado para Stock**, verifica/claim essa identidade em SQLite de forma durável e global.
 - Stock só materializa itens que possuem aprovação Vision válida; duplicado, URL não resolvida e oferta ausente não baixam um segundo original.
 - A reserva de identidade deve ser transacional para que duas fontes nunca possam vencer simultaneamente. Não adicionar imediatamente um índice UNIQUE a uma base que já contém duplicados históricos; primeiro inventariar e planejar migração. A regra nova precisa ser testada em bancos descartáveis e em cópias de referência.
 - WAITING_VISION continua sendo persistente e não deve ser automaticamente retentado no startup. Para uma URL conhecida que já está em WAITING_VISION, o guard de deduplicação impede criar uma segunda entrada equivalente. A recuperação de um mesmo registro não é um novo item.
 - Ao encontrar duplicado na fase nova, o pipeline deve registrar a razão e a referência do item canônico de forma auditável; não apagar nem fundir silenciosamente registros históricos.
 
-Critérios mínimos de teste: URL idêntica em fonte 1/2/3; IDs Telegram iguais em fontes diferentes; URLs diferentes que resolvem para o mesmo \`shop_id/item_id\`; mesmo produto em mensagens de tópico/álbum; primeira ocorrência em WAITING_VISION; registro aprovado existente; falha de Vision/Stock; candidato em RECOVERY; reinício do processo; checkpoints CATCH-UP por fonte; e transação concorrente de claim. O item original e o histórico \`state_events\` devem permanecer intactos.
+Critérios mínimos de teste: URL idêntica em fonte 1/2/3; IDs Telegram iguais em fontes diferentes; URLs diferentes que resolvem para o mesmo `shop_id/item_id`; mesmo produto em mensagens de tópico/álbum; primeira ocorrência em WAITING_VISION; registro aprovado existente; falha de Vision/Stock; candidato em RECOVERY; reinício do processo; checkpoints CATCH-UP por fonte; e transação concorrente de claim. O item original e o histórico `state_events` devem permanecer intactos.
 
 ### 15.4 Outra divergência a resolver: vídeo sem link Shopee
 
-Na \`main\` atual, Sync também reserva vídeos sem URL atribuível e os encaminha à Vision para ficarem em WAITING_VISION. Os testes \`test_video_without_shopee_link_is_still_reserved_for_vision\` e \`test_album_without_links_keeps_each_video_for_vision\` explicitamente esperam esses candidatos. [Testes atuais](https://github.com/armoredcreator/armoredcreator/blob/main/tests/test_sync_topic_discovery.py#L211-L256).
+Na `main` atual, Sync também reserva vídeos sem URL atribuível e os encaminha à Vision para ficarem em WAITING_VISION. Os testes `test_video_without_shopee_link_is_still_reserved_for_vision` e `test_album_without_links_keeps_each_video_for_vision` explicitamente esperam esses candidatos. [Testes atuais](https://github.com/armoredcreator/armoredcreator/blob/main/tests/test_sync_topic_discovery.py#L211-L256).
 
-Existe uma branch \`fix/vision-only-linked-telegram-videos\` que muda a regra para não criar candidato Vision sem link; no momento desta auditoria ela está divergente da \`main\` (2 commits à frente e 13 atrás). Não fazer cherry-pick nem merge dessa branch inteira como atalho. Ela é evidência de uma proposta de contrato diferente, não uma implementação diretamente integrável.
+Existe uma branch `fix/vision-only-linked-telegram-videos` que muda a regra para não criar candidato Vision sem link; no momento desta auditoria ela está divergente da `main` (2 commits à frente e 13 atrás). Não fazer cherry-pick nem merge dessa branch inteira como atalho. Ela é evidência de uma proposta de contrato diferente, não uma implementação diretamente integrável.
 
 Contrato seguro para a migração: **nenhum vídeo sem link atribuível pode ser aprovado por Vision ou baixado por Stock**. Se uma reserva WAITING_VISION sem link for mantida para permitir enriquecimento posterior, precisa ser explicitamente uma reserva pendente, sem aprovação nem download, e o vínculo futuro deve atualizar o mesmo item idempotente — não criar uma segunda identidade. Se for escolhido o comportamento congelado (pular inteiramente itens sem link), o enriquecimento posterior precisa ser tratado como caso de uso separado, também testado. Essa decisão deve ser coberta por testes antes de modificar o fluxo. Não transformar um item sem link em “aprovado” nem inventar a associação entre um vídeo e um link distante.
 
@@ -659,32 +659,32 @@ Contrato seguro para a migração: **nenhum vídeo sem link atribuível pode ser
 O inventário das árvores demonstra que as três versões não são intercambiáveis em bloco:
 
 - A base congelada contém Sync, Vision e IA, mas não possui o módulo ArmoredStock independente nem o provider Ollama.
-- A \`main\` atual acrescenta MultiTelegramSource, roteamento por três fontes, ArmoredStock, classificação de falhas Vision e Ollama; também alterou significativamente o Core e os contratos ao longo de várias branches.
+- A `main` atual acrescenta MultiTelegramSource, roteamento por três fontes, ArmoredStock, classificação de falhas Vision e Ollama; também alterou significativamente o Core e os contratos ao longo de várias branches.
 - O AudioLab contém Speech/Studio e helpers compartilhados, mas ainda não contém a implementação operacional de Sync/Vision/Stock/IA, nem o Core completo de produção (Database, SyncService, Coordinator, Pipeline, Recovery, routing e gates de catch-up).
-- \`armored_core/models.py\` no AudioLab e na \`main\` operacional é byte a byte idêntico. Vários arquivos visuais também são idênticos. Isso é uma boa base para integração, mas não significa que os pacotes completos tenham a mesma API.
-- \`armored_core/storage.py\` difere apenas na regra de mapeamento do identificador de fonte para pasta física: o AudioLab permite namespaces isolados como \`source_teste\`; o código operacional se concentra em \`source1\`, \`source2\`, etc. A consolidação deve preservar os dois usos através de uma única função testada, não manter implementações paralelas nem retirar o namespace de testes.
-- AudioLab tem \`armored_core/path_utils.py\`, helper de contenção de caminhos que não está presente na mesma forma na \`main\` operacional. O helper deve ser aproveitado/adaptado ao integrar módulos que abrem/copi am arquivos.
-- ArmoredStudio no AudioLab separou execução de áudio para Speech. Não substituir seu \`unified.py\`, \`service.py\` ou finalizer pelas cópias operacionais sem revisão: isso poderia reintroduzir um segundo dono de RVC/efeito/volume/timeline.
+- `armored_core/models.py` no AudioLab e na `main` operacional é byte a byte idêntico. Vários arquivos visuais também são idênticos. Isso é uma boa base para integração, mas não significa que os pacotes completos tenham a mesma API.
+- `armored_core/storage.py` difere apenas na regra de mapeamento do identificador de fonte para pasta física: o AudioLab permite namespaces isolados como `source_teste`; o código operacional se concentra em `source1`, `source2`, etc. A consolidação deve preservar os dois usos através de uma única função testada, não manter implementações paralelas nem retirar o namespace de testes.
+- AudioLab tem `armored_core/path_utils.py`, helper de contenção de caminhos que não está presente na mesma forma na `main` operacional. O helper deve ser aproveitado/adaptado ao integrar módulos que abrem/copi am arquivos.
+- ArmoredStudio no AudioLab separou execução de áudio para Speech. Não substituir seu `unified.py`, `service.py` ou finalizer pelas cópias operacionais sem revisão: isso poderia reintroduzir um segundo dono de RVC/efeito/volume/timeline.
 
 **Regra:** unificar implementações onde a API e a semântica são realmente iguais; onde diferirem, escrever um wrapper/adapter e teste de contrato, não manter duplicados silenciosos nem eliminar módulos baseado apenas no nome.
 
-Branches de correção relacionadas à visão, URL canônica, catch-up e gates estão divergentes entre si e da \`main\`. Exemplo: \`fix/shopee-canonical-product-url\` tem mudanças úteis no resolver, mas seu ancestral está 22 commits atrás da \`main\`; \`fix/received-items-resume-normal-pipeline\` também é divergente. Usar commits/diffs como evidência pontual, reimplementando somente o comportamento aprovado na branch do AudioLab; nunca mesclar essas branches inteiras sem reconciliar a história e os testes.
+Branches de correção relacionadas à visão, URL canônica, catch-up e gates estão divergentes entre si e da `main`. Exemplo: `fix/shopee-canonical-product-url` tem mudanças úteis no resolver, mas seu ancestral está 22 commits atrás da `main`; `fix/received-items-resume-normal-pipeline` também é divergente. Usar commits/diffs como evidência pontual, reimplementando somente o comportamento aprovado na branch do AudioLab; nunca mesclar essas branches inteiras sem reconciliar a história e os testes.
 
 ### 15.6 Dependências e runtime: conflito que precisa ser resolvido antes de instalar
 
 A exigência operacional para a próxima fase é Python **3.11.9** e um só ambiente compartilhado do AudioLab para Sync, Vision, Stock, IA, Speech e Studio. O setup ainda não está configurado para garantir esse requisito:
 
-- \`pyproject.toml\` do AudioLab declara apenas \`opencv-python-headless==4.10.0.84\` e \`imageio-ffmpeg==0.6.0\`, e \`requires-python = ">=3.11"\`.
-- O workflow CI do AudioLab usa \`python-version: "3.11"\`, sem fixar o patch 3.11.9.
-- \`ArmoredSpeech/requirements-analysis.txt\` fixa \`numpy==1.23.5\`.
-- \`requirements.txt\` operacional fixa um intervalo incompatível com isso: \`numpy>=1.26,<3\`. Esses dois requisitos não podem ser resolvidos juntos sem revisão e validação.
+- `pyproject.toml` do AudioLab declara apenas `opencv-python-headless==4.10.0.84` e `imageio-ffmpeg==0.6.0`, e `requires-python = ">=3.11"`.
+- O workflow CI do AudioLab usa `python-version: "3.11"`, sem fixar o patch 3.11.9.
+- `ArmoredSpeech/requirements-analysis.txt` fixa `numpy==1.23.5`.
+- `requirements.txt` operacional fixa um intervalo incompatível com isso: `numpy>=1.26,<3`. Esses dois requisitos não podem ser resolvidos juntos sem revisão e validação.
 - O Sync/Vision/IA operacional utiliza dependências adicionais como Telethon, Requests e python-dotenv. O provider Ollama usa HTTP local por Requests, portanto o binário/daemon Ollama e o modelo local também precisam ser verificados separadamente do pacote Python.
 
-Não instalar agora todos os requirements no \`.venv\` que já passou os testes de Speech/Studio. A próxima etapa de dependências é resolver as restrições num CI/ambiente descartável com Python 3.11.9, rodar a suíte completa e repetir os diagnósticos de áudio antes de atualizar o ambiente local validado. Se o motor RVC exigir um runtime separado, sua versão só muda depois de teste real de compatibilidade; não fazer upgrade especulativo.
+Não instalar agora todos os requirements no `.venv` que já passou os testes de Speech/Studio. A próxima etapa de dependências é resolver as restrições num CI/ambiente descartável com Python 3.11.9, rodar a suíte completa e repetir os diagnósticos de áudio antes de atualizar o ambiente local validado. Se o motor RVC exigir um runtime separado, sua versão só muda depois de teste real de compatibilidade; não fazer upgrade especulativo.
 
 ### 15.7 ArmoredIA local via Ollama
 
-A \`main\` operacional já contém \`ArmoredIA/providers/ollama.py\`, configuração \`ARMORED_IA_PROVIDER=ollama\` e os testes automatizados em \`tests/test_ollama_provider.py\`. O gerador comum aplica o mesmo \`CaptionSelector\`/Policy às opções do provider; não deve haver política permissiva específica para Ollama nem fallback silencioso para Gemini se o modelo local falhar.
+A `main` operacional já contém `ArmoredIA/providers/ollama.py`, configuração `ARMORED_IA_PROVIDER=ollama` e os testes automatizados em `tests/test_ollama_provider.py`. O gerador comum aplica o mesmo `CaptionSelector`/Policy às opções do provider; não deve haver política permissiva específica para Ollama nem fallback silencioso para Gemini se o modelo local falhar.
 
 O que os testes mockados demonstram: estrutura JSON, endpoint configurável, extração de candidatas e integração da seleção/policy. **Eles não comprovam que o daemon Ollama está instalado/iniciado na máquina, que o modelo configurado está baixado, nem que a inferência real termina no tempo permitido.** Para o gate local, verificar endpoint, nomes de modelos existentes, um teste curto de geração com o modelo realmente instalado e depois a bateria de legendas com validação pela policy compartilhada. Não exigir GEMINI_API_KEY quando Ollama estiver explicitamente selecionado; erros de modelo/daemon devem ser explícitos e rastreáveis.
 
@@ -692,19 +692,19 @@ O que os testes mockados demonstram: estrutura JSON, endpoint configurável, ext
 
 A ordem de trabalho, preservando a ordem global do projeto, será:
 
-1. **Snapshot e inventário read-only:** preservar HEADs, testar apenas em SQLite descartável/cópia consistente, registrar a distribuição de duplicados por URL textual e produto canônico. Nenhum \`UPDATE\`, \`DELETE\`, \`VACUUM\`, reset de checkpoint ou reinício de coleta histórica no banco operacional.
+1. **Snapshot e inventário read-only:** preservar HEADs, testar apenas em SQLite descartável/cópia consistente, registrar a distribuição de duplicados por URL textual e produto canônico. Nenhum `UPDATE`, `DELETE`, `VACUUM`, reset de checkpoint ou reinício de coleta histórica no banco operacional.
 2. **Contrato de identidade e testes red:** definir chaves de mensagem, URL e produto; reproduzir os casos cross-source e aliases de URL antes da correção. Registar separadamente reserva sem link, WAITING_VISION e aprovação Vision.
 3. **ArmoredSync no laboratório:** adaptar descoberta/catch-up, fóruns/álbuns, anexação de link, fontes múltiplas, retries e checkpoints preservando CATCH-UP → LIVE. O dedupe global começa antes de criar candidatos repetidos.
 4. **ArmoredVision:** reaproveitar o resolver/API V1 atual revisados; resolver produto canônico e aplicar gate global de identidade antes de aprovar o item. Visão não deve aprovar duplicados, criar links de afiliado para um segundo item equivalente ou solicitar download em nome deles.
 5. **ArmoredStock:** manter a fase obrigatória do fluxo operacional entre Vision e IA. Só materializar um item aprovado; verificar tamanho/hash, nunca sobrescrever ORIGINAL, e bloquear duplicate/unresolved.
 6. **ArmoredIA/Ollama:** importar o provider e a Policy/Selector compartilhados, resolver dependências, testar endpoint/modelo local real e garantir o mesmo contrato de legendas para Ollama/Gemini.
-7. **Speech → Studio v5:** adaptar o item aprovado do Core ao pacote de Speech já validado e ao finalizer Studio atual. O conjunto de estados de pipeline e as decisões de áudio devem permanecer no mesmo SQLite laboratorial; \`armored_speech_results\` pode ser uma tabela adicional nesse mesmo arquivo, em vez de uma segunda fonte de verdade. Este desenho precisa de teste de integração antes de declarar o E2E totalmente unificado.
+7. **Speech → Studio v5:** adaptar o item aprovado do Core ao pacote de Speech já validado e ao finalizer Studio atual. O conjunto de estados de pipeline e as decisões de áudio devem permanecer no mesmo SQLite laboratorial; `armored_speech_results` pode ser uma tabela adicional nesse mesmo arquivo, em vez de uma segunda fonte de verdade. Este desenho precisa de teste de integração antes de declarar o E2E totalmente unificado.
 8. **E2E isolado de ponta a ponta:** fixture controlada de entradas, três fontes fake/offline ou sandbox de Telegram deliberada, SQLite de laboratório novo, rota de dedupe, Vision, Stock, IA real local, Speech, NO_BANNER/BANNER_PRESENT e render. O Hub/publicação fica desligado; um publisher de teste deve falhar se chamado.
 9. **Fechamento documental:** acrescentar caminhos de relatório, hashes, versões, classes/rotas, motivos de dedupe e resultados observados ao manual único. Só depois considerar uma auditoria para futura portabilidade ao repositório operacional.
 
 ### 15.9 Proteção do histórico operacional — não negociável
 
-- O banco existente em \`storage/database/armoredcreator.db\` do projeto operacional não é banco de teste.
+- O banco existente em `storage/database/armoredcreator.db` do projeto operacional não é banco de teste.
 - Nenhum código do laboratório deve apontar para ele implicitamente, migrá-lo, abrir conexão de escrita, regravar originais, zerar checklists/checkpoints, reiniciar catch-up histórico ou limpar estados para testar dedupe.
 - O diagnóstico de duplicados históricos deve ler uma cópia consistente e gerar relatórios externos com grupos e razões. Uma ocorrência duplicada já salva não pode ser apagada só para satisfazer uma constraint.
 - Cada registro histórico conserva seu conteúdo, IDs de mensagem/fonte, eventos e original. Uma futura reconciliação deve apontar explicitamente o item canônico e o alias/duplicado, preservando o histórico e sem republicar/rebaixar itens silenciosamente.
@@ -714,7 +714,7 @@ A ordem de trabalho, preservando a ordem global do projeto, será:
 ### 15.10 Gates para considerar esta fase concluída
 
 - Um URL já representado numa das três fontes não chega a ser aprovado novamente por estar noutra fonte.
-- URLs diferentes resolvidas para o mesmo \`shop_id/item_id\` não podem ter duas aprovações Vision ativas/globalmente aceitas.
+- URLs diferentes resolvidas para o mesmo `shop_id/item_id` não podem ter duas aprovações Vision ativas/globalmente aceitas.
 - A mesma mensagem reiniciada é idempotente; fontes e IDs Telegram distintos continuam auditáveis.
 - WAITING_VISION é persistente, não é aprovado sem oferta canônica e não é retentado automaticamente; RECOVERY continua possível sem duplicar a identidade.
 - Stock não baixa item sem aprovação Vision, não repete download de duplicado, não sobrescreve ORIGINAL e verifica integridade.
@@ -725,3 +725,110 @@ A ordem de trabalho, preservando a ordem global do projeto, será:
 - Somente depois desses gates será atualizada a conclusão do manual e considerada uma nova revisão para integração operacional.
 
 **Estado no momento:** o E2E Speech → Studio está comprovado no AudioLab. Sync/Vision/Stock/IA ainda não foram portados nem executados nesse ambiente; os achados da auditoria aqui são conclusões estáticas verificadas no código e nos testes, não um relatório ainda não executado da base SQLite histórica. A próxima implementação é dedupe global e identidade canônica em testes do laboratório, não alteração do banco operacional.
+
+
+### 15.11 Auditor automático de duplicados — primeiro gate executável
+
+O script scripts/audit_sync_duplicates.py foi adicionado ao AudioLab com testes automatizados. Ele **mede antes de corrigir**; não muda a política de Sync, não aprova itens e não faz reconciliação.
+
+CI do PR #11:
+- [Push — testes do auditor](https://github.com/armoredcreator/audio/actions/runs/39352091801): compileall e pytest passaram.
+- [Pull request — testes do auditor](https://github.com/armoredcreator/audio/actions/runs/39352107274): compileall e pytest passaram.
+- Merge do código: a2af33c378c12a4599c7fe8bf6de3cb541575d86.
+
+#### O que o script faz
+
+1. Recebe um caminho de banco de dados explicitamente informado; não escolhe o SQLite por busca automática.
+2. Abre a origem usando SQLite mode=ro e PRAGMA query_only=ON.
+3. Usa a API de backup do SQLite para criar source-snapshot.sqlite3 numa pasta nova em storage/validation.
+4. Fecha a conexão de origem e só então lê/anota os dados a partir do snapshot.
+5. Analisa grupos de URL textual (normalização conservadora: trim + case-fold; não remove parâmetros) e grupos de identidade canônica (shop_id,item_id), usando contexto Vision persistido ou IDs em URL explícita. Não faz chamadas HTTP para resolver links curtos.
+6. Gera duplicate-audit.json, duplicate-groups.csv, duplicate-items.csv e unlinked-items.csv, registrando o hash do snapshot, esquema, avisos e contagens.
+7. Bloqueia diretórios de relatório fora de storage/validation e recusa sobrescrever uma pasta já existente.
+
+Arquivos sem ia_context_json/campo equivalente podem ter identidade canônica extraída apenas quando o URL contém IDs de produto diretamente. Links curtos que ainda não possuam identidade Vision persistida ficam **não resolvidos**, não são adivinhados. Os CSVs incluem URLs originais; são evidência local e não devem ser colados em tickets públicos nem adicionados ao Git.
+
+#### Execução controlada no Windows
+
+Primeiro atualize o checkout local para receber scripts/audit_sync_duplicates.py. Não continue se houver alterações locais em arquivos versionados. Não use reset nem clean.
+
+~~~powershell
+$Root = "C:\Users\Administrador\Downloads\ArmoredAudioLab"
+$Target = "test/armoredstudio-speech-integration-20261015"
+
+if ((git -C $Root branch --show-current).Trim() -ne $Target) {
+    throw "Branch incorreta. Não alterei o checkout."
+}
+$Dirty = (git -C $Root status --porcelain --untracked-files=no | Out-String).Trim()
+if ($Dirty) { throw "Há alterações locais versionadas. Revise antes de atualizar." }
+
+git -C $Root fetch origin
+if ($LASTEXITCODE -ne 0) { throw "git fetch falhou." }
+git -C $Root merge --ff-only "origin/$Target"
+if ($LASTEXITCODE -ne 0) { throw "Fast-forward falhou; pare sem usar reset." }
+
+$LocalSha = (git -C $Root rev-parse HEAD).Trim()
+$RemoteSha = (git -C $Root rev-parse "origin/$Target").Trim()
+"LOCAL_HEAD=$LocalSha"
+"REMOTE_HEAD=$RemoteSha"
+if ($LocalSha -ne $RemoteSha) { throw "HEAD local e remoto divergem." }
+
+git -C $Root status --short --branch
+~~~
+
+Depois de confirmar que a aplicação aponta ao banco correto, execute a auditoria. O caminho abaixo corresponde ao checkout operacional local conhecido neste ambiente; ajuste apenas o caminho da origem se sua pasta tiver outro nome. O parâmetro --database precisa indicar o arquivo SQLite real desejado, não uma base de teste vazia.
+
+~~~powershell
+$ErrorActionPreference = "Stop"
+$Root = "C:\Users\Administrador\Downloads\ArmoredAudioLab"
+$Python = Join-Path $Root ".venv\Scripts\python.exe"
+$SourceDb = "C:\Users\Administrador\Downloads\ArmoredCreator-final\storage\database\armoredcreator.db"
+
+if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
+    throw "Python do AudioLab não encontrado: $Python"
+}
+if (-not (Test-Path -LiteralPath $SourceDb -PathType Leaf)) {
+    throw "SQLite de origem não encontrado. Corrija o caminho explicitamente; nenhum banco foi criado."
+}
+
+$Stamp = [DateTime]::UtcNow.ToString("yyyyMMdd'T'HHmmssfff'Z'")
+$ReportDir = Join-Path $Root "storage\validation\sync_duplicate_audit_$Stamp"
+if (Test-Path -LiteralPath $ReportDir) {
+    throw "Diretório de evidência já existe; não sobrescrever."
+}
+
+Push-Location $Root
+try {
+    & $Python .\scripts\audit_sync_duplicates.py --root $Root --database $SourceDb --report-dir $ReportDir
+    if ($LASTEXITCODE -ne 0) {
+        throw "Auditoria falhou. Preserve qualquer artefato criado; não repita no mesmo diretório."
+    }
+}
+finally {
+    Pop-Location
+}
+
+$ReportPath = Join-Path $ReportDir "duplicate-audit.json"
+$Report = Get-Content -LiteralPath $ReportPath -Raw | ConvertFrom-Json
+Write-Output "=== CONTAGEM DA AUDITORIA (sem URLs) ==="
+$Report.counts | Format-List
+Write-Output "REPORT=$ReportPath"
+Write-Output "SNAPSHOT=$(Join-Path $ReportDir 'source-snapshot.sqlite3')"
+~~~
+
+A auditoria executa apenas leitura sobre a origem e escreve o snapshot/relatórios no AudioLab. O backup SQLite oferece um snapshot consistente mesmo se a origem for usada por outro processo; se SQLite informar busy, locked, erro de I/O ou falha de backup, não force a operação nem tente migrar o arquivo — preserve a mensagem, execute em período menos movimentado ou use um snapshot consistente previamente produzido pelo procedimento de backup aprovado.
+
+#### Como interpretar o relatório
+
+- url_duplicate_groups: grupos com mais de um content_id usando a mesma URL textual conservadoramente normalizada.
+- url_duplicate_groups_with_2plus_vision_approved: desses grupos, quantos têm pelo menos dois itens com affiliate_url persistida — um sinal de aprovação Vision a investigar, não evidência suficiente para apagar nada.
+- canonical_product_duplicate_groups: grupos com mais de um content_id para o mesmo (shop_id,item_id) encontrado em contexto Vision ou em URL de produto explícita.
+- canonical_product_duplicate_groups_with_2plus_vision_approved: grupos de identidade de produto com duas ou mais URLs afiliadas persistidas.
+- items_without_original_url: reservas sem URL; devem ser examinadas separadamente e não podem ser consideradas produtos duplicados sem identidade suficiente.
+- warnings: schema legado, ausência de contexto Vision ou JSON malformado que limite a capacidade da análise.
+
+Uma mesma família pode aparecer nos dois tipos de grupo, pois URL e identidade de produto medem coisas distintas. As contagens de grupos não devem ser somadas para estimar total de itens duplicados sem deduplicar os content_id. O script não resolve URLs encurtadas via rede e não infere IDs ausentes.
+
+**O que enviar de volta:** somente a saída resumida do PowerShell e warnings do JSON. Não envie o snapshot SQLite, credenciais nem os CSVs com URLs completos pelo chat. O resultado servirá para definir a correção para novos candidatos no AudioLab; não altera nem reconcilia a coleta histórica.
+
+**Limite atual:** a ferramenta foi testada no CI com bases sintéticas e schemas de exemplo. A primeira auditoria sobre a base local real ainda precisa ser executada. Nenhum número de duplicados reais é declarado até essa execução retornar.
