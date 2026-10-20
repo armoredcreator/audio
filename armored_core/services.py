@@ -154,9 +154,10 @@ class SyncService:
             stored_url = str(existing["original_url"] or "").strip()
             incoming_url = str(message.original_url or "").strip()
             if not stored_url and incoming_url:
-                self.db.update_original_url(item_id, incoming_url)
+                duplicate_owner = self.db.update_original_url(item_id, incoming_url)
                 if (
-                    str(existing["state"]) == State.WAITING_VISION.value
+                    duplicate_owner is None
+                    and str(existing["state"]) == State.WAITING_VISION.value
                     and not str(existing["affiliate_url"] or "").strip()
                 ):
                     self.db.transition(

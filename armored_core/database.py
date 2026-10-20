@@ -424,17 +424,72 @@ class Database:
             self.conn.rollback()
             raise
 
-    def update_original_url(self, item_id: str, original_url: str) -> None:
-        """Enrich a durable reservation when a nearby product link is discovered later."""
+    def update_original_url(self, item_id: str, original_url: str) -> str | None:
+        """Enrich the same message reservation without reopening a duplicate URL.
+
+        Return the existing URL owner if the newly discovered URL is already
+        represented elsewhere. The existing message row is retained and marked
+        DUPLICATE atomically; no second reservation or historical deletion occurs.
+        """
         value = str(original_url or "").strip()
         if not value:
-            return
-        self.conn.execute(
-            "UPDATE items SET original_url=?, updated_at=CURRENT_TIMESTAMP "
-            "WHERE content_id=? AND (original_url IS NULL OR TRIM(original_url)='')",
-            (value, str(item_id)),
-        )
-        self.conn.commit()
+            return None
+        content_id = str(item_id)
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.conn.execute(
+                "SELECT state, original_url, affiliate_url FROM items WHERE content_id=?",
+                (content_id,),
+            ).fetchone()
+            if current is None:
+                self.conn.commit()
+                return None
+            if str(current["original_url"] or "").strip():
+                self.conn.commit()
+                return None
+
+            prior = self.conn.execute(
+                "SELECT content_id, duplicate_of_content_id, state FROM items "
+                "WHERE content_id<>? AND LOWER(TRIM(original_url))=LOWER(TRIM(?)) "
+                "ORDER BY CASE WHEN state='DUPLICATE' THEN 1 ELSE 0 END, "
+                "created_at, content_id LIMIT 1",
+                (content_id, value),
+            ).fetchone()
+            owner = None
+            if (
+                prior is not None
+                and not str(current["affiliate_url"] or "").strip()
+                and str(current["state"]) != State.DUPLICATE.value
+            ):
+                owner = str(prior["duplicate_of_content_id"] or prior["content_id"])
+                if owner == content_id:
+                    owner = None
+
+            if owner:
+                reason = f"duplicate-url-discovered-after-reservation:{owner}"
+                old_state = str(current["state"])
+                self.conn.execute(
+                    "UPDATE items SET original_url=?,state=?,duplicate_of_content_id=?,last_error=?,"
+                    "updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
+                    (value, State.DUPLICATE.value, owner, reason, content_id),
+                )
+                self.conn.execute(
+                    "INSERT INTO state_events(content_id,old_state,new_state,reason) VALUES(?,?,?,?)",
+                    (content_id, old_state, State.DUPLICATE.value, reason),
+                )
+                self.conn.commit()
+                return owner
+
+            self.conn.execute(
+                "UPDATE items SET original_url=?, updated_at=CURRENT_TIMESTAMP "
+                "WHERE content_id=? AND (original_url IS NULL OR TRIM(original_url)='')",
+                (value, content_id),
+            )
+            self.conn.commit()
+            return None
+        except BaseException:
+            self.conn.rollback()
+            raise
 
     def repair_original_path(self, item_id: str, path: Path) -> None:
         """Repair a legacy/incomplete row without changing its pipeline state."""

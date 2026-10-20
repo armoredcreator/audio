@@ -221,3 +221,46 @@ def test_canonical_claim_seeds_historical_identity_ledger_only_once(tmp_path: Pa
     assert db.conn.execute("SELECT state FROM items WHERE content_id=?", (owner1,)).fetchone()["state"] == State.RECEIVED.value
     assert db.conn.execute("SELECT state FROM items WHERE content_id=?", (owner2,)).fetchone()["state"] == State.RECEIVED.value
     db.close()
+
+
+def test_late_link_enrichment_reuses_waiting_reservation_and_does_not_resurrect_duplicate(tmp_path: Path):
+    from armored_core.services import IngestMessage, SyncService
+    from armored_core.storage import Storage
+
+    db = Database(tmp_path / "history.sqlite3")
+    storage = Storage(tmp_path)
+    owner = db.reserve_item(
+        "101", source_id="source1",
+        original_url="https://s.shopee.com.br/already-known",
+        original_path=tmp_path / "owner.mp4",
+    )
+    waiting = db.reserve_item(
+        "202", source_id="source2",
+        original_url=None,
+        original_path=tmp_path / "waiting.mp4",
+    )
+    db.transition(waiting, State.WAITING_VISION, "initial-link-missing")
+    content_before = db.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+    video = tmp_path / "incoming.mp4"
+    video.write_bytes(b"fixture")
+    sync = SyncService(db, storage)
+
+    returned = sync.reserve_message(IngestMessage(
+        telegram_message_id="202",
+        source_id="source2",
+        original_url="  HTTPS://S.SHOPEE.COM.BR/ALREADY-KNOWN  ",
+        source_path=video,
+    ))
+
+    current = db.get(waiting)
+    assert returned == waiting
+    assert current.content_id == waiting
+    assert current.state is State.DUPLICATE
+    assert current.duplicate_of_content_id == owner
+    assert current.original_url == "HTTPS://S.SHOPEE.COM.BR/ALREADY-KNOWN"
+    assert db.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == content_before
+    assert db.conn.execute(
+        "SELECT COUNT(*) FROM state_events WHERE content_id=? AND new_state=?",
+        (waiting, State.DUPLICATE.value),
+    ).fetchone()[0] == 1
+    db.close()

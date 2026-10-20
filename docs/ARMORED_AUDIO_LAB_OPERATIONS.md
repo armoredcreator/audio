@@ -913,3 +913,7 @@ if ($LASTEXITCODE -ne 0) { throw "Pipeline de laboratório falhou; preserve o ru
 
 Os testes sintéticos do executor injetam Vision/IA/Speech/Studio determinísticos para verificar estado, ordem, deduplicação e integridade sem chamar rede, Ollama ou RVC. Eles não substituem a execução local real do executor.
 
+#### 16.4 Enriquecimento tardio de link
+
+Quando uma reserva existente está em `WAITING_VISION` sem URL e uma nova passagem do Sync descobre o link para a mesma identidade `(source_id, telegram_message_id)`, o Core tenta enriquecer a reserva existente. Se a URL já estiver representada por outro item, a atualização do link e a transição para `DUPLICATE` ocorrem na mesma transação SQLite; o Sync não pode voltar a transicionar o item para `RECEIVED` com base em um estado antigo lido antes da atualização. O ID original da reserva e os eventos permanecem preservados.
+

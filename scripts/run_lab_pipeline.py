@@ -317,6 +317,7 @@ def run_lab_pipeline(
     """
     root = Path(root).resolve(strict=True)
     _load_project_environment(root)
+    previous_ia_provider = os.environ.get("ARMORED_IA_PROVIDER")
     input_manifest, fixture_items = load_fixture_manifest(root, manifest_path)
     provider = (ia_provider or os.getenv("ARMORED_IA_PROVIDER") or "ollama").strip().lower()
     if provider not in {"ollama", "gemini"}:
@@ -637,6 +638,10 @@ def run_lab_pipeline(
     finally:
         if db is not None:
             db.close()
+        if previous_ia_provider is None:
+            os.environ.pop("ARMORED_IA_PROVIDER", None)
+        else:
+            os.environ["ARMORED_IA_PROVIDER"] = previous_ia_provider
 
 
 def main(argv: list[str] | None = None) -> int:
