@@ -832,3 +832,41 @@ Uma mesma família pode aparecer nos dois tipos de grupo, pois URL e identidade 
 **O que enviar de volta:** somente a saída resumida do PowerShell e warnings do JSON. Não envie o snapshot SQLite, credenciais nem os CSVs com URLs completos pelo chat. O resultado servirá para definir a correção para novos candidatos no AudioLab; não altera nem reconcilia a coleta histórica.
 
 **Limite atual:** a ferramenta foi testada no CI com bases sintéticas e schemas de exemplo. A primeira auditoria sobre a base local real ainda precisa ser executada. Nenhum número de duplicados reais é declarado até essa execução retornar.
+
+## 16. Migração coordenada do pipeline completo (20/10/2026)
+
+A branch de trabalho isolada `feat/full-pipeline-migration-20261020` deriva da integração validada `test/armoredstudio-speech-integration-20261015` no commit base `15733ce80c25184a18f108afdd2d0b57e4531a1c`. A migração não modifica o repositório de produção nem a referência congelada.
+
+### Escopo trazido para auditoria no AudioLab
+
+- `ArmoredSync`: descoberta Telegram, histórico, checkpoints, tópicos e idempotência.
+- `ArmoredVision`: resolvedor Shopee, API de afiliados, classificação e contexto canônico do produto.
+- `ArmoredStock`: materialização/download do original e comportamento de falha.
+- `ArmoredIA`: política de legenda compartilhada e provedores Gemini/Ollama.
+- Core de produção ausente no AudioLab: banco SQLite, serviços, pipeline, Coordinator, Recovery, auditoria de startup, roteamento, catch-up e trace. Os modelos são idênticos pelo SHA já auditado; `armored_core/storage.py` do laboratório é preservado porque mantém a adaptação de caminhos do AudioLab e precisa ser reconciliado por testes, não sobrescrito às cegas.
+- Testes de regressão relevantes dos módulos foram copiados para `tests/`; a descoberta de testes cobre esse diretório e `ArmoredSpeech/tests/`.
+
+### Sequência de validação obrigatória
+
+1. Core/SQLite: schema, estados, eventos, leases, checkpoints, modelos e caminhos; teste em banco temporário.
+2. Sync isolado: fontes controladas, identidade de mensagem por `(source_id, telegram_message_id)`, deduplicação de link global, histórico idempotente e transição `CATCH-UP -> LIVE`.
+3. Vision isolada: links ausentes/encurtados, classificação, erros recuperáveis e identidade `(shopId, itemId)`.
+4. Stock isolado: descarga única, original imutável, hash, arquivo parcial e recuperação.
+5. IA isolada: política única de legenda, provedores e inferência real com Ollama local; testes simulados não contam como prova da inferência.
+6. Integração na ordem Sync -> Vision -> Stock -> IA -> Speech -> Studio, com Hub/publicação desligados.
+7. Corpus de ponta a ponta, verificação de hash dos originais, saída H.264/AAC e preservação de relatórios/manifests/pacotes.
+
+### Regras de segurança
+
+- Não usar a base operacional como base de testes; as execuções funcionais devem usar bancos temporários do AudioLab.
+- A auditoria SQLite existente é exclusivamente de leitura sobre a origem e produz snapshot em `storage/validation`.
+- Não apagar, fundir, reprocessar ou alterar os 19.966 registros históricos para fazer testes passarem. Os grupos encontrados são evidência para análise, não autorização para modificar itens.
+- Não adicionar um índice UNIQUE diretamente a todas as linhas históricas sem reconciliação. A deduplicação nova deve ser global e atômica, preservando a identidade da mensagem, registrando candidatos duplicados e impedindo que uma segunda cópia chegue ao Stock.
+- O Core compartilhado é o único proprietário da coordenação e das transições de estado; ferramentas específicas não devem manter bancos/checkpoints paralelos.
+- Preservar `.venv`, Python local 3.11.9, runtime/modelos RVC e assets. Não instalar `requirements.txt` de produção por inteiro: as dependências nativas/NumPy de áudio precisam continuar isoladas e resolvidas explicitamente.
+- Nenhuma publicação no Hub durante esta migração. Produção e referência permanecem imutáveis até que o laboratório passe os critérios acima.
+
+### Estado desta entrega
+
+Esta revisão adiciona os módulos de entrada e a suíte de regressão ao AudioLab. Ela não declara a migração concluída: a primeira execução de CI após a importação deve expor incompatibilidades, que precisam ser corrigidas em commits/PRs de seguimento antes da integração final.
+
