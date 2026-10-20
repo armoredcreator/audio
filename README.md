@@ -1,23 +1,28 @@
 # ArmoredCreator Audio Lab
 
-Laboratório isolado para validar a separação entre ArmoredSpeech (áudio) e ArmoredStudio (visual/render final) antes de qualquer integração operacional.
+Laboratório isolado que valida a separação entre ArmoredSpeech (áudio) e ArmoredStudio (análise visual e render audiovisual final) antes de qualquer integração operacional.
 
-## Manual canônico
-
-A arquitetura, o contrato ativo v5, a sequência de fases, configuração, testes, evidências E2E, segurança, auditoria de duplicações, decisão sobre módulos órfãos e limpeza local estão consolidados em:
+## Fonte canônica de informação
 
 **[Manual canônico do ArmoredAudioLab](docs/ARMORED_AUDIO_LAB_OPERATIONS.md)**
 
-Este manual é a fonte operacional detalhada. Os documentos técnicos anteriores são referências auxiliares/históricas para evitar instruções repetidas ou estados antigos.
+O manual reúne a arquitetura, ownership por módulo, contrato ativo Speech → Studio v5, sequenciamento de fases, matriz de rotas, instalação/ativos, comandos de verificação, segurança, evidências e critérios ainda pendentes. Os demais documentos técnicos são índices ou referências históricas explícitas; não devem conservar um estado divergente.
 
-## Estado em 19/10/2026
+## Estado de validação
 
-- O fluxo de lote Speech → Studio está integrado na branch de laboratório test/armoredstudio-speech-integration-20261015; contrato ativo v5.
-- A preparação WAV e o SHA-256 de arquivos foram unificados em helpers compartilhados.
-- Nesta rodada, os duplicados comprovados de materialização de assets oficiais, digest canônico do plano visual, contenção de caminhos e opções de subprocesso Windows foram centralizados em armored_core, mantendo os wrappers usados por outros módulos.
-- O workflow de testes agora dispara em push e pull request quando mudam ArmoredSpeech, ArmoredStudio, armored_core ou scripts.
-- No merge atual da PR #7 (`3e6969eeb4c42d747989fc3d865f1edfd72a92b6`), o CI passou `compileall` e **127 testes** ([testes isolados](https://github.com/armoredcreator/audio/actions/runs/39336661372)); o [workflow de diagnósticos de áudio](https://github.com/armoredcreator/audio/actions/runs/39336661228) também passou.
-- Os dois E2Es focais pós-correção continuam sendo a evidência real atual: EFFECT_ONLY e RVC_MELODY, ambos NO_BANNER, preservando os originais.
-- A revisão não encontrou módulo que pudesse ser removido com segurança apenas por parecer antigo; as ferramentas de manifesto, modelo, lote/corpus, separação individual e diagnóstico mantêm usos distintos.
+Código testado de referência: commit 23b398d8150a79bb59299733c5340db307b4119c, branch de laboratório test/armoredstudio-speech-integration-20261015.
 
-Este trabalho continua restrito ao AudioLab. Não migra código para armoredcreator/armoredcreator, não usa banco operacional, não publica no Hub e não apaga storage, originais ou assets locais.
+- **Testes locais:** 127 testes aprovados; compileall, imports e auditoria estática de ownership passaram.
+- **CI:** workflows de teste e diagnósticos de áudio passaram na consolidação de código. O workflow isolado também passou depois da atualização documental da PR #8.
+- **E2E do corpus completo:** 17/17 vídeos renderizados e decodificados; H.264 1080×1920 + AAC estéreo 44.100 Hz; hashes dos originais preservados. Distribuição observada: 9 RVC_MELODY e 8 EFFECT_ONLY; todos NO_BANNER.
+- **E2E real BANNER_PRESENT:** storage/original_018.mp4 ativou banner_detectado=true, e o Studio selecionou BANNER_PRESENT mantendo a rota RVC_MELODY. O arquivo final passou a validação de streams e decodificação; o usuário assistiu ao resultado e confirmou que ficou perfeito.
+- **Contrato ativo:** v5. Speech prepara o lote completo e as duas variantes temporais; Studio só começa depois do preflight de todo o lote.
+- **Isolamento:** não utiliza o SQLite operacional, não reexecuta Sync/Vision/Stock/IA, não publica no Hub e não integra automaticamente código no ArmoredCreator.
+
+Os artefatos E2E (bancos, manifestos, pacotes, relatórios, originais e saídas) ficam em storage local e são preservados; não são enviados ao Git. Não repetir os lotes aprovados apenas para reconstruir a evidência. Consulte o manual para os caminhos exatos e a pós-validação.
+
+## Regra de arquitetura
+
+**ArmoredSpeech é o dono de todas as decisões e do processamento de áudio. ArmoredStudio é dono da análise visual, da seleção de uma variante temporal previamente criada por Speech e do render audiovisual final.** armored_core contém helpers técnicos compartilhados, não regras paralelas de negócio.
+
+A próxima integração no repositório operacional exige uma branch separada, auditoria do Coordinator/schema SQLite e testes isolados próprios. A aprovação do AudioLab não autoriza publicação em produção.
