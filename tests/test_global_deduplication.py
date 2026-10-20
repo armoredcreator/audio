@@ -172,3 +172,52 @@ def test_pipeline_blocks_duplicate_before_ia_and_studio(tmp_path: Path):
     assert ia.calls == 0
     assert candidate_path.read_bytes() == b"immutable-test-original"
     db.close()
+
+
+def test_global_raw_url_reservation_preserves_duplicate_message_without_vision_approval(tmp_path: Path):
+    db = Database(tmp_path / "history.sqlite3")
+    url = "https://s.shopee.com.br/shared-raw-url"
+    owner = db.reserve_item(
+        "100", source_id="source1", original_url=url,
+        original_path=tmp_path / "owner.mp4",
+    )
+    duplicate = db.reserve_item(
+        "200", source_id="source2", original_url="  " + url.upper() + " ",
+        original_path=tmp_path / "duplicate.mp4",
+    )
+
+    assert duplicate != owner
+    row = db.conn.execute(
+        "SELECT state, duplicate_of_content_id, affiliate_url FROM items WHERE content_id=?",
+        (duplicate,),
+    ).fetchone()
+    assert row["state"] == State.DUPLICATE.value
+    assert row["duplicate_of_content_id"] == owner
+    assert row["affiliate_url"] is None
+    assert db.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 2
+    assert db.get(duplicate).state is State.DUPLICATE
+    db.close()
+
+
+def test_canonical_claim_seeds_historical_identity_ledger_only_once(tmp_path: Path):
+    db = Database(tmp_path / "history.sqlite3")
+    first_context = {"shopId": "1", "itemId": "10"}
+    second_context = {"shopId": "2", "itemId": "20"}
+    owner1 = _approved(db, "source1", "1", "https://shopee.co/first", first_context, tmp_path)
+    owner2 = _approved(db, "source1", "2", "https://shopee.co/second", second_context, tmp_path)
+    candidate = db.reserve_item(
+        "3", source_id="source2", original_url="https://shopee.co/candidate",
+        original_path=tmp_path / "candidate.mp4",
+    )
+
+    assert db.claim_product_identity(candidate, first_context) == owner1
+    claim_count = db.conn.execute("SELECT COUNT(*) FROM product_identity_claims").fetchone()[0]
+    assert claim_count == 2
+    assert db.claim_product_identity(candidate, {"shopId": "3", "itemId": "30"}) is None
+    assert db.conn.execute("SELECT COUNT(*) FROM product_identity_claims").fetchone()[0] == 3
+    assert db.conn.execute(
+        "SELECT value FROM product_identity_claim_meta WHERE key='historical_seeded'"
+    ).fetchone()["value"] == "1"
+    assert db.conn.execute("SELECT state FROM items WHERE content_id=?", (owner1,)).fetchone()["state"] == State.RECEIVED.value
+    assert db.conn.execute("SELECT state FROM items WHERE content_id=?", (owner2,)).fetchone()["state"] == State.RECEIVED.value
+    db.close()

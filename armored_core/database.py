@@ -58,6 +58,10 @@ class Database:
             owner_content_id TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS product_identity_claim_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS publications (
             content_id TEXT PRIMARY KEY,
             idempotency_key TEXT NOT NULL UNIQUE,
@@ -119,6 +123,14 @@ class Database:
         self.conn.commit()
         self._migrate_columns()
         self._migrate_telegram_identity()
+        # Non-unique expression index accelerates conservative URL identity checks.
+        # It is intentionally not UNIQUE: historic collisions are evidence to audit,
+        # not rows to delete or prevent schema migration.
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_items_normalized_original_url "
+            "ON items(LOWER(TRIM(original_url)))"
+        )
+        self.conn.commit()
 
     def _migrate_columns(self) -> None:
         # Legacy Vision evidence tables, when present in an existing database,
@@ -348,27 +360,69 @@ class Database:
         original_url: str | None = None,
         original_path: Path | None = None,
     ) -> str:
-        existing = self.conn.execute(
-            "SELECT content_id FROM items WHERE source_id=? AND telegram_message_id=?",
-            (str(source_id), str(telegram_message_id)),
-        ).fetchone()
-        if existing:
-            return str(existing["content_id"])
-        content_id = self.content_id_for(telegram_message_id, source_id)
-        cur = self.conn.execute(
-            "INSERT INTO items (content_id,telegram_message_id,source_id,topic_id,topic_name,original_url,state,original_path) VALUES (?,?,?,?,?,?,?,?)",
-            (
-                content_id, telegram_message_id, source_id, topic_id, topic_name, original_url,
-                State.RECEIVED.value, str(original_path or ""),
-            ),
-        )
-        item_id = content_id
-        self.conn.execute(
-            "INSERT INTO state_events (content_id,new_state,reason) VALUES (?,?,?)",
-            (item_id, State.RECEIVED.value, "ingest-reserved"),
-        )
-        self.conn.commit()
-        return item_id
+        """Atomically reserve message identity and suppress global raw-URL duplicates.
+
+        Existing (source_id, telegram_message_id) remains the idempotency key.
+        A new source message with a raw URL already represented by another row
+        is retained as DUPLICATE, linked to its durable owner, and cannot enter
+        Vision/Stock. Existing historic rows are never rewritten by this check.
+        """
+        source = str(source_id)
+        message = str(telegram_message_id)
+        url = str(original_url or "").strip() or None
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            existing = self.conn.execute(
+                "SELECT content_id FROM items WHERE source_id=? AND telegram_message_id=?",
+                (source, message),
+            ).fetchone()
+            if existing:
+                self.conn.commit()
+                return str(existing["content_id"])
+
+            content_id = self.content_id_for(message, source)
+            duplicate_owner = None
+            if url:
+                prior = self.conn.execute(
+                    "SELECT content_id, duplicate_of_content_id "
+                    "FROM items WHERE LOWER(TRIM(original_url))=LOWER(TRIM(?)) "
+                    "ORDER BY CASE WHEN state='DUPLICATE' THEN 1 ELSE 0 END, "
+                    "created_at, content_id LIMIT 1",
+                    (url,),
+                ).fetchone()
+                if prior:
+                    duplicate_owner = str(
+                        prior["duplicate_of_content_id"] or prior["content_id"]
+                    )
+                    if duplicate_owner == content_id:
+                        duplicate_owner = None
+
+            state = State.DUPLICATE if duplicate_owner else State.RECEIVED
+            reason = (
+                f"duplicate-url-global:{duplicate_owner}"
+                if duplicate_owner
+                else "ingest-reserved"
+            )
+            self.conn.execute(
+                "INSERT INTO items (content_id,telegram_message_id,source_id,topic_id,"
+                "topic_name,original_url,state,original_path,duplicate_of_content_id,last_error) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (
+                    content_id, message, source, topic_id, topic_name, url,
+                    state.value, str(original_path or ""), duplicate_owner,
+                    reason if duplicate_owner else None,
+                ),
+            )
+            self.conn.execute(
+                "INSERT INTO state_events(content_id,old_state,new_state,reason) "
+                "VALUES (?,NULL,?,?)",
+                (content_id, state.value, reason),
+            )
+            self.conn.commit()
+            return content_id
+        except BaseException:
+            self.conn.rollback()
+            raise
 
     def update_original_url(self, item_id: str, original_url: str) -> None:
         """Enrich a durable reservation when a nearby product link is discovered later."""
@@ -405,24 +459,15 @@ class Database:
         source_id: str = "telegram", topic_id: int | None = None,
         topic_name: str | None = None, original_url: str | None = None,
     ) -> str:
-        existing = self.conn.execute(
-            "SELECT content_id FROM items WHERE source_id=? AND telegram_message_id=?",
-            (str(source_id), str(telegram_message_id)),
-        ).fetchone()
-        if existing:
-            return str(existing["content_id"])
-        content_id = self.content_id_for(telegram_message_id, source_id)
-        self.conn.execute(
-            "INSERT INTO items (content_id,telegram_message_id,source_id,topic_id,topic_name,original_url,state,original_path) VALUES (?,?,?,?,?,?,?,?)",
-            (content_id, telegram_message_id, source_id, topic_id, topic_name, original_url,
-             State.RECEIVED.value, str(original_path)),
+        """Compatibility alias that obeys the same atomic ingest identity rules."""
+        return self.reserve_item(
+            telegram_message_id,
+            source_id=source_id,
+            topic_id=topic_id,
+            topic_name=topic_name,
+            original_url=original_url,
+            original_path=original_path,
         )
-        self.conn.execute(
-            "INSERT INTO state_events (content_id,new_state,reason) VALUES (?,?,?)",
-            (content_id, State.RECEIVED.value, "ingest-reserved"),
-        )
-        self.conn.commit()
-        return content_id
 
     @staticmethod
     def _optional_path(value) -> Path | None:
@@ -619,9 +664,9 @@ class Database:
     def claim_product_identity(self, item_id: str, context: dict | None) -> str | None:
         """Atomically reserve a canonical product identity.
 
-        Returns the existing owner for a duplicate. Existing approved historical
-        rows are consulted read-only, and a unique ledger serializes new claims.
-        Missing IDs fail open rather than guessing from an unresolved short URL.
+        Historical approved rows are indexed once in a side ledger. The scan
+        reads legacy evidence but never updates, deletes, or merges source rows.
+        Subsequent candidates use indexed lookups instead of rescanning history.
         """
         product_key = self._canonical_product_key(context)
         if not product_key:
@@ -630,6 +675,34 @@ class Database:
 
         self.conn.execute("BEGIN IMMEDIATE")
         try:
+            seeded = self.conn.execute(
+                "SELECT value FROM product_identity_claim_meta WHERE key='historical_seeded'"
+            ).fetchone()
+            if not seeded:
+                historical = self.conn.execute(
+                    "SELECT content_id, ia_context_json FROM items "
+                    "WHERE affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'' "
+                    "ORDER BY created_at, content_id"
+                ).fetchall()
+                owners: dict[str, str] = {}
+                for row in historical:
+                    try:
+                        prior_context = json.loads(row["ia_context_json"] or "{}")
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                    prior_key = self._canonical_product_key(prior_context)
+                    if prior_key and prior_key not in owners:
+                        owners[prior_key] = str(row["content_id"])
+                self.conn.executemany(
+                    "INSERT OR IGNORE INTO product_identity_claims(product_key, owner_content_id) "
+                    "VALUES(?, ?)",
+                    list(owners.items()),
+                )
+                self.conn.execute(
+                    "INSERT INTO product_identity_claim_meta(key,value) "
+                    "VALUES('historical_seeded','1')"
+                )
+
             claim = self.conn.execute(
                 "SELECT owner_content_id FROM product_identity_claims WHERE product_key=?",
                 (product_key,),
@@ -639,28 +712,12 @@ class Database:
                 self.conn.commit()
                 return None if owner == content_id else owner
 
-            rows = self.conn.execute(
-                "SELECT content_id, ia_context_json FROM items "
-                "WHERE affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'' "
-                "ORDER BY created_at, content_id",
-            ).fetchall()
-            historical_owner = None
-            for row in rows:
-                try:
-                    prior_context = json.loads(row["ia_context_json"] or "{}")
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    continue
-                if self._canonical_product_key(prior_context) == product_key:
-                    historical_owner = str(row["content_id"])
-                    break
-
-            owner = historical_owner or content_id
             self.conn.execute(
                 "INSERT INTO product_identity_claims(product_key, owner_content_id) VALUES(?, ?)",
-                (product_key, owner),
+                (product_key, content_id),
             )
             self.conn.commit()
-            return owner if owner != content_id else None
+            return None
         except BaseException:
             self.conn.rollback()
             raise
