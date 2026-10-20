@@ -30,3 +30,11 @@ ArmoredSpeech/assets/efeitosonoro.wav
 ArmoredStudio/assets/banner.png
 ArmoredStudio/assets/efeitosonoro.wav
 ArmoredStudio/runtime/rvc/
+
+# Local credentials, tokens, and Telegram account sessions are never tracked.
+credentials/
+.env
+.env.*
+!.env.example
+*.session
+*.session-journal

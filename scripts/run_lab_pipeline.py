@@ -23,7 +23,7 @@ from types import SimpleNamespace
 from typing import Any, Callable
 from uuid import uuid4
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 
 from armored_core.catch_up_stages import run_catch_up_stage
 from armored_core.coordinator import Coordinator
@@ -217,13 +217,50 @@ class LocalFixtureSource:
             raise RuntimeError(f"fixture-copy-hash-mismatch:{source_id}/{message_id}")
 
 
+LAB_ENV_ALLOWLIST = frozenset({
+    # Shopee lookup and IA caption generation only; never import runtime/Telegram settings.
+    "SHOPEE_AFFILIATE_API_URL",
+    "SHOPEE_APP_ID",
+    "SHOPEE_SECRET_KEY",
+    "GEMINI_API_KEY",
+    "ARMORED_IA_API_TIMEOUT",
+    "ARMORED_IA_AUDIENCE",
+    "ARMORED_IA_CAPTION_ENABLED",
+    "ARMORED_IA_ENABLED",
+    "ARMORED_IA_MAX_ATTEMPTS",
+    "ARMORED_IA_MAX_CANDIDATES",
+    "ARMORED_IA_MODEL",
+    "ARMORED_IA_PROVIDER",
+    "ARMORED_IA_RETRY_DELAY",
+    "ARMORED_IA_OLLAMA_URL",
+    "ARMORED_IA_OLLAMA_MODEL",
+    # Optional model thresholds are values only, not paths or runtime switches.
+    "ARMORED_AUDIO_CONTENT_MUSIC_THRESHOLD",
+    "ARMORED_AUDIO_CONTENT_SPEECH_THRESHOLD",
+    "ARMORED_AUDIO_VAD_MIN_ACTIVITY_RATIO",
+})
+
+
 def _load_project_environment(root: Path) -> None:
+    """Load only whitelisted inference settings from project files.
+
+    credentials/project.env is copied from a production project in some setups.
+    Telegram tokens/session configuration, Hub destinations, runtime flags, DB
+    paths, and external filesystem paths are intentionally not imported.
+    """
+    loaded_from_project: set[str] = set()
     project_env = root / "credentials" / "project.env"
     if project_env.is_file():
-        load_dotenv(project_env, override=True)
+        for key, value in dotenv_values(project_env).items():
+            if key in LAB_ENV_ALLOWLIST and value is not None:
+                os.environ[key] = value
+                loaded_from_project.add(key)
+
     project_config = root / ".env"
     if project_config.is_file():
-        load_dotenv(project_config, override=False)
+        for key, value in dotenv_values(project_config).items():
+            if key in LAB_ENV_ALLOWLIST and value is not None and key not in loaded_from_project:
+                os.environ.setdefault(key, value)
 
 
 def _require_executable(name: str, env_key: str, default: str) -> str:

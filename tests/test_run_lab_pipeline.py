@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from armored_core.database import Database
 from armored_core.models import State
 from armored_core.storage import Storage
 from ArmoredSpeech.contracts import AudioClass, SpeechDecision
-from scripts.run_lab_pipeline import LabPipelineError, load_fixture_manifest, run_lab_pipeline
+from scripts.run_lab_pipeline import (
+    LabPipelineError,
+    _load_project_environment,
+    load_fixture_manifest,
+    run_lab_pipeline,
+)
 
 
 class FakeVision:
@@ -160,3 +166,59 @@ def test_full_fixture_pipeline_reaches_studio_and_keeps_hub_disabled(tmp_path, m
     assert output_path.is_file()
     assert output_path.read_bytes().endswith(b"-studio")
     assert report["fixture_originals_intact"] is True
+
+
+def test_project_environment_loader_ignores_production_runtime_and_telegram_settings(tmp_path, monkeypatch):
+    credentials = tmp_path / "credentials"
+    credentials.mkdir()
+    (credentials / "project.env").write_text(
+        "\n".join([
+            "SHOPEE_APP_ID=lab-app-id",
+            "SHOPEE_SECRET_KEY=lab-secret",
+            "GEMINI_API_KEY=lab-gemini-key",
+            "ARMORED_IA_ENABLED=1",
+            "ARMORED_IA_MAX_ATTEMPTS=3",
+            "ARMORED_REAL_TELEGRAM=1",
+            "ARMORED_ROOT=C:/ArmoredCreator-final",
+            "ARMORED_CREATOR_BOT_TOKEN=production-token",
+            "ARMORED_HUB_1_CHAT_ID=-100123",
+            "TELEGRAM_API_ID=12345",
+            "ARMORED_STUDIO_ALLOW_COPY=1",
+            "BOT_API_PORT=8081",
+        ]) + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text(
+        "\n".join([
+            "SHOPEE_APP_ID=should-not-replace-project",
+            "ARMORED_IA_ENABLED=0",
+            "ARMORED_IA_MODEL=lab-model",
+            "ARMORED_REAL_TELEGRAM=1",
+        ]) + "\n",
+        encoding="utf-8",
+    )
+
+    for key in (
+        "SHOPEE_APP_ID", "SHOPEE_SECRET_KEY", "GEMINI_API_KEY",
+        "ARMORED_IA_ENABLED", "ARMORED_IA_MAX_ATTEMPTS", "ARMORED_IA_MODEL",
+        "ARMORED_REAL_TELEGRAM", "ARMORED_ROOT", "ARMORED_CREATOR_BOT_TOKEN",
+        "ARMORED_HUB_1_CHAT_ID", "TELEGRAM_API_ID", "ARMORED_STUDIO_ALLOW_COPY",
+        "BOT_API_PORT",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("SHOPEE_APP_ID", "inherited-shell-value")
+
+    _load_project_environment(tmp_path)
+
+    assert os.environ["SHOPEE_APP_ID"] == "lab-app-id"
+    assert os.environ["SHOPEE_SECRET_KEY"] == "lab-secret"
+    assert os.environ["GEMINI_API_KEY"] == "lab-gemini-key"
+    assert os.environ["ARMORED_IA_ENABLED"] == "1"
+    assert os.environ["ARMORED_IA_MAX_ATTEMPTS"] == "3"
+    assert os.environ["ARMORED_IA_MODEL"] == "lab-model"
+    for key in (
+        "ARMORED_REAL_TELEGRAM", "ARMORED_ROOT", "ARMORED_CREATOR_BOT_TOKEN",
+        "ARMORED_HUB_1_CHAT_ID", "TELEGRAM_API_ID", "ARMORED_STUDIO_ALLOW_COPY",
+        "BOT_API_PORT",
+    ):
+        assert key not in os.environ
