@@ -46,7 +46,7 @@ class Pipeline:
                 reason="candidate-already-represented-by-canonical-product",
             )
             return
-        if item.state in {State.SPEECH, State.STUDIO_COMPLETE}:
+        if item.state in {State.SPEECH, State.STUDIO_BATCH, State.STUDIO_COMPLETE}:
             # These are durable hand-off states. Speech/Studio run as an
             # explicit versioned batch outside Pipeline; never auto-skip the
             # contract boundary or fall through to a publisher.

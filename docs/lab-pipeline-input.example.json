@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "phase": "ARMORED_AUDIO_LAB_INPUT",
+  "batch_id": "replace-with-reviewed-batch-name",
+  "sources": [
+    "source1",
+    "source2",
+    "source3"
+  ],
+  "items": [
+    {
+      "source_id": "source1",
+      "telegram_message_id": "910001",
+      "source_path": "storage/validation/fixtures/replace-with-video-1.mp4",
+      "original_url": "https://shopee.com.br/product/REPLACE_SHOP_ID/REPLACE_ITEM_ID",
+      "topic_id": null,
+      "topic_name": "Geral"
+    },
+    {
+      "source_id": "source2",
+      "telegram_message_id": "910002",
+      "source_path": "storage/validation/fixtures/replace-with-video-2.mp4",
+      "original_url": null,
+      "topic_id": null,
+      "topic_name": "Geral"
+    }
+  ]
+}

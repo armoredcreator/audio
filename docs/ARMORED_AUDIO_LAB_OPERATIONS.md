@@ -890,3 +890,26 @@ O runner de contrato v5 do Speech/Studio continua sendo a implementação canôn
 
 Os testes de estágio usam SQLite temporário e verificam que a saída no limite Studio não chama Publisher, que o original permanece idêntico e que estados de hand-off não repetem trabalho.
 
+#### 16.3 Executor E2E isolado para um lote explícito de fixtures
+
+O comando `scripts/run_lab_pipeline.py` executa a sequência Sync -> Vision -> Stock -> IA -> Speech -> Studio para um manifest JSON revisado pelo operador. Não percorre o histórico Telegram: Sync lê somente os caminhos e links listados no manifest. As três fontes são namespaces fictícios únicos por execução, e Core SQLite + Speech SQLite + relatórios ficam em `storage/validation/full_pipeline_<run-id>/`. Os originais de entrada são hash-verificados antes/depois, e Stock copia cada vídeo para workspace de teste; o manifest de entrada nunca é usado como banco.
+
+O executor constrói `Coordinator` com `publisher=None` e não importa ArmoredHub. Os hand-offs pós-IA e pós-Speech usam estados persistidos `SPEECH` e `STUDIO_BATCH`; uma renderização v5 bem-sucedida termina em `STUDIO_COMPLETE`. Se uma etapa falhar, o relatório, SQLite, WAVs, pacotes e saídas parciais permanecem para auditoria; nenhum cleanup em massa é realizado.
+
+O modo CLI real exige `--approve-real-processing`, credenciais Shopee, Ollama/modelo local (por padrão), FFmpeg/FFprobe, asset de efeito e modelos de análise de áudio disponíveis. O preflight real ocorre antes de reservar candidatos. O executor não é um comando para coletar novamente os grupos Telegram reais nem para usar `ArmoredCreator-final/storage/database/armoredcreator.db`; só use vídeos de teste explicitamente selecionados dentro do AudioLab.
+
+Exemplo de invocação após preencher uma cópia local do template `docs/lab-pipeline-input.example.json` com os vídeos que quer testar e URLs Shopee válidas:
+
+~~~powershell
+$Root = "C:\Users\Administrador\Downloads\ArmoredAudioLab"
+$Python = Join-Path $Root ".venv\Scripts\python.exe"
+$Manifest = Join-Path $Root "storage\validation\lab-input-reviewed.json"
+
+if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) { throw "Python do AudioLab ausente." }
+if (-not (Test-Path -LiteralPath $Manifest -PathType Leaf)) { throw "Manifest revisado não encontrado." }
+& $Python (Join-Path $Root "scripts\run_lab_pipeline.py") --root $Root --manifest $Manifest --ia-provider ollama --approve-real-processing
+if ($LASTEXITCODE -ne 0) { throw "Pipeline de laboratório falhou; preserve o run_dir e consulte pipeline-report.json." }
+~~~
+
+Os testes sintéticos do executor injetam Vision/IA/Speech/Studio determinísticos para verificar estado, ordem, deduplicação e integridade sem chamar rede, Ollama ou RVC. Eles não substituem a execução local real do executor.
+
