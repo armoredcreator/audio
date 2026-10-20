@@ -179,15 +179,16 @@ class Pipeline:
                         self.db.mark_vision_waiting(item_id, str(exc))
                         self.trace.emit(item_id, "VISION", "WAITING", reason=str(exc))
                         return
-                    duplicate_owner = self.db.claim_product_identity(
-                        item_id, getattr(v, "ia_context", None)
+                    vision_context = getattr(v, "ia_context", None)
+                    duplicate_owner = self.db.commit_vision_result(
+                        item_id,
+                        v.affiliate_name,
+                        v.affiliate_url,
+                        affiliate_urls=getattr(v, "affiliate_urls", ()),
+                        publication_caption=None,
+                        ia_context=vision_context,
                     )
                     if duplicate_owner:
-                        self.db.mark_duplicate(
-                            item_id,
-                            duplicate_owner,
-                            reason="canonical-product-already-represented",
-                        )
                         self.trace.emit(
                             item_id,
                             "VISION",
@@ -196,14 +197,6 @@ class Pipeline:
                             reason="canonical-product-already-represented",
                         )
                         return
-                    self.db.set_vision(
-                        item_id,
-                        v.affiliate_name,
-                        v.affiliate_url,
-                        affiliate_urls=getattr(v, "affiliate_urls", ()),
-                        publication_caption=None,
-                        ia_context=getattr(v, "ia_context", None),
-                    )
                     self.trace.emit(
                         item_id,
                         "VISION",

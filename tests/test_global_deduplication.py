@@ -264,3 +264,127 @@ def test_late_link_enrichment_reuses_waiting_reservation_and_does_not_resurrect_
         (waiting, State.DUPLICATE.value),
     ).fetchone()[0] == 1
     db.close()
+
+
+
+def test_historical_identity_seed_skips_duplicate_rows(tmp_path: Path):
+    db = Database(tmp_path / "history.sqlite3")
+    context = {"shopId": "555", "itemId": "666"}
+    stale_duplicate = _approved(
+        db, "source1", "1", "https://shopee.co/stale", context, tmp_path
+    )
+    canonical = _approved(
+        db, "source1", "2", "https://shopee.co/canonical", context, tmp_path
+    )
+    db.mark_duplicate(stale_duplicate, canonical, "fixture-duplicate")
+
+    candidate = db.reserve_item(
+        "3", source_id="source2", original_url="https://shopee.co/new",
+        original_path=tmp_path / "candidate.mp4",
+    )
+
+    assert db.claim_product_identity(candidate, context) == canonical
+    stored_owner = db.conn.execute(
+        "SELECT owner_content_id FROM product_identity_claims WHERE product_key='555:666'"
+    ).fetchone()["owner_content_id"]
+    assert stored_owner == canonical
+    # Historical source rows remain intact apart from the explicit test duplicate.
+    assert db.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 3
+    db.close()
+
+
+def test_vision_claim_and_approval_are_committed_together(tmp_path: Path):
+    import json
+
+    db = Database(tmp_path / "history.sqlite3")
+    context = {"shopId": "777", "itemId": "888", "productName": "Fixture product"}
+    owner = db.reserve_item(
+        "10", source_id="source1", original_url="https://shopee.co/owner",
+        original_path=tmp_path / "owner.mp4",
+    )
+    candidate = db.reserve_item(
+        "20", source_id="source2", original_url="https://shopee.co/candidate",
+        original_path=tmp_path / "candidate.mp4",
+    )
+    db.transition(owner, State.VISION, "test-vision")
+    db.transition(candidate, State.VISION, "test-vision")
+
+    assert db.commit_vision_result(
+        owner, "Fixture product", "https://affiliate.invalid/owner",
+        affiliate_urls=("https://affiliate.invalid/owner",), ia_context=context,
+    ) is None
+
+    owner_row = db.conn.execute(
+        "SELECT affiliate_url, ia_context_json FROM items WHERE content_id=?", (owner,)
+    ).fetchone()
+    assert owner_row["affiliate_url"] == "https://affiliate.invalid/owner"
+    assert json.loads(owner_row["ia_context_json"])["shopId"] == "777"
+
+    duplicate_owner = db.commit_vision_result(
+        candidate, "Fixture product", "https://affiliate.invalid/candidate",
+        affiliate_urls=("https://affiliate.invalid/candidate",), ia_context=context,
+    )
+    assert duplicate_owner == owner
+
+    duplicate_row = db.conn.execute(
+        "SELECT state, duplicate_of_content_id, affiliate_url, affiliate_urls_json, "
+        "ia_context_json FROM items WHERE content_id=?",
+        (candidate,),
+    ).fetchone()
+    assert duplicate_row["state"] == State.DUPLICATE.value
+    assert duplicate_row["duplicate_of_content_id"] == owner
+    assert duplicate_row["affiliate_url"] is None
+    assert duplicate_row["affiliate_urls_json"] == "[]"
+    assert json.loads(duplicate_row["ia_context_json"])["itemId"] == "888"
+    assert db.conn.execute(
+        "SELECT COUNT(*) FROM state_events WHERE content_id=? AND new_state=?",
+        (candidate, State.DUPLICATE.value),
+    ).fetchone()[0] == 1
+    db.close()
+
+
+def test_vision_result_repairs_stale_unapproved_identity_claim(tmp_path: Path):
+    db = Database(tmp_path / "history.sqlite3")
+    context = {"shopId": "9000", "itemId": "10000"}
+    stale = db.reserve_item(
+        "1", source_id="source1", original_url="https://shopee.co/stale-claim",
+        original_path=tmp_path / "stale.mp4",
+    )
+    candidate = db.reserve_item(
+        "2", source_id="source2", original_url="https://shopee.co/candidate",
+        original_path=tmp_path / "candidate.mp4",
+    )
+
+    # Reproduce a claim written by the older two-transaction implementation,
+    # where the Vision result was never persisted afterward.
+    assert db.claim_product_identity(stale, context) is None
+    db.transition(candidate, State.VISION, "test-vision")
+
+    assert db.commit_vision_result(
+        candidate, "Resolved product", "https://affiliate.invalid/resolved",
+        affiliate_urls=("https://affiliate.invalid/resolved",), ia_context=context,
+    ) is None
+    assert db.get(candidate).state is State.VISION
+    assert db.get(candidate).affiliate_url == "https://affiliate.invalid/resolved"
+
+    claim = db.conn.execute(
+        "SELECT owner_content_id FROM product_identity_claims WHERE product_key='9000:10000'"
+    ).fetchone()
+    assert claim["owner_content_id"] == candidate
+    assert db.get(stale).state is State.RECEIVED
+    assert db.get(stale).affiliate_url is None
+    db.close()
+
+
+def test_failed_vision_commit_does_not_leave_product_claim(tmp_path: Path):
+    import pytest
+
+    db = Database(tmp_path / "history.sqlite3")
+    with pytest.raises(KeyError, match="unknown-content-id"):
+        db.commit_vision_result(
+            "missing-content", "Product", "https://affiliate.invalid/product",
+            ia_context={"shopId": "99", "itemId": "123"},
+        )
+    assert db.conn.execute("SELECT COUNT(*) FROM product_identity_claims").fetchone()[0] == 0
+    assert db.conn.execute("SELECT COUNT(*) FROM product_identity_claim_meta").fetchone()[0] == 0
+    db.close()

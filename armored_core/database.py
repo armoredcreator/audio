@@ -716,12 +716,95 @@ class Database:
             return None
         return f"{shop_id}:{item_id}"
 
-    def claim_product_identity(self, item_id: str, context: dict | None) -> str | None:
-        """Atomically reserve a canonical product identity.
+    def _seed_historical_product_claims_locked(self) -> None:
+        """Seed identity claims from approved, non-duplicate historical rows.
 
-        Historical approved rows are indexed once in a side ledger. The scan
-        reads legacy evidence but never updates, deletes, or merges source rows.
-        Subsequent candidates use indexed lookups instead of rescanning history.
+        Caller must hold a write transaction. Source rows remain untouched; only
+        the auxiliary identity ledger is populated.
+        """
+        seeded = self.conn.execute(
+            "SELECT value FROM product_identity_claim_meta WHERE key='historical_seeded'"
+        ).fetchone()
+        if seeded:
+            return
+
+        historical = self.conn.execute(
+            "SELECT content_id, ia_context_json FROM items "
+            "WHERE state<>? AND affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'' "
+            "ORDER BY created_at, content_id",
+            (State.DUPLICATE.value,),
+        ).fetchall()
+        owners: dict[str, str] = {}
+        for row in historical:
+            try:
+                prior_context = json.loads(row["ia_context_json"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            prior_key = self._canonical_product_key(prior_context)
+            if prior_key and prior_key not in owners:
+                owners[prior_key] = str(row["content_id"])
+        self.conn.executemany(
+            "INSERT OR IGNORE INTO product_identity_claims(product_key, owner_content_id) "
+            "VALUES(?, ?)",
+            list(owners.items()),
+        )
+        self.conn.execute(
+            "INSERT INTO product_identity_claim_meta(key,value) VALUES('historical_seeded','1')"
+        )
+
+    def _resolve_valid_product_owner_locked(
+        self, product_key: str, owner_content_id: str
+    ) -> str | None:
+        """Resolve a ledger owner through duplicate links and verify its evidence."""
+        current_id = str(owner_content_id or "")
+        seen: set[str] = set()
+        while current_id and current_id not in seen:
+            seen.add(current_id)
+            row = self.conn.execute(
+                "SELECT state, duplicate_of_content_id, affiliate_url, ia_context_json "
+                "FROM items WHERE content_id=?",
+                (current_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            if str(row["state"]) == State.DUPLICATE.value:
+                current_id = str(row["duplicate_of_content_id"] or "")
+                continue
+            if not str(row["affiliate_url"] or "").strip():
+                return None
+            try:
+                row_context = json.loads(row["ia_context_json"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return None
+            return current_id if self._canonical_product_key(row_context) == product_key else None
+        return None
+
+    def _find_historical_product_owner_locked(
+        self, product_key: str, *, exclude_content_id: str
+    ) -> str | None:
+        """Find the earliest approved non-duplicate row with exact V1 product IDs."""
+        rows = self.conn.execute(
+            "SELECT content_id, ia_context_json FROM items "
+            "WHERE content_id<>? AND state<>? "
+            "AND affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'' "
+            "ORDER BY created_at, content_id",
+            (str(exclude_content_id), State.DUPLICATE.value),
+        ).fetchall()
+        for row in rows:
+            try:
+                context = json.loads(row["ia_context_json"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if self._canonical_product_key(context) == product_key:
+                return str(row["content_id"])
+        return None
+
+    def claim_product_identity(self, item_id: str, context: dict | None) -> str | None:
+        """Atomically reserve a canonical product identity for compatibility callers.
+
+        The production Vision path uses commit_vision_result(), which makes the
+        claim and persisted Vision evidence one transaction. This method remains
+        for existing callers/tests that intentionally reserve identity alone.
         """
         product_key = self._canonical_product_key(context)
         if not product_key:
@@ -730,34 +813,7 @@ class Database:
 
         self.conn.execute("BEGIN IMMEDIATE")
         try:
-            seeded = self.conn.execute(
-                "SELECT value FROM product_identity_claim_meta WHERE key='historical_seeded'"
-            ).fetchone()
-            if not seeded:
-                historical = self.conn.execute(
-                    "SELECT content_id, ia_context_json FROM items "
-                    "WHERE affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'' "
-                    "ORDER BY created_at, content_id"
-                ).fetchall()
-                owners: dict[str, str] = {}
-                for row in historical:
-                    try:
-                        prior_context = json.loads(row["ia_context_json"] or "{}")
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        continue
-                    prior_key = self._canonical_product_key(prior_context)
-                    if prior_key and prior_key not in owners:
-                        owners[prior_key] = str(row["content_id"])
-                self.conn.executemany(
-                    "INSERT OR IGNORE INTO product_identity_claims(product_key, owner_content_id) "
-                    "VALUES(?, ?)",
-                    list(owners.items()),
-                )
-                self.conn.execute(
-                    "INSERT INTO product_identity_claim_meta(key,value) "
-                    "VALUES('historical_seeded','1')"
-                )
-
+            self._seed_historical_product_claims_locked()
             claim = self.conn.execute(
                 "SELECT owner_content_id FROM product_identity_claims WHERE product_key=?",
                 (product_key,),
@@ -770,6 +826,136 @@ class Database:
             self.conn.execute(
                 "INSERT INTO product_identity_claims(product_key, owner_content_id) VALUES(?, ?)",
                 (product_key, content_id),
+            )
+            self.conn.commit()
+            return None
+        except BaseException:
+            self.conn.rollback()
+            raise
+
+    def commit_vision_result(
+        self,
+        item_id: str,
+        affiliate_name: str,
+        affiliate_url: str,
+        affiliate_urls=(),
+        publication_caption: str | None = None,
+        ia_context: dict | None = None,
+    ) -> str | None:
+        """Atomically persist Vision approval or mark the item as a duplicate.
+
+        Product identity claims, approval metadata, duplicate state, and its state
+        event are committed together. A crash cannot leave a product claim pointing
+        to an item whose Vision evidence was never persisted.
+        """
+        content_id = str(item_id)
+        context = ia_context if isinstance(ia_context, dict) else {}
+        product_key = self._canonical_product_key(context)
+        links = list(dict.fromkeys(
+            str(link).strip()
+            for link in (affiliate_urls or ())
+            if str(link).strip()
+        ))
+        if not links and str(affiliate_url or "").strip():
+            links = [str(affiliate_url).strip()]
+
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.conn.execute(
+                "SELECT state, duplicate_of_content_id FROM items WHERE content_id=?",
+                (content_id,),
+            ).fetchone()
+            if current is None:
+                raise KeyError(f"unknown-content-id:{content_id}")
+            if str(current["state"]) == State.DUPLICATE.value:
+                owner = str(current["duplicate_of_content_id"] or "").strip() or None
+                self.conn.commit()
+                return owner
+
+            duplicate_owner: str | None = None
+            if product_key:
+                self._seed_historical_product_claims_locked()
+                claim = self.conn.execute(
+                    "SELECT owner_content_id FROM product_identity_claims WHERE product_key=?",
+                    (product_key,),
+                ).fetchone()
+                if claim:
+                    recorded_owner = str(claim["owner_content_id"])
+                    if recorded_owner != content_id:
+                        duplicate_owner = self._resolve_valid_product_owner_locked(
+                            product_key, recorded_owner
+                        )
+                        if duplicate_owner is None:
+                            # Repair a stale claim left by older non-atomic
+                            # versions, if a different approved historical row
+                            # provides valid evidence for the exact same product.
+                            duplicate_owner = self._find_historical_product_owner_locked(
+                                product_key, exclude_content_id=content_id
+                            )
+                        if duplicate_owner:
+                            self.conn.execute(
+                                "UPDATE product_identity_claims SET owner_content_id=? "
+                                "WHERE product_key=?",
+                                (duplicate_owner, product_key),
+                            )
+                        else:
+                            # The former owner has no durable, matching Vision
+                            # approval. Transfer the claim to this newly resolved
+                            # product instead of suppressing it behind stale data.
+                            self.conn.execute(
+                                "DELETE FROM product_identity_claims WHERE product_key=?",
+                                (product_key,),
+                            )
+                            self.conn.execute(
+                                "INSERT INTO product_identity_claims(product_key, owner_content_id) "
+                                "VALUES(?, ?)",
+                                (product_key, content_id),
+                            )
+                    # A claim owned by the current item is completed below in the
+                    # same transaction as the approved Vision metadata.
+                else:
+                    self.conn.execute(
+                        "INSERT INTO product_identity_claims(product_key, owner_content_id) "
+                        "VALUES(?, ?)",
+                        (product_key, content_id),
+                    )
+
+            if duplicate_owner and duplicate_owner != content_id:
+                old_state = str(current["state"])
+                detail = f"canonical-product-already-represented:{duplicate_owner}"
+                self.conn.execute(
+                    "UPDATE items SET state=?, duplicate_of_content_id=?, last_error=?, "
+                    "affiliate_name=NULL, affiliate_url=NULL, affiliate_urls_json='[]', "
+                    "publication_caption=NULL, ia_context_json=?, updated_at=CURRENT_TIMESTAMP "
+                    "WHERE content_id=?",
+                    (
+                        State.DUPLICATE.value,
+                        duplicate_owner,
+                        detail,
+                        json.dumps(context, ensure_ascii=False, default=str),
+                        content_id,
+                    ),
+                )
+                self.conn.execute(
+                    "INSERT INTO state_events(content_id,old_state,new_state,reason) "
+                    "VALUES(?,?,?,?)",
+                    (content_id, old_state, State.DUPLICATE.value, detail),
+                )
+                self.conn.commit()
+                return duplicate_owner
+
+            self.conn.execute(
+                "UPDATE items SET affiliate_name=?, affiliate_url=?, publication_caption=?, "
+                "affiliate_urls_json=?, ia_context_json=?, updated_at=CURRENT_TIMESTAMP "
+                "WHERE content_id=?",
+                (
+                    str(affiliate_name or ""),
+                    str(affiliate_url or ""),
+                    publication_caption,
+                    json.dumps(links, ensure_ascii=False),
+                    json.dumps(context, ensure_ascii=False, default=str),
+                    content_id,
+                ),
             )
             self.conn.commit()
             return None
