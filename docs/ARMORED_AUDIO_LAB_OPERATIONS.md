@@ -870,3 +870,15 @@ A branch de trabalho isolada `feat/full-pipeline-migration-20261020` deriva da i
 
 Esta revisão adiciona os módulos de entrada e a suíte de regressão ao AudioLab. Ela não declara a migração concluída: a primeira execução de CI após a importação deve expor incompatibilidades, que precisam ser corrigidas em commits/PRs de seguimento antes da integração final.
 
+#### 16.1 Proteção global de links e identidade canônica
+
+A branch de migração adiciona uma correção com testes:
+
+- O Sync consulta a URL normalizada globalmente, não apenas no `source_id` atual.
+- Depois que Vision retorna `shopId` e `itemId` exatos, o Core cria uma reserva atômica SQLite por identidade canônica. Antes de criar uma reserva nova, consulta registros históricos que já tenham `affiliate_url` e contexto Vision persistido.
+- Uma nova mensagem que representa um produto já reivindicado fica no estado durável `DUPLICATE`, com `duplicate_of_content_id`, `state_events` e `last_error`. A linha da mensagem é preservada e não recebe `affiliate_url`, impedindo avanço para Stock/IA/Speech/Studio.
+- A criação da tabela de reserva não apaga, funde nem reescreve grupos históricos. O owner histórico é escolhido deterministicamente por `created_at, content_id`, apenas para bloquear novas cópias.
+- URLs encurtadas sem identidade retornada pelo Vision não são classificadas como duplicadas por adivinhação.
+
+Esta proteção só pode ser considerada aprovada depois dos testes CI e dos testes locais do AudioLab. Não deve ser executada sobre o banco operacional como teste de migração.
+

@@ -13,6 +13,7 @@ class State(StrEnum):
     PUBLISHED = "PUBLISHED"
     RECOVERY = "RECOVERY"
     FAILED = "FAILED"
+    DUPLICATE = "DUPLICATE"
 
 class PublicationCheck(StrEnum):
     CONFIRMED = "CONFIRMED"
@@ -41,6 +42,7 @@ class Item:
     publication_caption: str | None = None
     affiliate_urls: tuple[str, ...] = ()
     ia_context: dict | None = None
+    duplicate_of_content_id: str | None = None
 
     @property
     def item_id(self) -> str:

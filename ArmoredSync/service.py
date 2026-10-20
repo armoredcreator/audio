@@ -312,16 +312,19 @@ class TelegramSource:
         if conn is None:
             return False
 
+        current_source_id = str(self.source_id or "telegram")
         rows = conn.execute(
-            "SELECT state, cleanup_completed, original_path, affiliate_url "
-            "FROM items WHERE source_id=? "
-            "AND LOWER(TRIM(original_url)) = LOWER(TRIM(?))",
-            (str(self.source_id or "telegram"), str(original_url)),
+            "SELECT source_id, state, cleanup_completed, original_path, affiliate_url "
+            "FROM items WHERE LOWER(TRIM(original_url)) = LOWER(TRIM(?))",
+            (str(original_url),),
         ).fetchall()
 
-        # No durable row means this URL is new for this source.
+        # Raw URL identity is global: another Telegram source must not create
+        # a second durable row for a URL that is already represented.
         if not rows:
             return False
+        if any(str(row["source_id"] or "telegram") != current_source_id for row in rows):
+            return True
 
         recoverable = False
         represented = False

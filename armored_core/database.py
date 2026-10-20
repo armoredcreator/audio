@@ -40,6 +40,7 @@ class Database:
             recovery_count INTEGER NOT NULL DEFAULT 0,
             cleanup_completed INTEGER NOT NULL DEFAULT 0,
             last_error TEXT,
+            duplicate_of_content_id TEXT,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
@@ -52,6 +53,11 @@ class Database:
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS product_identity_claims (
+            product_key TEXT PRIMARY KEY,
+            owner_content_id TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
         CREATE TABLE IF NOT EXISTS publications (
             content_id TEXT PRIMARY KEY,
             idempotency_key TEXT NOT NULL UNIQUE,
@@ -130,6 +136,7 @@ class Database:
                 ("attempts", "ALTER TABLE items ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"),
                 ("recovery_count", "ALTER TABLE items ADD COLUMN recovery_count INTEGER NOT NULL DEFAULT 0"),
                 ("cleanup_completed", "ALTER TABLE items ADD COLUMN cleanup_completed INTEGER NOT NULL DEFAULT 0"),
+                ("duplicate_of_content_id", "ALTER TABLE items ADD COLUMN duplicate_of_content_id TEXT"),
             ],
             "publications": [
                 ("verification_status", "ALTER TABLE publications ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'PENDING'"),
@@ -181,6 +188,7 @@ class Database:
                     recovery_count INTEGER NOT NULL DEFAULT 0,
                     cleanup_completed INTEGER NOT NULL DEFAULT 0,
                     last_error TEXT,
+                    duplicate_of_content_id TEXT,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
@@ -190,7 +198,7 @@ class Database:
                 "original_url","state","original_path","original_sha256","working_path",
                 "result_path","affiliate_name","affiliate_url","publication_caption",
                 "ia_context_json","affiliate_urls_json","attempts","recovery_count",
-                "cleanup_completed","last_error","created_at","updated_at"
+                "cleanup_completed","last_error","duplicate_of_content_id","created_at","updated_at"
             ]
             self.conn.execute(
                 f"INSERT INTO items_new ({','.join(columns)}) SELECT {','.join(columns)} FROM items"
@@ -441,6 +449,7 @@ class Database:
             row["publication_caption"],
             tuple(json.loads(row["affiliate_urls_json"] or "[]")),
             json.loads(row["ia_context_json"] or "{}"),
+            row["duplicate_of_content_id"],
         )
 
     def pending_vision_approved_items(self) -> list[Item]:
@@ -595,6 +604,90 @@ class Database:
             (item_id, old.value, State.WAITING_VISION.value, reason),
         )
         self.conn.commit()
+
+    @staticmethod
+    def _canonical_product_key(context: dict | None) -> str | None:
+        """Build product identity only when Vision supplied both exact IDs."""
+        if not isinstance(context, dict):
+            return None
+        shop_id = str(context.get("shopId") or context.get("shop_id") or "").strip()
+        item_id = str(context.get("itemId") or context.get("item_id") or "").strip()
+        if not shop_id or not item_id:
+            return None
+        return f"{shop_id}:{item_id}"
+
+    def claim_product_identity(self, item_id: str, context: dict | None) -> str | None:
+        """Atomically reserve a canonical product identity.
+
+        Returns the existing owner for a duplicate. Existing approved historical
+        rows are consulted read-only, and a unique ledger serializes new claims.
+        Missing IDs fail open rather than guessing from an unresolved short URL.
+        """
+        product_key = self._canonical_product_key(context)
+        if not product_key:
+            return None
+        content_id = str(item_id)
+
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            claim = self.conn.execute(
+                "SELECT owner_content_id FROM product_identity_claims WHERE product_key=?",
+                (product_key,),
+            ).fetchone()
+            if claim:
+                owner = str(claim["owner_content_id"])
+                self.conn.commit()
+                return None if owner == content_id else owner
+
+            rows = self.conn.execute(
+                "SELECT content_id, ia_context_json FROM items "
+                "WHERE content_id<>? AND affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'' "
+                "ORDER BY created_at, content_id",
+                (content_id,),
+            ).fetchall()
+            historical_owner = None
+            for row in rows:
+                try:
+                    prior_context = json.loads(row["ia_context_json"] or "{}")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if self._canonical_product_key(prior_context) == product_key:
+                    historical_owner = str(row["content_id"])
+                    break
+
+            owner = historical_owner or content_id
+            self.conn.execute(
+                "INSERT INTO product_identity_claims(product_key, owner_content_id) VALUES(?, ?)",
+                (product_key, owner),
+            )
+            self.conn.commit()
+            return owner if owner != content_id else None
+        except BaseException:
+            self.conn.rollback()
+            raise
+
+    def mark_duplicate(self, item_id: str, owner_content_id: str, reason: str = "") -> None:
+        """Preserve the incoming message but keep a duplicate out of downstream stages."""
+        content_id, owner = str(item_id), str(owner_content_id)
+        if content_id == owner:
+            raise ValueError("duplicate owner must be a different content_id")
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            old_state = self.get(content_id).state
+            detail = f"{reason or 'canonical-product-already-represented'}:{owner}"
+            self.conn.execute(
+                "UPDATE items SET state=?, duplicate_of_content_id=?, last_error=?, "
+                "updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
+                (State.DUPLICATE.value, owner, detail, content_id),
+            )
+            self.conn.execute(
+                "INSERT INTO state_events(content_id,old_state,new_state,reason) VALUES(?,?,?,?)",
+                (content_id, old_state.value, State.DUPLICATE.value, detail),
+            )
+            self.conn.commit()
+        except BaseException:
+            self.conn.rollback()
+            raise
 
     def set_vision(
         self,

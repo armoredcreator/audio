@@ -37,6 +37,13 @@ class Pipeline:
         item = self.db.get(item_id)
         self.trace.emit(item_id, "PIPELINE", "START", state=item.state.value, attempt=item.attempts + 1)
         self.log.info("[PIPELINE][ITEM %s] início state=%s", item.content_id, item.state.value)
+        if item.state == State.DUPLICATE:
+            self.trace.emit(
+                item_id, "PIPELINE", "DUPLICATE_SKIP",
+                duplicate_of=item.duplicate_of_content_id,
+                reason="candidate-already-represented-by-canonical-product",
+            )
+            return
         # WAITING_VISION is deliberately not retried by normal runs. An explicit
         # recovery call may re-enter Vision, but only when the original message
         # supplied a URL. No media download or downstream stage happens here.
@@ -149,6 +156,23 @@ class Pipeline:
                     except VisionUnresolvedError as exc:
                         self.db.mark_vision_waiting(item_id, str(exc))
                         self.trace.emit(item_id, "VISION", "WAITING", reason=str(exc))
+                        return
+                    duplicate_owner = self.db.claim_product_identity(
+                        item_id, getattr(v, "ia_context", None)
+                    )
+                    if duplicate_owner:
+                        self.db.mark_duplicate(
+                            item_id,
+                            duplicate_owner,
+                            reason="canonical-product-already-represented",
+                        )
+                        self.trace.emit(
+                            item_id,
+                            "VISION",
+                            "DUPLICATE",
+                            duplicate_of=duplicate_owner,
+                            reason="canonical-product-already-represented",
+                        )
                         return
                     self.db.set_vision(
                         item_id,
