@@ -20,13 +20,25 @@ def _approved(db: Database, source_id: str, message_id: str, url: str, context: 
     return content_id
 
 
-def test_sync_deduplicates_same_raw_url_across_sources(tmp_path: Path):
+def test_sync_allows_cross_source_url_to_reach_durable_reservation(tmp_path: Path):
     db = Database(tmp_path / "history.sqlite3")
     url = "https://s.shopee.com.br/shared-product"
-    db.reserve_item("100", source_id="source1", original_url=url, original_path=tmp_path / "source1.mp4")
+    owner = db.reserve_item("100", source_id="source1", original_url=url, original_path=tmp_path / "source1.mp4")
     source2 = TelegramSource(tmp_path, SimpleNamespace(), db, source="source2-chat", source_id="source2")
 
-    assert source2._shopee_url_exists(url) is True
+    # The pre-check must not silently discard a different source/message identity.
+    assert source2._shopee_url_exists(url) is False
+    duplicate = db.reserve_item(
+        "200", source_id="source2", original_url=url,
+        original_path=tmp_path / "source2.mp4",
+    )
+    row = db.conn.execute(
+        "SELECT state, duplicate_of_content_id FROM items WHERE content_id=?", (duplicate,)
+    ).fetchone()
+    assert duplicate != owner
+    assert row["state"] == State.DUPLICATE.value
+    assert row["duplicate_of_content_id"] == owner
+    assert db.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 2
     db.close()
 
 

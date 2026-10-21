@@ -451,7 +451,7 @@ class SyncLifecycleTests(unittest.TestCase):
                     ]:
                         yield message
 
-            source = ExistingUrlSource(root, FakeReader(), db)
+            source = ExistingUrlSource(root, FakeReader(), db, source_id="source")
             candidates = []
 
             async def collect():
