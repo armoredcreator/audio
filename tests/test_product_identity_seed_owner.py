@@ -90,3 +90,33 @@ def test_seed_preserves_confirmed_published_owner_even_if_original_is_missing(tm
         assert db.get("source-seed-test_published").state is State.PUBLISHED
     finally:
         db.close()
+
+
+def test_seed_does_not_treat_sha256_shape_as_integrity_evidence(tmp_path):
+    db = Database(tmp_path / "unverified-sha-history.sqlite3")
+    try:
+        earlier = tmp_path / "earlier-original.mp4"
+        later = tmp_path / "later-original.mp4"
+        earlier.write_bytes(b"earlier content")
+        later.write_bytes(b"later content with a false declared digest")
+        _insert_approved(
+            db, content_id="source-seed-test_earlier", message_id="201",
+            state=State.RECEIVED, path=earlier, sha=None, shop_id="555",
+            item_id="666", created_at="2026-01-01T00:00:00Z",
+        )
+        # 64 hexadecimal characters are syntactically plausible but do not
+        # match this file. They must not make a later record the canonical owner.
+        _insert_approved(
+            db, content_id="source-seed-test_later", message_id="202",
+            state=State.RECEIVED, path=later, sha="a" * 64, shop_id="555",
+            item_id="666", created_at="2026-02-01T00:00:00Z",
+        )
+
+        rows = _seed(db)
+        assert [(row["product_key"], row["owner_content_id"]) for row in rows] == [
+            ("555:666", "source-seed-test_earlier")
+        ]
+        assert db.get("source-seed-test_earlier").state is State.RECEIVED
+        assert db.get("source-seed-test_later").state is State.RECEIVED
+    finally:
+        db.close()

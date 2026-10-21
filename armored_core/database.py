@@ -721,10 +721,10 @@ class Database:
 
         The caller holds a write transaction. Owner selection is deterministic:
         confirmed/publication evidence first, then the furthest durable pipeline
-        progress, existing rendered result, an existing ORIGINAL with valid SHA
-        metadata, and finally stable historical order. This prevents a missing
-        pre-download media row from stealing ownership from a verified peer while
-        retaining rows that already progressed or have publication evidence.
+        progress, an existing rendered result, an existing ORIGINAL, and stable
+        historical order. SHA-shaped metadata is not treated as integrity proof
+        because validating it requires hashing the actual file; this seed path
+        must not assign extra ownership weight to an unverified checksum string.
         """
         seeded = self.conn.execute(
             "SELECT value FROM product_identity_claim_meta WHERE key='historical_seeded'"
@@ -793,10 +793,6 @@ class Database:
             except (OSError, ValueError, RuntimeError):
                 return False
 
-        def valid_sha(value: object) -> bool:
-            text = str(value or "").strip()
-            return len(text) == 64 and all(char in "0123456789abcdefABCDEF" for char in text)
-
         candidates: dict[str, list[tuple[tuple[int, ...], str, str]]] = {}
         for row in rows:
             try:
@@ -809,14 +805,14 @@ class Database:
 
             original_exists = path_exists(row["original_path"])
             result_exists = path_exists(row["result_path"])
-            sha_is_valid = valid_sha(row["original_sha256"])
+            # The existence of an ORIGINAL is observable filesystem evidence.
+            # A 64-hex string alone is not; only compare file bytes to its digest
+            # in a separate integrity pass that is allowed to incur the I/O cost.
             score = (
                 int(str(row["content_id"]) in publication_evidence),
                 int(state_progress.get(str(row["state"] or "").upper(), 0)),
                 int(result_exists),
-                int(original_exists and sha_is_valid),
                 int(original_exists),
-                int(sha_is_valid),
             )
             candidates.setdefault(product_key, []).append(
                 (score, str(row["created_at"] or ""), str(row["content_id"]))
