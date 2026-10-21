@@ -1613,6 +1613,12 @@ class Coordinator:
 
     def _preflight_speech_studio_v5(self):
         """Load Speech's real processor and validate all fixed render dependencies."""
+        # Explicit object injection exists for deterministic tests only. Normal
+        # Coordinator construction never sets this attribute and must preflight
+        # the actual Speech runtime before processing media.
+        injected = getattr(self, "_speech_processor_override", None)
+        if injected is not None:
+            return injected
         import shutil
         from ArmoredSpeech.model_processor import ModelProcessor
 
@@ -1821,7 +1827,10 @@ class Coordinator:
                     "speech-v5-ready-entering-studio-batch",
                 )
 
-            studio_report = run_complete_batch(
+            studio_runner_override = getattr(
+                self, "_speech_studio_batch_runner_override", None
+            )
+            studio_report = (studio_runner_override or run_complete_batch)(
                 root=root,
                 manifest_path=manifest_path,
                 speech_database=speech_database,
@@ -1886,6 +1895,16 @@ class Coordinator:
             )
             return outputs
         except Exception as exc:
+            # Preserve the durable in-flight boundary on requested shutdown;
+            # Recovery on restart will rebuild from ORIGINAL instead of treating
+            # a killed native child as a completed render.
+            if self.pipeline._shutdown_checker():
+                self.log.warning(
+                    "[COORDINATOR][SPEECH/STUDIO] shutdown during v5 batch; "
+                    "preserving STUDIO_BATCH for restart: %s",
+                    exc,
+                )
+                raise KeyboardInterrupt from exc
             # If the external phase failed, keep immutable ORIGINALs and write a
             # durable failure event. Recovery recognizes this boundary and will
             # rebuild derived artifacts through Speech v5, never legacy Studio.

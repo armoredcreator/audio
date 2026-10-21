@@ -9,6 +9,78 @@ from armored_core.models import PublicationCheck, State
 from armored_core.services import PublicationResult, VisionResult, VisionUnresolvedError
 
 
+
+def _install_coordinator_speech_studio_test_seam(coordinator):
+    """Inject deterministic Speech/Studio providers; never alter production defaults."""
+    from ArmoredSpeech.contracts import AudioClass, SpeechDecision
+
+    class SpeechProcessor:
+        intelligence = SimpleNamespace(preflight=lambda: None)
+
+        def analyze(self, _video_path):
+            return SpeechDecision(
+                audio_class=AudioClass.MUSIC_ONLY,
+                language=None,
+                speech_detected=False,
+                music_detected=True,
+                confidence=0.99,
+                rationale="isolated lifecycle fixture",
+            )
+
+        def prepare_wav(self, _video_path, wav_path, _decision):
+            wav_path = Path(wav_path)
+            wav_path.parent.mkdir(parents=True, exist_ok=True)
+            wav_path.write_bytes(b"isolated-speech-wav")
+
+    def studio_batch_runner(*, root, manifest_path, speech_database, report_path, copy_only, storage_root):
+        from ArmoredSpeech.studio_batch_runner import load_complete_batch
+        from armored_core.integrity import sha256_file
+        from armored_core.storage import Storage as LabStorage
+
+        if copy_only:
+            raise AssertionError("Lifecycle tests must use the contract-v5 path, not copy-only mode")
+        _, items, hashes = load_complete_batch(Path(root), Path(manifest_path))
+        storage = LabStorage(
+            Path(root),
+            storage_root=Path(storage_root) if storage_root is not None else None,
+        )
+        processed = []
+        for item in items:
+            identity = (str(item.source_id), str(item.telegram_message_id))
+            expected_hash = hashes[identity]
+            original = Path(item.original_path).resolve(strict=True)
+            rendered = coordinator.pipeline.studio.process(item)
+            rendered_path = Path(rendered.result_path).resolve(strict=True)
+            destination = storage.result(
+                item.content_id,
+                item.affiliate_url,
+                item.affiliate_name,
+                source_id=item.source_id,
+            ).resolve()
+            if rendered_path != destination:
+                if destination.exists():
+                    raise FileExistsError(f"test runner refuses to overwrite {destination}")
+                destination.write_bytes(rendered_path.read_bytes())
+            if not destination.is_file() or destination.stat().st_size <= 0:
+                raise RuntimeError(f"test Studio output missing for {identity}")
+            if sha256_file(original).lower() != expected_hash.lower():
+                raise RuntimeError(f"test Studio changed original for {identity}")
+            processed.append({
+                "source_id": identity[0],
+                "item_id": identity[1],
+                "output_path": str(destination),
+                "original_sha256_before": expected_hash,
+            })
+        return {
+            "status": "SUCCESS",
+            "originals_intact": True,
+            "processed": processed,
+            "report_path": str(report_path),
+        }
+
+    coordinator._speech_processor_override = SpeechProcessor()
+    coordinator._speech_studio_batch_runner_override = studio_batch_runner
+
 class VisionStage:
     def identify(self, item):
         return VisionResult(
@@ -147,6 +219,7 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
                 ),
             )
             source.db = coordinator.db
+            _install_coordinator_speech_studio_test_seam(coordinator)
 
             try:
                 asyncio.run(coordinator._run_catch_up_with_recovery_async())
@@ -193,6 +266,7 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
                 ),
             )
             source.db = coordinator.db
+            _install_coordinator_speech_studio_test_seam(coordinator)
 
             try:
                 asyncio.run(coordinator._run_catch_up_with_recovery_async())
