@@ -373,3 +373,28 @@ def test_catch_up_completes_ia_for_entire_batch_before_speech_studio_and_hub(
         assert db.historical_complete() is True
     finally:
         coordinator.close()
+
+
+def test_recovery_finishes_speech_studio_but_leaves_hub_for_coordinator_loop(
+    tmp_path, monkeypatch
+):
+    events = []
+    coordinator, _storage, db, item_id, original_bytes = _fixture(tmp_path, events)
+    db.transition(item_id, State.SPEECH, "test-interrupted-before-speech")
+    monkeypatch.setenv("ARMORED_IA_ENABLED", "1")
+    monkeypatch.setenv("ARMORED_IA_CAPTION_ENABLED", "1")
+    _install_test_speech_studio(coordinator, events, monkeypatch)
+
+    coordinator.recovery.reconcile(item_id)
+
+    current = db.get(item_id)
+    assert current.state is State.PUBLISHING
+    assert coordinator._has_speech_studio_v5_completion(item_id)
+    assert "studio" in events
+    assert not any(event.startswith("hub") for event in events)
+    assert current.original_path.read_bytes() == original_bytes
+
+    coordinator.run(item_id)
+    assert db.get(item_id).state is State.PUBLISHED
+    assert any(event.startswith("hub") for event in events)
+    db.close()

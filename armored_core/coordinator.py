@@ -32,7 +32,7 @@ class Coordinator:
         self.pipeline = Pipeline(db, storage, vision, studio, publisher, ia)
         self.recovery = Recovery(
             db, storage, vision, studio, publisher, ia,
-            speech_studio_runner=self.run,
+            speech_studio_runner=self._run_recovery_speech_studio,
         )
         self.startup_reconciler = StartupReconciler(db, storage, publisher)
         self.source = source
@@ -2047,6 +2047,16 @@ class Coordinator:
                         item_id,
                     )
             raise
+
+
+    def _run_recovery_speech_studio(self, item_id: str) -> None:
+        """Repair Speech/Studio through v5 without crossing into Hub.
+
+        Recovery can reconcile several interrupted items in one pass. It must
+        finish the derived batch for each item and leave publication to the
+        normal Coordinator loop only after the recovery pass has completed.
+        """
+        self._run_speech_studio_batch([str(item_id)])
 
     def run(self, item_id: str) -> None:
         """Run one item through IA -> Speech v5 batch -> Studio -> Hub in order."""
