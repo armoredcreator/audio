@@ -5,6 +5,11 @@ on:
     paths:
       - "ArmoredSpeech/**"
       - "ArmoredStudio/**"
+      - "ArmoredSync/**"
+      - "ArmoredVision/**"
+      - "ArmoredStock/**"
+      - "ArmoredIA/**"
+      - "tests/**"
       - "armored_core/**"
       - "scripts/**"
       - "pyproject.toml"
@@ -16,6 +21,11 @@ on:
     paths:
       - "ArmoredSpeech/**"
       - "ArmoredStudio/**"
+      - "ArmoredSync/**"
+      - "ArmoredVision/**"
+      - "ArmoredStock/**"
+      - "ArmoredIA/**"
+      - "tests/**"
       - "armored_core/**"
       - "scripts/**"
       - "pyproject.toml"
