@@ -252,7 +252,7 @@ def test_catch_up_completes_ia_for_entire_batch_before_speech_studio_and_hub(
         db.set_vision(
             item_id,
             f"Produto {index}",
-            f"https://affiliate.invalid/{100 + index}",
+            f"https://affiliate.invalid/item-{100 + index}",
             ia_context={
                 "productName": f"Produto {index}",
                 "shopId": "700",
