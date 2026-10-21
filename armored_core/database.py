@@ -635,13 +635,15 @@ class Database:
         rows = self.conn.execute(
             "SELECT content_id FROM items WHERE "
             "(state=? AND affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'') "
-            "OR state IN (?, ?, ?, ?) "
+            "OR state IN (?, ?, ?, ?, ?, ?) "
             "OR (state=? AND cleanup_completed=0) "
             "ORDER BY source_id, COALESCE(topic_id, 0), "
             "CAST(telegram_message_id AS INTEGER), created_at, content_id",
             (
                 State.RECEIVED.value,
                 State.IA.value,
+                State.SPEECH.value,
+                State.STUDIO_BATCH.value,
                 State.STUDIO.value,
                 State.PUBLISHING.value,
                 State.RECOVERY.value,
@@ -1174,6 +1176,51 @@ class Database:
             (str(path), item_id),
         )
         self.conn.commit()
+
+
+    def complete_speech_studio_batch(self, results: dict[str, Path]) -> None:
+        """Atomically persist the complete, hash-validated Speech v5 render batch."""
+        if not isinstance(results, dict) or not results:
+            raise ValueError("speech-studio-results-required")
+        prepared = {
+            str(item_id): str(Path(path).resolve(strict=True))
+            for item_id, path in results.items()
+        }
+        if len(prepared) != len(results):
+            raise ValueError("duplicate-content-id-in-speech-studio-results")
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            for item_id in sorted(prepared):
+                row = self.conn.execute(
+                    "SELECT state FROM items WHERE content_id=?",
+                    (item_id,),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(item_id)
+                old_state = State(str(row["state"]))
+                if old_state is not State.STUDIO_BATCH:
+                    raise RuntimeError(
+                        f"speech-studio-batch-state-mismatch:{item_id}:{old_state.value}"
+                    )
+                self.conn.execute(
+                    "UPDATE items SET result_path=?, state=?, last_error=NULL, "
+                    "updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
+                    (prepared[item_id], State.PUBLISHING.value, item_id),
+                )
+                self.conn.execute(
+                    "INSERT INTO state_events (content_id,old_state,new_state,reason) "
+                    "VALUES (?,?,?,?)",
+                    (
+                        item_id,
+                        State.STUDIO_BATCH.value,
+                        State.PUBLISHING.value,
+                        "speech-studio-v5-complete",
+                    ),
+                )
+            self.conn.commit()
+        except BaseException:
+            self.conn.rollback()
+            raise
 
     def set_result(self, item_id: str, path: Path) -> None:
         self.conn.execute(
