@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+from typing import Callable
 
 from .database import Database
 from .models import PublicationCheck, State
@@ -20,9 +21,12 @@ class Recovery:
         studio: StudioService,
         publisher: Publisher,
         ia: AIService | None = None,
+        *,
+        speech_studio_runner: Callable[[str], None] | None = None,
     ):
         self.db, self.storage = db, storage
         self.pipeline = Pipeline(db, storage, vision, studio, publisher, ia)
+        self.speech_studio_runner = speech_studio_runner
 
     def _reset_processing_artifacts(self, item_id: str) -> None:
         """Keep only the immutable ORIGINAL before rebuilding derived artifacts."""
@@ -47,8 +51,21 @@ class Recovery:
 
     def _rebuild_processing_from_original(self, item_id: str) -> None:
         self._reset_processing_artifacts(item_id)
+        if self.speech_studio_runner is not None:
+            self.db.transition(
+                item_id, State.SPEECH, "recovery-rebuild-speech-v5-from-original"
+            )
+            self.speech_studio_runner(item_id)
+            return
         self.db.transition(item_id, State.STUDIO, "recovery-rebuild-studio-from-original")
         self.pipeline.run(item_id)
+
+    def _has_speech_studio_v5_completion(self, item_id: str) -> bool:
+        row = self.db.conn.execute(
+            "SELECT 1 FROM state_events WHERE content_id=? AND new_state=? AND reason=? LIMIT 1",
+            (str(item_id), State.PUBLISHING.value, "speech-studio-v5-complete"),
+        ).fetchone()
+        return row is not None
 
     def _resume_durable_result(self, item_id: str, reason: str) -> None:
         self.db.transition(item_id, State.PUBLISHING, reason)
@@ -75,6 +92,20 @@ class Recovery:
             raise FileNotFoundError(
                 f"cannot-recover-without-immutable-original: {item.original_path}"
             )
+
+        if item.state in {State.SPEECH, State.STUDIO_BATCH} and self.speech_studio_runner is not None:
+            if self.db.publication(item_id):
+                raise RuntimeError("publication-record-unexpected-before-speech-studio-v5-complete")
+            self.db.record_recovery(item_id)
+            self.db.transition(item_id, State.RECOVERY, "recover-interrupted-speech-studio-v5")
+            self._reset_processing_artifacts(item_id)
+            self.db.transition(
+                item_id,
+                State.SPEECH,
+                "recovery-restart-speech-studio-v5-from-original",
+            )
+            self.speech_studio_runner(item_id)
+            return
 
         self.db.record_recovery(item_id)
         self.db.transition(item_id, State.RECOVERY, "startup-recovery")
@@ -131,7 +162,14 @@ class Recovery:
             )
         ):
             self.db.transition(item_id, State.IA, "recovery-retry-ia")
-            self.pipeline.run(item_id)
+            self.pipeline.run(
+                item_id,
+                stop_after_ia=self.speech_studio_runner is not None,
+            )
+            if self.speech_studio_runner is not None:
+                current = self.db.get(item_id)
+                if current.state == State.SPEECH:
+                    self.speech_studio_runner(item_id)
             return
 
         # A processing-stage exception is stronger evidence than the mere
@@ -139,7 +177,7 @@ class Recovery:
         # the workspace may be partial/corrupt; rebuild from ORIGINAL.
         if (
             last_event
-            and last_event["old_state"] == State.STUDIO.value
+            and last_event["old_state"] in {State.SPEECH.value, State.STUDIO_BATCH.value, State.STUDIO.value}
             and last_event["new_state"] == State.RECOVERY.value
         ):
             self._rebuild_processing_from_original(item_id)
@@ -157,6 +195,12 @@ class Recovery:
                 source_id=item.source_id,
             )
         if result and result.is_file():
+            if (
+                self.speech_studio_runner is not None
+                and not self._has_speech_studio_v5_completion(item_id)
+            ):
+                self._rebuild_processing_from_original(item_id)
+                return
             if item.result_path is None:
                 self.db.set_result(item_id, result)
             self._resume_durable_result(item_id, "recovery-resume-durable-result")
@@ -170,4 +214,11 @@ class Recovery:
 
         # Without resolved product metadata, Vision is the only safe boundary.
         self.db.transition(item_id, State.VISION, "recovery-rebuild-vision-from-original")
-        self.pipeline.run(item_id)
+        self.pipeline.run(
+            item_id,
+            stop_after_ia=self.speech_studio_runner is not None,
+        )
+        if self.speech_studio_runner is not None:
+            current = self.db.get(item_id)
+            if current.state == State.SPEECH:
+                self.speech_studio_runner(item_id)
