@@ -921,3 +921,45 @@ Quando uma reserva existente está em `WAITING_VISION` sem URL e uma nova passag
 
 O código de `ArmoredSpeech/rvc_engine.py` já define `ArmoredSpeech/runtime/rvc/models` como caminho canônico, e o WAV de efeito fica em `ArmoredSpeech/assets/efeitosonoro.wav`. Os arquivos são binários locais ignorados pelo Git; por isso, a migração não os transporta pelo repositório. O script `scripts/migrate_rvc_assets_to_speech.ps1` copia apenas modelos/índices RVC e o efeito sonoro canônico. Ele não copia o ambiente Python legado do Studio, banner, credenciais, bases, vídeos ou outputs; não remove arquivos do Studio e não sobrescreve destinos divergentes. Primeiro execute sem `-Apply` para auditar plano/conflitos e hashes; só use `-Apply` depois de revisar o relatório.
 
+
+
+---
+
+## 16. Atualização da auditoria integrada — 21/10/2026
+
+Esta seção complementa e prevalece sobre afirmações antigas da seção 15 que diziam que nenhuma alteração havia sido feita no código. O trabalho desta etapa está isolado no repositório `armoredcreator/audio`; não foi promovido para a aplicação operacional `armoredcreator/armoredcreator`.
+
+### 16.1 Correção de Sync implementada e validada em CI
+
+- Branch isolada: `fix/audit-blockers-sync-preservation-20261021`.
+- PR em rascunho: [#15 — Preserve cross-source duplicate identity in SQLite](https://github.com/armoredcreator/audio/pull/15).
+- Commit validado: `d908ddb6a0ee1a21a7e735aacd45b2b788c5a1e8`.
+- GitHub Actions: **332 passed, 1 skipped** no workflow de testes isolados; [execução de validação](https://github.com/armoredcreator/audio/actions/runs/39652066340).
+
+O pre-check do Sync não descarta mais silenciosamente uma URL encontrada em outra fonte. O candidato segue para `Database.reserve_item()`, que grava a identidade (fonte + mensagem), estado `DUPLICATE`, proprietário `duplicate_of_content_id` e evento em `state_events`. O teste de regressão cobre a reserva durável. A mudança não toca banco operacional, checkpoints locais, Telegram, Shopee ou publicação.
+
+**Limite:** o PR continua em rascunho e não foi mesclado. A validação é a suíte de CI do laboratório, não um teste contra Telegram real nem uma auditoria de base histórica de produção.
+
+### 16.2 Matriz atual de evidências
+
+| Área | Estado | Evidência / lacuna |
+|---|---|---|
+| Sync — URL repetida entre fontes | **VALIDADO EM CI** | Teste regressivo de candidato cross-source + reserva durável SQLite; 332 testes passaram, 1 foi ignorado. |
+| SQLite — identidade e evento de duplicata | **VALIDADO EM CI** | `reserve_item()` grava a linha `DUPLICATE`, proprietário e `state_events`; teste de regressão. |
+| Vision — identidade Shopee canônica | **PARCIAL** | Resolver e commit transacional têm testes; ainda falta comprovação E2E de todos os links curtos/redirecionamentos e dos três sources com serviços reais. |
+| Stock — original e caminho canônico | **PARCIAL** | Há guardas de raiz e hash e testes unitários; ainda falta teste de falha entre movimentação do arquivo e atualização SQLite, além de validação com originais históricos reais. |
+| IA — política de legenda | **VALIDADO POR TESTES DE POLÍTICA** | Política central e testes; inferência real Gemini/Ollama não é provada pela suíte isolada. |
+| Speech → Studio v5 | **PARCIAL** | Contrato e runner têm testes isolados; CI Linux não prova o runtime Windows RVC Melody nem aprovação subjetiva de áudio renderizado. |
+| Recovery — preservação do ORIGINAL | **PARCIAL** | Testes cobrem cenários de recuperação e integridade; faltam casos dedicados a symlinks e falhas de remoção/recuperação. |
+| Dependências órfãs / ambiente único | **PENDENTE** | `scripts/audit_shared_dependencies.ps1` ainda precisa ser executado no `.venv` Windows real; o conflito documental de NumPy entre `requirements-analysis.txt` e `requirements.txt` requer resolução explícita por ambiente. |
+| E2E real Sync → Hub | **NÃO VALIDADO** | Não foi executado nesta etapa; não inferir aprovação a partir de fixtures ou mocks. |
+
+### 16.3 Gates que permanecem obrigatórios
+
+1. Não mesclar o PR #15 antes de revisar o diff e seus checks no GitHub.
+2. Resolver e documentar os requisitos NumPy por ambiente antes de qualquer instalação; não combinar cegamente os dois arquivos de requirements.
+3. Executar a auditoria de imports/dependências no Windows e registrar o CSV real, sem instalar/remover pacotes durante a auditoria.
+4. Adicionar testes de falha para a migração de caminho do Stock e para preservação do ORIGINAL na Recovery, incluindo symlink.
+5. Confirmar a localização/migração do modelo Melody e dos assets reais no caminho canônico de Speech; não presumir que o modelo copiado para o caminho legado foi migrado.
+6. Fazer E2E de mídia real somente no laboratório isolado e com os fixtures já existentes; nenhuma coleta ou publicação operacional está autorizada por esta auditoria.
+
