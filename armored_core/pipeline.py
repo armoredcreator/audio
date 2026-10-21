@@ -15,7 +15,7 @@ class Pipeline:
         self.db, self.storage = db, storage
         self.vision, self.studio, self.publisher, self.ia = vision, studio, publisher, ia
         self.log = logging.getLogger(__name__)
-        self.trace = PipelineTrace(storage.root)
+        self.trace = PipelineTrace(getattr(storage, "storage_root", storage.root))
         self._shutdown_checker = lambda: False
         self._before_hub_checker = None
 

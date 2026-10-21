@@ -375,6 +375,8 @@ def run_lab_pipeline(
         "source_mode": "EXPLICIT_LOCAL_FIXTURE_MANIFEST",
         "database": str(run_dir / "core.sqlite3"),
         "run_directory": str(run_dir),
+        "storage_root": str(run_dir / "workspace"),
+        "storage_isolated": True,
         "report_path": str(report_path),
         "publication_disabled": True,
         "hub_loaded": False,
@@ -404,10 +406,10 @@ def run_lab_pipeline(
         }
         report["source_map"] = source_map
 
-        # Record a unique test database under this run's validation directory;
-        # Storage still uses the canonical AudioLab filesystem layout.
+        # Database and all generated media are rooted in this run directory.
+        # The project root remains available for assets/models/configuration.
         db = Database(run_dir / "core.sqlite3")
-        storage = Storage(root)
+        storage = Storage(root, storage_root=run_dir / "workspace")
         source = LocalFixtureSource(source_map, fixture_items)
 
         if vision_factory is None:
@@ -604,6 +606,7 @@ def run_lab_pipeline(
             speech_database=speech_database,
             report_path=run_dir / "studio-report.json",
             copy_only=False,
+            storage_root=storage.storage_root,
         )
         if studio_report.get("status") != "SUCCESS" or studio_report.get("originals_intact") is not True:
             raise LabPipelineError("Speech/Studio não confirmou SUCCESS e integridade de todos os originais.")
