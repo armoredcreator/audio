@@ -703,6 +703,133 @@ class Coordinator:
                 else 0,
                 item.content_id,
             ))
+            available_items = [
+                candidate
+                for candidate in production_items
+                if candidate.content_id not in production_seen
+                and candidate.original_path.is_file()
+            ]
+
+            # Batch barrier for new work: complete IA for every eligible item,
+            # then prepare every Speech v5 package, then render the full Studio
+            # batch, and only after all results are validated may Hub begin.
+            # Earlier in-flight/recovery states are resolved first, in order.
+            phase_batch = []
+            for candidate in available_items:
+                if candidate.state in {State.RECEIVED, State.IA, State.SPEECH}:
+                    phase_batch.append(candidate)
+                else:
+                    break
+
+            if phase_batch:
+                batch_ids = [str(candidate.content_id) for candidate in phase_batch]
+                production_seen.update(batch_ids)
+                speech_ids = []
+                ia_failed = False
+
+                for candidate in phase_batch:
+                    try:
+                        current = self.db.get(candidate.content_id)
+                        if current.state in {State.RECEIVED, State.IA}:
+                            self.pipeline.run(current.content_id, stop_after_ia=True)
+                        current = self.db.get(candidate.content_id)
+                        if current.state != State.SPEECH:
+                            raise RuntimeError(
+                                "ia-phase-did-not-reach-speech:"
+                                f"{current.content_id}:{current.state.value}"
+                            )
+                        speech_ids.append(str(current.content_id))
+                    except Exception as exc:
+                        ia_failed = True
+                        self.log.exception(
+                            "[COORDINATOR][CATCH-UP][IA] %s failed; "
+                            "Speech/Studio/Hub are held for this batch: %s",
+                            candidate.content_id,
+                            exc,
+                        )
+
+                for batch_item_id in batch_ids:
+                    if batch_item_id not in processed:
+                        processed.append(batch_item_id)
+
+                if ia_failed or len(speech_ids) != len(batch_ids):
+                    checkpoint_blocked = True
+                    self._last_catch_up_completed_count = 0
+                    break
+
+                try:
+                    self._run_speech_studio_batch(speech_ids)
+                except Exception as exc:
+                    checkpoint_blocked = True
+                    self.log.exception(
+                        "[COORDINATOR][CATCH-UP][SPEECH/STUDIO] batch=%s failed; "
+                        "Hub is held: %s",
+                        speech_ids,
+                        exc,
+                    )
+                    break
+
+                # Every item in this batch is now PUBLISHING with an atomic,
+                # durable "speech-studio-v5-complete" event. Only now enter Hub.
+                for batch_item_id in speech_ids:
+                    try:
+                        if live_task is not None:
+                            def pause_source_for_hub():
+                                hub_pause_requested.set()
+                                try:
+                                    timeout = max(
+                                        5.0,
+                                        float(
+                                            os.getenv(
+                                                "ARMORED_CATCHUP_HUB_PAUSE_TIMEOUT",
+                                                "30",
+                                            )
+                                        ),
+                                    )
+                                except ValueError:
+                                    timeout = 30.0
+                                if not hub_paused.wait(timeout):
+                                    hub_pause_requested.clear()
+                                    raise TimeoutError(
+                                        "live Telegram discovery did not release its "
+                                        "session before Hub publication"
+                                    )
+
+                            await asyncio.to_thread(
+                                self._run_pipeline_with_private_database,
+                                batch_item_id,
+                                before_hub=pause_source_for_hub,
+                            )
+                        else:
+                            self.run(batch_item_id)
+
+                        current = self.db.get(batch_item_id)
+                        if (
+                            current.state != State.PUBLISHED
+                            or not current.cleanup_completed
+                            or current.result_path is None
+                            or not current.result_path.is_file()
+                        ):
+                            raise RuntimeError(
+                                "hub-did-not-reach-durable-published-state:"
+                                f"{batch_item_id}:{current.state.value}"
+                            )
+                    except Exception as exc:
+                        checkpoint_blocked = True
+                        self.log.exception(
+                            "[COORDINATOR][CATCH-UP][HUB] %s failed after the "
+                            "complete validated Studio batch; later publication is held: %s",
+                            batch_item_id,
+                            exc,
+                        )
+                        break
+                    finally:
+                        hub_pause_requested.clear()
+
+                if checkpoint_blocked:
+                    break
+                continue
+
             item = next(
                 (
                     candidate

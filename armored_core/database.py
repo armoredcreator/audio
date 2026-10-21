@@ -635,13 +635,15 @@ class Database:
         rows = self.conn.execute(
             "SELECT content_id FROM items WHERE "
             "(state=? AND affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'') "
-            "OR state IN (?, ?, ?, ?) "
+            "OR state IN (?, ?, ?, ?, ?, ?) "
             "OR (state=? AND cleanup_completed=0) "
             "ORDER BY source_id, COALESCE(topic_id, 0), "
             "CAST(telegram_message_id AS INTEGER), created_at, content_id",
             (
                 State.RECEIVED.value,
                 State.IA.value,
+                State.SPEECH.value,
+                State.STUDIO_BATCH.value,
                 State.STUDIO.value,
                 State.PUBLISHING.value,
                 State.RECOVERY.value,

@@ -224,3 +224,152 @@ def test_atomic_speech_studio_batch_state_commit_rolls_back_partial_transition(t
     assert db.get(first).result_path is None
     assert db.get(second).state is State.RECEIVED
     db.close()
+
+
+def test_catch_up_completes_ia_for_entire_batch_before_speech_studio_and_hub(
+    tmp_path, monkeypatch
+):
+    import asyncio
+
+    events = []
+    storage = Storage(tmp_path)
+    db = Database(storage.database / "core.sqlite3")
+    for index in range(1, 4):
+        monkeypatch.setenv(f"ARMORED_SOURCE_{index}_ID", f"source{index}")
+
+    content_ids = []
+    sync = SyncService(db, storage)
+    for index, source_id in enumerate(("source1", "source2", "source3"), start=1):
+        source = tmp_path / "fixtures" / f"original-{index}.mp4"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(f"immutable-original-{index}".encode())
+        item_id = sync.ingest(
+            source,
+            str(100 + index),
+            source_id=source_id,
+            original_url=f"https://shopee.com.br/product/{100 + index}",
+        )
+        db.set_vision(
+            item_id,
+            f"Produto {index}",
+            f"https://affiliate.invalid/{100 + index}",
+            ia_context={
+                "productName": f"Produto {index}",
+                "shopId": "700",
+                "itemId": str(800 + index),
+            },
+        )
+        content_ids.append(str(item_id))
+
+    class Source:
+        sources = tuple(SimpleNamespace(source_id=f"source{i}") for i in range(1, 4))
+        historical_scan_exhausted = False
+        historical_materialization_failed = False
+
+        async def iter_historical_candidates_async(self):
+            self.historical_scan_exhausted = True
+            if False:
+                yield None
+
+        def mark_ingested(self, _message_id):
+            pass
+
+        def mark_materialization_failed(self):
+            self.historical_materialization_failed = True
+
+        def complete_historical_sync(self):
+            db.complete_historical_sync()
+
+    class TraceIA:
+        def generate_caption(self, context):
+            name = str((context or {}).get("productName", "unknown"))
+            events.append(f"ia:{name}")
+            return f"{name} bonito 🧡 #casa"
+
+    class TraceSpeech:
+        intelligence = SimpleNamespace(preflight=lambda: events.append("speech-preflight"))
+
+        def analyze(self, video_path):
+            events.append(f"speech-analyze:{Path(video_path).name}")
+            return SpeechDecision(
+                audio_class=AudioClass.MUSIC_ONLY,
+                language=None,
+                speech_detected=False,
+                music_detected=True,
+                confidence=0.99,
+                rationale="deterministic catch-up batch test",
+            )
+
+        def prepare_wav(self, _video_path, wav_path, _decision):
+            events.append("speech-prepare")
+            Path(wav_path).write_bytes(b"speech-sidecar")
+
+    class TracePublisher(_Publisher):
+        def publish_once(self, item):
+            events.append(f"hub:{item.content_id}")
+            return super().publish_once(item)
+
+    coordinator = Coordinator(
+        db,
+        storage,
+        _Vision(),
+        _LegacyStudioMustNotRun(),
+        TracePublisher(db, events),
+        source=Source(),
+        ia=TraceIA(),
+    )
+    coordinator._speech_processor_override = TraceSpeech()
+
+    def studio_batch_runner(*, root, manifest_path, speech_database, report_path, copy_only, storage_root):
+        manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+        assert manifest["expected_item_count"] == 3
+        assert len(manifest["items"]) == 3
+        assert all(row["state"] == "SPEECH" for row in manifest["items"])
+        events.append("studio-start")
+        target_storage = Storage(Path(root), storage_root=Path(storage_root))
+        processed = []
+        for row in manifest["items"]:
+            original = Path(row["original_path"])
+            output = target_storage.result(
+                row["content_id"], row["affiliate_url"], row["affiliate_name"],
+                source_id=row["source_id"],
+            )
+            output.write_bytes(original.read_bytes() + b"-rendered")
+            events.append(f"studio-item:{row['content_id']}")
+            processed.append({
+                "source_id": row["source_id"],
+                "item_id": row["telegram_message_id"],
+                "output_path": str(output.resolve()),
+                "original_sha256_before": row["original_sha256"],
+            })
+        return {
+            "status": "SUCCESS",
+            "originals_intact": True,
+            "processed": processed,
+            "report_path": str(report_path),
+        }
+
+    coordinator._speech_studio_batch_runner_override = studio_batch_runner
+    monkeypatch.setenv("ARMORED_IA_ENABLED", "1")
+    monkeypatch.setenv("ARMORED_IA_CAPTION_ENABLED", "1")
+    monkeypatch.setenv("ARMORED_STUDIO_INTRO", "0")
+
+    try:
+        processed = asyncio.run(coordinator._run_staged_catch_up_async())
+
+        assert set(processed) >= set(content_ids)
+        ia_indexes = [i for i, event in enumerate(events) if event.startswith("ia:")]
+        speech_indexes = [i for i, event in enumerate(events) if event.startswith("speech-")]
+        studio_indexes = [i for i, event in enumerate(events) if event.startswith("studio-")]
+        hub_indexes = [i for i, event in enumerate(events) if event.startswith("hub:")]
+        assert len(ia_indexes) == 3
+        assert speech_indexes and studio_indexes and len(hub_indexes) == 3
+        assert max(ia_indexes) < min(speech_indexes)
+        assert max(speech_indexes) < min(studio_indexes)
+        assert max(studio_indexes) < min(hub_indexes)
+        assert all(db.get(item_id).state is State.PUBLISHED for item_id in content_ids)
+        assert all(db.get(item_id).cleanup_completed for item_id in content_ids)
+        assert all(db.get(item_id).original_path.is_file() for item_id in content_ids)
+        assert db.historical_complete() is True
+    finally:
+        coordinator.close()
