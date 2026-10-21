@@ -20,6 +20,11 @@ on:
   pull_request:
     paths:
       - "ArmoredSpeech/**"
+      - "ArmoredSync/**"
+      - "ArmoredVision/**"
+      - "ArmoredStock/**"
+      - "ArmoredIA/**"
+      - "tests/**"
       - "ArmoredStudio/**"
       - "armored_core/**"
       - "scripts/**"
