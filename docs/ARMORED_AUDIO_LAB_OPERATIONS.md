@@ -933,8 +933,8 @@ Esta seção complementa e prevalece sobre afirmações antigas da seção 15 qu
 
 - Branch isolada: `fix/audit-blockers-sync-preservation-20261021`.
 - PR em rascunho: [#15 — Preserve cross-source duplicate identity in SQLite](https://github.com/armoredcreator/audio/pull/15).
-- Commit validado: `65b78731557327a441bd91f7f189e9e9ea7ff424`.
-- GitHub Actions: **335 passed, 1 skipped** no workflow de testes isolados; [execução de validação](https://github.com/armoredcreator/audio/actions/runs/39653023623).
+- Commit de código/testes validado: `adf722290923c2f5cab61abe7591478b246c59e1` (inclui os testes adicionais descritos abaixo).
+- GitHub Actions: **337 passed, 1 skipped** e `compileall` passou em Python 3.11.9; [execução de validação](https://github.com/armoredcreator/audio/actions/runs/39654219511).
 
 O pre-check do Sync não descarta mais silenciosamente uma URL encontrada em outra fonte. O candidato segue para `Database.reserve_item()`, que grava a identidade (fonte + mensagem), estado `DUPLICATE`, proprietário `duplicate_of_content_id` e evento em `state_events`. O teste de regressão cobre a reserva durável. A mudança não toca banco operacional, checkpoints locais, Telegram, Shopee ou publicação. Recovery também passou a remover links simbólicos derivados sem atravessar seus destinos, preservando o caminho original e o alvo resolvido.
 
@@ -944,13 +944,13 @@ O pre-check do Sync não descarta mais silenciosamente uma URL encontrada em out
 
 | Área | Estado | Evidência / lacuna |
 |---|---|---|
-| Sync — URL repetida entre fontes | **VALIDADO EM CI** | Teste regressivo de candidato cross-source + reserva durável SQLite; 332 testes passaram, 1 foi ignorado. |
+| Sync — URL repetida entre fontes | **VALIDADO EM CI** | Teste regressivo de candidato cross-source + reserva durável SQLite; suíte atual: 337 passaram, 1 ignorado. |
 | SQLite — identidade e evento de duplicata | **VALIDADO EM CI** | `reserve_item()` grava a linha `DUPLICATE`, proprietário e `state_events`; teste de regressão. |
 | Vision — identidade Shopee canônica | **PARCIAL** | Resolver e commit transacional têm testes; ainda falta comprovação E2E de todos os links curtos/redirecionamentos e dos três sources com serviços reais. |
 | Stock — original e caminho canônico | **PARCIAL** | Guardas de raiz e hash; novo teste injeta falha SQLite após movimentação e comprova que a repetição reconcilia o caminho sem alterar bytes. Falta validação com originais históricos reais. |
 | IA — política de legenda | **VALIDADO POR TESTES DE POLÍTICA** | Política central e testes; inferência real Gemini/Ollama não é provada pela suíte isolada. |
-| Speech → Studio v5 | **PARCIAL** | Contrato e runner têm testes isolados; CI Linux não prova o runtime Windows RVC Melody nem aprovação subjetiva de áudio renderizado. |
-| Recovery — preservação do ORIGINAL | **PARCIAL** | CI cobre preservação do caminho original, symlink do próprio ORIGINAL e remoção de symlink para diretório externo sem tocar no alvo. Permanecem pendentes falhas de limpeza/recuperação e validação no Windows real. |
+| Speech → Studio v5 | **PARCIAL** | Contrato e runner têm testes isolados; relatório de Studio incompleto agora é rejeitado pelo Coordinator sem liberar Hub. CI Linux não prova o runtime Windows RVC Melody nem qualidade auditiva real. |
+| Recovery — preservação do ORIGINAL | **PARCIAL** | CI cobre preservação do caminho original, symlink do próprio ORIGINAL e remoção de symlink para diretório externo sem tocar no alvo. Stock também cobre falha no reparo do caminho SQLite após movimentação. Permanecem pendentes outros modos de falha e validação no Windows real. |
 | Dependências órfãs / ambiente único | **PENDENTE** | `scripts/audit_shared_dependencies.ps1` ainda precisa ser executado no `.venv` Windows real; o conflito documental de NumPy entre `requirements-analysis.txt` e `requirements.txt` requer resolução explícita por ambiente. |
 | E2E real Sync → Hub | **NÃO VALIDADO** | Não foi executado nesta etapa; não inferir aprovação a partir de fixtures ou mocks. |
 
@@ -959,7 +959,13 @@ O pre-check do Sync não descarta mais silenciosamente uma URL encontrada em out
 1. Não mesclar o PR #15 antes de revisar o diff e seus checks no GitHub.
 2. Resolver e documentar os requisitos NumPy por ambiente antes de qualquer instalação; não combinar cegamente os dois arquivos de requirements.
 3. Executar a auditoria de imports/dependências no Windows e registrar o CSV real, sem instalar/remover pacotes durante a auditoria.
-4. Adicionar testes de falha para a migração de caminho do Stock e para preservação do ORIGINAL na Recovery, incluindo symlink.
+4. Os testes de falha para migração de caminho do Stock e symlinks na Recovery já foram adicionados e passam no CI. Continuar a revisão dos demais modos de falha de Recovery em ambiente Windows.
 5. Confirmar a localização/migração do modelo Melody e dos assets reais no caminho canônico de Speech; não presumir que o modelo copiado para o caminho legado foi migrado.
 6. Fazer E2E de mídia real somente no laboratório isolado e com os fixtures já existentes; nenhuma coleta ou publicação operacional está autorizada por esta auditoria.
+
+### 16.4 Novos gates de falha Speech → Studio
+
+A suíte agora cobre duas condições adicionais: (a) o Coordinator rejeita um relatório que declare `SUCCESS` mas omita itens do lote, persiste `RECOVERY` e não chama Hub; (b) o runner Studio detecta quando o hash do ORIGINAL muda durante o render, registra `FAILED`, `originals_intact=false` e `changed_originals`, e lança erro. O segundo teste é uma injeção deliberada de falha: comprova a detecção e o bloqueio do sucesso, não afirma que um arquivo já modificado possa ser restaurado automaticamente. O runner de produção real já compara hashes antes/depois e não deve escrever no ORIGINAL.
+
+A execução CI do commit `adf722290923c2f5cab61abe7591478b246c59e1` terminou com 337 testes aprovados, 1 ignorado e `compileall` aprovado. Isso é evidência automatizada Linux/Python 3.11.9, não fechamento dos gates locais de Windows, assets RVC ou E2E real.
 
