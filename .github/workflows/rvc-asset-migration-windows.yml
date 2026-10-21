@@ -1,0 +1,27 @@
+name: RVC asset migration safety (Windows)
+
+on:
+  pull_request:
+    paths:
+      - "scripts/migrate_rvc_assets_to_speech.ps1"
+      - "scripts/test_migrate_rvc_assets_to_speech.ps1"
+      - ".github/workflows/rvc-asset-migration-windows.yml"
+  push:
+    branches:
+      - "fix/audit-blockers-sync-preservation-20261021"
+    paths:
+      - "scripts/migrate_rvc_assets_to_speech.ps1"
+      - "scripts/test_migrate_rvc_assets_to_speech.ps1"
+      - ".github/workflows/rvc-asset-migration-windows.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  migration-script:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise preview and apply using disposable synthetic fixtures
+        shell: pwsh
+        run: ./scripts/test_migrate_rvc_assets_to_speech.ps1
