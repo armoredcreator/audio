@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 # This deployment handles Brazilian Shopee links. Match the hostname boundary,
 # not a substring: "notshopee.com.br" and "shopee.com.br.attacker.test" are
 # not Shopee hosts. Shopee's short-link domain is included for redirects.
-SHOPEE_HOSTS = ("shopee.com.br", "shopee.ee")
+SHOPEE_HOSTS = ("shopee.com.br", "shope.ee")
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 MAX_REDIRECTS = 10
 
