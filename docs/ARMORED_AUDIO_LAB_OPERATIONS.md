@@ -933,8 +933,8 @@ Esta seção complementa e prevalece sobre afirmações antigas da seção 15 qu
 
 - Branch isolada: `fix/audit-blockers-sync-preservation-20261021`.
 - PR em rascunho: [#15 — Preserve cross-source duplicate identity in SQLite](https://github.com/armoredcreator/audio/pull/15).
-- Commit validado: `d908ddb6a0ee1a21a7e735aacd45b2b788c5a1e8`.
-- GitHub Actions: **332 passed, 1 skipped** no workflow de testes isolados; [execução de validação](https://github.com/armoredcreator/audio/actions/runs/39652066340).
+- Commit validado: `b9690834e4a1221a2eb579ddf0b7a3cbae9db87a`.
+- GitHub Actions: **333 passed, 1 skipped** no workflow de testes isolados; [execução de validação](https://github.com/armoredcreator/audio/actions/runs/39652420592).
 
 O pre-check do Sync não descarta mais silenciosamente uma URL encontrada em outra fonte. O candidato segue para `Database.reserve_item()`, que grava a identidade (fonte + mensagem), estado `DUPLICATE`, proprietário `duplicate_of_content_id` e evento em `state_events`. O teste de regressão cobre a reserva durável. A mudança não toca banco operacional, checkpoints locais, Telegram, Shopee ou publicação.
 
@@ -947,7 +947,7 @@ O pre-check do Sync não descarta mais silenciosamente uma URL encontrada em out
 | Sync — URL repetida entre fontes | **VALIDADO EM CI** | Teste regressivo de candidato cross-source + reserva durável SQLite; 332 testes passaram, 1 foi ignorado. |
 | SQLite — identidade e evento de duplicata | **VALIDADO EM CI** | `reserve_item()` grava a linha `DUPLICATE`, proprietário e `state_events`; teste de regressão. |
 | Vision — identidade Shopee canônica | **PARCIAL** | Resolver e commit transacional têm testes; ainda falta comprovação E2E de todos os links curtos/redirecionamentos e dos três sources com serviços reais. |
-| Stock — original e caminho canônico | **PARCIAL** | Há guardas de raiz e hash e testes unitários; ainda falta teste de falha entre movimentação do arquivo e atualização SQLite, além de validação com originais históricos reais. |
+| Stock — original e caminho canônico | **PARCIAL** | Guardas de raiz e hash; novo teste injeta falha SQLite após movimentação e comprova que a repetição reconcilia o caminho sem alterar bytes. Falta validação com originais históricos reais. |
 | IA — política de legenda | **VALIDADO POR TESTES DE POLÍTICA** | Política central e testes; inferência real Gemini/Ollama não é provada pela suíte isolada. |
 | Speech → Studio v5 | **PARCIAL** | Contrato e runner têm testes isolados; CI Linux não prova o runtime Windows RVC Melody nem aprovação subjetiva de áudio renderizado. |
 | Recovery — preservação do ORIGINAL | **PARCIAL** | Testes cobrem cenários de recuperação e integridade; faltam casos dedicados a symlinks e falhas de remoção/recuperação. |
