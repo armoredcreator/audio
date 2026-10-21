@@ -120,3 +120,67 @@ def test_seed_does_not_treat_sha256_shape_as_integrity_evidence(tmp_path):
         assert db.get("source-seed-test_later").state is State.RECEIVED
     finally:
         db.close()
+
+
+def test_seed_does_not_treat_text_false_publication_flag_as_confirmed(tmp_path):
+    db = Database(tmp_path / "false-publication-history.sqlite3")
+    try:
+        earlier = tmp_path / "earlier-original.mp4"
+        later = tmp_path / "later-original.mp4"
+        earlier.write_bytes(b"earlier")
+        later.write_bytes(b"later")
+        _insert_approved(
+            db, content_id="source-seed-test_earlier-pub", message_id="301",
+            state=State.RECEIVED, path=earlier, sha=None, shop_id="901",
+            item_id="902", created_at="2026-01-01T00:00:00Z",
+        )
+        _insert_approved(
+            db, content_id="source-seed-test_later-pub", message_id="302",
+            state=State.RECEIVED, path=later, sha=None, shop_id="901",
+            item_id="902", created_at="2026-02-01T00:00:00Z",
+        )
+        db.conn.execute(
+            "INSERT INTO publications (content_id, idempotency_key, confirmed, verification_status) "
+            "VALUES (?, ?, ?, 'PENDING')",
+            ("source-seed-test_later-pub", "seed-test-false-text", "false"),
+        )
+        db.conn.commit()
+
+        rows = _seed(db)
+        assert [(row["product_key"], row["owner_content_id"]) for row in rows] == [
+            ("901:902", "source-seed-test_earlier-pub")
+        ]
+    finally:
+        db.close()
+
+
+def test_seed_resolves_relative_original_paths_from_database_root_not_cwd(tmp_path, monkeypatch):
+    lab_root = tmp_path / "lab"
+    db_path = lab_root / "storage" / "database" / "history.sqlite3"
+    db = Database(db_path)
+    try:
+        missing = lab_root / "missing-original.mp4"
+        relative_original = lab_root / "Videos" / "original.mp4"
+        relative_original.parent.mkdir(parents=True)
+        relative_original.write_bytes(b"relative original")
+
+        _insert_approved(
+            db, content_id="source-seed-test_missing-relative", message_id="401",
+            state=State.RECEIVED, path=missing, sha=None, shop_id="903",
+            item_id="904", created_at="2026-01-01T00:00:00Z",
+        )
+        _insert_approved(
+            db, content_id="source-seed-test_present-relative", message_id="402",
+            state=State.RECEIVED, path=Path("Videos/original.mp4"), sha=None, shop_id="903",
+            item_id="904", created_at="2026-02-01T00:00:00Z",
+        )
+        unrelated_cwd = tmp_path / "unrelated-cwd"
+        unrelated_cwd.mkdir()
+        monkeypatch.chdir(unrelated_cwd)
+
+        rows = _seed(db)
+        assert [(row["product_key"], row["owner_content_id"]) for row in rows] == [
+            ("903:904", "source-seed-test_present-relative")
+        ]
+    finally:
+        db.close()

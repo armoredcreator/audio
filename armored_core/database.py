@@ -732,6 +732,29 @@ class Database:
         if seeded:
             return
 
+        def affirmative_flag(value: object) -> bool:
+            """Parse SQLite legacy booleans explicitly; never treat 'false' as true."""
+            if value is True:
+                return True
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return value == 1
+            if isinstance(value, str):
+                return value.strip().casefold() in {"1", "true", "yes", "y", "confirmed"}
+            return False
+
+        # Relative historical paths must not change rank when the process CWD
+        # changes. A canonical DB path is <project>/storage/database/file.sqlite;
+        # tiny test/standalone databases use their own parent as the anchor.
+        database_path = Path(self.path).expanduser().resolve()
+        db_parent = database_path.parent
+        if (
+            db_parent.name.casefold() == "database"
+            and db_parent.parent.name.casefold() == "storage"
+        ):
+            relative_path_base = db_parent.parent.parent
+        else:
+            relative_path_base = db_parent
+
         publication_evidence: set[str] = set()
         publication_columns = {
             str(row[1]) for row in self.conn.execute("PRAGMA table_info(publications)").fetchall()
@@ -752,7 +775,7 @@ class Database:
             ).fetchall():
                 status = str(publication["verification_status"] or "").strip().upper()
                 if (
-                    bool(publication["confirmed"])
+                    affirmative_flag(publication["confirmed"])
                     or bool(str(publication["published_message_id"] or "").strip())
                     or status in {"CONFIRMED", "VERIFIED", "PUBLISHED", "DELIVERED"}
                 ):
@@ -788,7 +811,7 @@ class Database:
             try:
                 path = Path(raw).expanduser()
                 if not path.is_absolute():
-                    path = Path.cwd() / path
+                    path = relative_path_base / path
                 return path.is_file()
             except (OSError, ValueError, RuntimeError):
                 return False
