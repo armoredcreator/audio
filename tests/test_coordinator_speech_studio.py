@@ -398,3 +398,38 @@ def test_recovery_finishes_speech_studio_but_leaves_hub_for_coordinator_loop(
     assert db.get(item_id).state is State.PUBLISHED
     assert any(event.startswith("hub") for event in events)
     db.close()
+
+
+def test_coordinator_rejects_success_report_with_missing_item_before_hub(
+    tmp_path, monkeypatch
+):
+    events = []
+    coordinator, _storage, db, item_id, original_bytes = _fixture(tmp_path, events)
+    monkeypatch.setenv("ARMORED_IA_ENABLED", "1")
+    monkeypatch.setenv("ARMORED_IA_CAPTION_ENABLED", "1")
+    _install_test_speech_studio(coordinator, events, monkeypatch)
+
+    from ArmoredSpeech import studio_batch_runner
+
+    def incomplete_success_report(**_kwargs):
+        events.append("studio")
+        return {
+            "status": "SUCCESS",
+            "originals_intact": True,
+            "processed": [],
+        }
+
+    monkeypatch.setattr(
+        studio_batch_runner, "run_complete_batch", incomplete_success_report
+    )
+
+    with pytest.raises(RuntimeError, match="exactly the requested batch"):
+        coordinator.run(item_id)
+
+    current = db.get(item_id)
+    assert current.state is State.RECOVERY
+    assert "studio" in events
+    assert "hub" not in events
+    assert current.original_path.read_bytes() == original_bytes
+    assert db.last_state_event(item_id)["reason"] == "speech-studio-v5-failed:RuntimeError"
+    db.close()

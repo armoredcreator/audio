@@ -10,14 +10,15 @@
 **Status:** validação isolada da pipeline concluída; promoção para
 produção ainda não autorizada.
 
-> Este documento consolida decisões de arquitetura, responsabilidades
-> dos módulos, unificações, correções, evidências dos testes e limites
-> de liberação. É a referência operacional única para continuar o
-> trabalho sem perder decisões entre conversas. Ele não substitui os
-> contratos técnicos específicos, mas deve apontar para eles e registrar
-> as decisões globais. Os resultados descritos são os que foram
-> observados/relatados no ambiente local; este documento não afirma que
-> o assistente executou comandos na máquina do usuário.
+> Este documento consolida decisões de arquitetura, responsabilidades,
+> unificações, correções e evidências históricas. Para operação e estado
+> atual, a referência canônica é
+> [ARMORED_AUDIO_LAB_OPERATIONS.md](ARMORED_AUDIO_LAB_OPERATIONS.md).
+> Este documento não deve manter um estado operacional divergente: resultados
+> antigos abaixo são evidência histórica e precisam ser lidos junto da matriz
+> atual do manual canônico. Os resultados locais citados foram relatados no
+> ambiente do usuário; não significam que o assistente executou esses comandos
+> na máquina do usuário.
 
 ------------------------------------------------------------------------
 

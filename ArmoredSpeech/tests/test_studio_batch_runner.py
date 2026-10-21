@@ -463,3 +463,51 @@ def test_real_runner_blocks_all_studio_calls_if_any_v5_package_is_invalid(tmp_pa
             source_id=item["source_id"],
         ))
         assert not output.exists()
+
+
+def test_runner_fails_closed_and_records_original_mutation(tmp_path, monkeypatch):
+    manifest_path, database, _ = _fixture(tmp_path, item_count=1)
+    report_path = tmp_path / "storage" / "validation" / "original-mutated-report.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    original = Path(manifest["items"][0]["original_path"])
+    before = _sha(original)
+    events = []
+
+    def fake_prepare(items, **kwargs):
+        return [(item, _fake_v5_package(tmp_path, item)) for item in items]
+
+    class MutatingStudio:
+        def analyze_visual(self, item):
+            return SimpleNamespace(plan={"crop_final": None, "video_start": 0.0, "acoes": []})
+
+        def process(self, item, *, speech_payload=None, visual_analysis=None):
+            events.append("studio-render")
+            Path(item.original_path).write_bytes(b"unexpectedly-mutated-original")
+            destination = runner_module.Storage(tmp_path).result(
+                item.content_id,
+                item.affiliate_url,
+                item.affiliate_name,
+                source_id=item.source_id,
+            )
+            destination.write_bytes(b"synthetic rendered video")
+            return SimpleNamespace(result_path=destination)
+
+    monkeypatch.setattr(runner_module, "prepare_audio_packages_for_items", fake_prepare)
+    monkeypatch.setattr(runner_module, "build_studio", lambda _root, **_kwargs: MutatingStudio())
+
+    with pytest.raises(RuntimeError, match="Hash de original mudou durante Studio"):
+        run_complete_batch(
+            root=tmp_path,
+            manifest_path=manifest_path,
+            speech_database=database,
+            report_path=report_path,
+            copy_only=False,
+        )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    identity = (manifest["items"][0]["source_id"], manifest["items"][0]["telegram_message_id"])
+    assert report["status"] == "FAILED"
+    assert report["originals_intact"] is False
+    assert report["changed_originals"] == [list(identity)]
+    assert events == ["studio-render"]
+    assert _sha(original) != before

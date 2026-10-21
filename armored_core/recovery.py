@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 from typing import Callable
 
 from .database import Database
@@ -38,10 +39,20 @@ class Recovery:
             raise RuntimeError("recovery-workspace-mismatch")
 
         if workspace.is_dir():
+            original_entry = Path(item.original_path)
+            if not original_entry.is_absolute():
+                original_entry = original_entry.resolve()
+            original_entry = original_entry.absolute()
             for path in list(workspace.iterdir()):
-                if path.resolve() == original:
+                # Preserve both the stored ORIGINAL entry and its resolved target.
+                # The stored entry itself may be a symlink to the immutable file.
+                if path.absolute() == original_entry or path.resolve() == original:
                     continue
-                if path.is_dir():
+                # Never recurse through a symlink. Unlink only the link itself,
+                # including links to directories outside the workspace.
+                if path.is_symlink():
+                    path.unlink()
+                elif path.is_dir():
                     shutil.rmtree(path)
                 else:
                     path.unlink()

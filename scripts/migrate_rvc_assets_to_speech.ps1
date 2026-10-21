@@ -32,6 +32,11 @@ function Get-FileRecords([string]$BasePath) {
     }
     $base = (Resolve-Path -LiteralPath $BasePath).Path.TrimEnd('\')
     foreach ($file in Get-ChildItem -LiteralPath $base -File -Recurse -Force) {
+        # The migration contract permits only model weights and FAISS indexes.
+        # Ignore unrelated files (logs, caches, notes, exports) in the legacy tree.
+        if ($file.Extension -notin @(".pth", ".index")) {
+            continue
+        }
         $relative = $file.FullName.Substring($base.Length).TrimStart('\')
         $records += [pscustomobject]@{
             RelativePath = $relative

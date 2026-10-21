@@ -319,12 +319,15 @@ class TelegramSource:
             (str(original_url),),
         ).fetchall()
 
-        # Raw URL identity is global: another Telegram source must not create
-        # a second durable row for a URL that is already represented.
+        # Cross-source identity must be recorded in SQLite as DUPLICATE.
+        # Returning True here would discard the source/message identity before
+        # Database.reserve_item() can create the durable duplicate row/event.
+        # Let cross-source candidates reach reservation; same-source rediscovery
+        # is still suppressed below when an existing row safely represents it.
         if not rows:
             return False
         if any(str(row["source_id"] or "telegram") != current_source_id for row in rows):
-            return True
+            return False
 
         recoverable = False
         represented = False

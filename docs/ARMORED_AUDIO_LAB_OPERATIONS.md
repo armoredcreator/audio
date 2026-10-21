@@ -921,3 +921,58 @@ Quando uma reserva existente está em `WAITING_VISION` sem URL e uma nova passag
 
 O código de `ArmoredSpeech/rvc_engine.py` já define `ArmoredSpeech/runtime/rvc/models` como caminho canônico, e o WAV de efeito fica em `ArmoredSpeech/assets/efeitosonoro.wav`. Os arquivos são binários locais ignorados pelo Git; por isso, a migração não os transporta pelo repositório. O script `scripts/migrate_rvc_assets_to_speech.ps1` copia apenas modelos/índices RVC e o efeito sonoro canônico. Ele não copia o ambiente Python legado do Studio, banner, credenciais, bases, vídeos ou outputs; não remove arquivos do Studio e não sobrescreve destinos divergentes. Primeiro execute sem `-Apply` para auditar plano/conflitos e hashes; só use `-Apply` depois de revisar o relatório.
 
+
+
+
+
+---
+
+## 16. Atualização da auditoria integrada — 21/10/2026
+
+Esta seção complementa e prevalece sobre afirmações antigas da seção 15 que diziam que nenhuma alteração havia sido feita no código. O trabalho desta etapa está isolado no repositório `armoredcreator/audio`; não foi promovido para a aplicação operacional `armoredcreator/armoredcreator`.
+
+### 16.1 Correção de Sync implementada e validada em CI
+
+- Branch isolada: `fix/audit-blockers-sync-preservation-20261021`.
+- PR em rascunho: [#15 — Preserve cross-source duplicate identity in SQLite](https://github.com/armoredcreator/audio/pull/15).
+- Commit de código/testes validado: `adf722290923c2f5cab61abe7591478b246c59e1` (inclui os testes adicionais descritos abaixo).
+- GitHub Actions: **337 passed, 1 skipped** e `compileall` passou em Python 3.11.9; [execução de validação](https://github.com/armoredcreator/audio/actions/runs/39654219511).
+
+O pre-check do Sync não descarta mais silenciosamente uma URL encontrada em outra fonte. O candidato segue para `Database.reserve_item()`, que grava a identidade (fonte + mensagem), estado `DUPLICATE`, proprietário `duplicate_of_content_id` e evento em `state_events`. O teste de regressão cobre a reserva durável. A mudança não toca banco operacional, checkpoints locais, Telegram, Shopee ou publicação. Recovery também passou a remover links simbólicos derivados sem atravessar seus destinos, preservando o caminho original e o alvo resolvido.
+
+**Limite:** o PR continua em rascunho e não foi mesclado. A validação é a suíte de CI do laboratório, não um teste contra Telegram real nem uma auditoria de base histórica de produção.
+
+### 16.2 Matriz atual de evidências
+
+| Área | Estado | Evidência / lacuna |
+|---|---|---|
+| Sync — URL repetida entre fontes | **VALIDADO EM CI** | Teste regressivo de candidato cross-source + reserva durável SQLite; suíte atual: 337 passaram, 1 ignorado. |
+| SQLite — identidade e evento de duplicata | **VALIDADO EM CI** | `reserve_item()` grava a linha `DUPLICATE`, proprietário e `state_events`; teste de regressão. |
+| Vision — identidade Shopee canônica | **PARCIAL** | Resolver e commit transacional têm testes; ainda falta comprovação E2E de todos os links curtos/redirecionamentos e dos três sources com serviços reais. |
+| Stock — original e caminho canônico | **PARCIAL** | Guardas de raiz e hash; novo teste injeta falha SQLite após movimentação e comprova que a repetição reconcilia o caminho sem alterar bytes. Falta validação com originais históricos reais. |
+| IA — política de legenda | **VALIDADO POR TESTES DE POLÍTICA** | Política central e testes; inferência real Gemini/Ollama não é provada pela suíte isolada. |
+| Speech → Studio v5 | **PARCIAL** | Contrato e runner têm testes isolados; relatório de Studio incompleto agora é rejeitado pelo Coordinator sem liberar Hub. CI Linux não prova o runtime Windows RVC Melody nem qualidade auditiva real. |
+| Recovery — preservação do ORIGINAL | **PARCIAL** | CI cobre preservação do caminho original, symlink do próprio ORIGINAL e remoção de symlink para diretório externo sem tocar no alvo. Stock também cobre falha no reparo do caminho SQLite após movimentação. Permanecem pendentes outros modos de falha e validação no Windows real. |
+| Dependências órfãs / ambiente único | **PENDENTE** | `scripts/audit_shared_dependencies.ps1` ainda precisa ser executado no `.venv` Windows real; o conflito documental de NumPy entre `requirements-analysis.txt` e `requirements.txt` requer resolução explícita por ambiente. |
+| E2E real Sync → Hub | **NÃO VALIDADO** | Não foi executado nesta etapa; não inferir aprovação a partir de fixtures ou mocks. |
+
+### 16.3 Gates que permanecem obrigatórios
+
+1. Não mesclar o PR #15 antes de revisar o diff e seus checks no GitHub.
+2. Resolver e documentar os requisitos NumPy por ambiente antes de qualquer instalação; não combinar cegamente os dois arquivos de requirements.
+3. Executar a auditoria de imports/dependências no Windows e registrar o CSV real, sem instalar/remover pacotes durante a auditoria.
+4. Os testes de falha para migração de caminho do Stock e symlinks na Recovery já foram adicionados e passam no CI. Continuar a revisão dos demais modos de falha de Recovery em ambiente Windows.
+5. Confirmar a localização/migração do modelo Melody e dos assets reais no caminho canônico de Speech; não presumir que o modelo copiado para o caminho legado foi migrado.
+6. Fazer E2E de mídia real somente no laboratório isolado e com os fixtures já existentes; nenhuma coleta ou publicação operacional está autorizada por esta auditoria.
+
+### 16.4 Novos gates de falha Speech → Studio
+
+A suíte agora cobre duas condições adicionais: (a) o Coordinator rejeita um relatório que declare `SUCCESS` mas omita itens do lote, persiste `RECOVERY` e não chama Hub; (b) o runner Studio detecta quando o hash do ORIGINAL muda durante o render, registra `FAILED`, `originals_intact=false` e `changed_originals`, e lança erro. O segundo teste é uma injeção deliberada de falha: comprova a detecção e o bloqueio do sucesso, não afirma que um arquivo já modificado possa ser restaurado automaticamente. O runner de produção real já compara hashes antes/depois e não deve escrever no ORIGINAL.
+
+A execução CI do commit `adf722290923c2f5cab61abe7591478b246c59e1` terminou com 337 testes aprovados, 1 ignorado e `compileall` aprovado. Isso é evidência automatizada Linux/Python 3.11.9, não fechamento dos gates locais de Windows, assets RVC ou E2E real.
+
+#### 16.5 Segurança do script de migração dos assets RVC
+
+A auditoria do script encontrou um risco de escopo: a versão anterior enumerava todos os arquivos dentro de `ArmoredStudio/runtime/rvc/models`, apesar de a migração autorizar somente pesos e índices. O script agora considera exclusivamente extensões `.pth` e `.index`; caches, notas e outros artefatos não entram no plano nem são copiados.
+
+Foi adicionado um teste PowerShell executado em runner Windows com fixture descartável sintética. O teste cobre preview sem cópia, apply, igualdade SHA-256 dos pesos/índice/efeito, preservação das fontes e exclusão de arquivos não autorizados. A execução [RVC asset migration safety (Windows)](https://github.com/armoredcreator/audio/actions/runs/39654593363) registrou `RVC_ASSET_MIGRATION_SCRIPT_TEST=PASS`. Isso valida o comportamento do script com arquivos sintéticos, não confirma que os assets reais do usuário já foram migrados ou que o runtime Melody funciona.
