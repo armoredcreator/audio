@@ -933,10 +933,10 @@ Esta seção complementa e prevalece sobre afirmações antigas da seção 15 qu
 
 - Branch isolada: `fix/audit-blockers-sync-preservation-20261021`.
 - PR em rascunho: [#15 — Preserve cross-source duplicate identity in SQLite](https://github.com/armoredcreator/audio/pull/15).
-- Commit validado: `b9690834e4a1221a2eb579ddf0b7a3cbae9db87a`.
-- GitHub Actions: **333 passed, 1 skipped** no workflow de testes isolados; [execução de validação](https://github.com/armoredcreator/audio/actions/runs/39652420592).
+- Commit validado: `65b78731557327a441bd91f7f189e9e9ea7ff424`.
+- GitHub Actions: **335 passed, 1 skipped** no workflow de testes isolados; [execução de validação](https://github.com/armoredcreator/audio/actions/runs/39653023623).
 
-O pre-check do Sync não descarta mais silenciosamente uma URL encontrada em outra fonte. O candidato segue para `Database.reserve_item()`, que grava a identidade (fonte + mensagem), estado `DUPLICATE`, proprietário `duplicate_of_content_id` e evento em `state_events`. O teste de regressão cobre a reserva durável. A mudança não toca banco operacional, checkpoints locais, Telegram, Shopee ou publicação.
+O pre-check do Sync não descarta mais silenciosamente uma URL encontrada em outra fonte. O candidato segue para `Database.reserve_item()`, que grava a identidade (fonte + mensagem), estado `DUPLICATE`, proprietário `duplicate_of_content_id` e evento em `state_events`. O teste de regressão cobre a reserva durável. A mudança não toca banco operacional, checkpoints locais, Telegram, Shopee ou publicação. Recovery também passou a remover links simbólicos derivados sem atravessar seus destinos, preservando o caminho original e o alvo resolvido.
 
 **Limite:** o PR continua em rascunho e não foi mesclado. A validação é a suíte de CI do laboratório, não um teste contra Telegram real nem uma auditoria de base histórica de produção.
 
@@ -950,7 +950,7 @@ O pre-check do Sync não descarta mais silenciosamente uma URL encontrada em out
 | Stock — original e caminho canônico | **PARCIAL** | Guardas de raiz e hash; novo teste injeta falha SQLite após movimentação e comprova que a repetição reconcilia o caminho sem alterar bytes. Falta validação com originais históricos reais. |
 | IA — política de legenda | **VALIDADO POR TESTES DE POLÍTICA** | Política central e testes; inferência real Gemini/Ollama não é provada pela suíte isolada. |
 | Speech → Studio v5 | **PARCIAL** | Contrato e runner têm testes isolados; CI Linux não prova o runtime Windows RVC Melody nem aprovação subjetiva de áudio renderizado. |
-| Recovery — preservação do ORIGINAL | **PARCIAL** | Testes cobrem cenários de recuperação e integridade; faltam casos dedicados a symlinks e falhas de remoção/recuperação. |
+| Recovery — preservação do ORIGINAL | **PARCIAL** | CI cobre preservação do caminho original, symlink do próprio ORIGINAL e remoção de symlink para diretório externo sem tocar no alvo. Permanecem pendentes falhas de limpeza/recuperação e validação no Windows real. |
 | Dependências órfãs / ambiente único | **PENDENTE** | `scripts/audit_shared_dependencies.ps1` ainda precisa ser executado no `.venv` Windows real; o conflito documental de NumPy entre `requirements-analysis.txt` e `requirements.txt` requer resolução explícita por ambiente. |
 | E2E real Sync → Hub | **NÃO VALIDADO** | Não foi executado nesta etapa; não inferir aprovação a partir de fixtures ou mocks. |
 
