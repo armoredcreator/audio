@@ -430,13 +430,14 @@ class SyncLifecycleTests(unittest.TestCase):
         self.assertEqual(candidates[0].original_url, "https://s.shopee.com.br/grouped-batch")
         self.assertEqual(checkpoints, {10: 402})
 
-    def test_historical_grouped_duplicate_shopee_url_is_skipped(self):
+    def test_historical_cross_source_duplicate_is_reserved_durably_in_sqlite(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             storage = Storage(root)
             db = Database(storage.database / "db.sqlite")
-            db.reserve_item(
+            owner_id = db.reserve_item(
                 "already-there",
+                source_id="telegram",
                 original_url="https://s.shopee.com.br/duplicate",
                 original_path=root / "already-there.mp4",
             )
@@ -459,8 +460,29 @@ class SyncLifecycleTests(unittest.TestCase):
 
             asyncio.run(collect())
 
-            self.assertEqual(candidates, [])
+            # Sync must preserve the new Telegram identity for SQLite reservation;
+            # URL de-duplication is durable state, not silent message loss.
+            self.assertEqual([candidate[0] for candidate in candidates], [502])
             self.assertEqual(source._historical_checkpoints, {10: 502})
+            duplicate_id = db.reserve_item(
+                str(candidates[0][0]),
+                source_id="source",
+                topic_id=10,
+                topic_name="topic",
+                original_url=candidates[0][4],
+            )
+            duplicate = db.conn.execute(
+                "SELECT state, duplicate_of_content_id, last_error FROM items WHERE content_id=?",
+                (duplicate_id,),
+            ).fetchone()
+            self.assertEqual(duplicate["state"], "DUPLICATE")
+            self.assertEqual(duplicate["duplicate_of_content_id"], owner_id)
+            self.assertEqual(duplicate["last_error"], f"duplicate-url-global:{owner_id}")
+            event = db.conn.execute(
+                "SELECT reason FROM state_events WHERE content_id=? ORDER BY id DESC LIMIT 1",
+                (duplicate_id,),
+            ).fetchone()
+            self.assertEqual(event["reason"], f"duplicate-url-global:{owner_id}")
             db.close()
 
     def test_live_group_with_two_distinct_links_does_not_skip_second_candidate(self):
