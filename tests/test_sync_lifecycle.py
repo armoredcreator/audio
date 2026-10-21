@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from armored_core.database import Database
 from armored_core.models import PublicationCheck
