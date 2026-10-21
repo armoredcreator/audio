@@ -178,9 +178,16 @@ def run_complete_batch(
     speech_database: Path,
     report_path: Path | None = None,
     copy_only: bool = False,
+    storage_root: Path | None = None,
 ) -> dict[str, Any]:
     """Preflight the full manifest and Speech registry, then invoke Studio in order."""
     root = Path(root).resolve(strict=True)
+    storage_root = Path(storage_root).expanduser() if storage_root is not None else root
+    if not storage_root.is_absolute():
+        storage_root = root / storage_root
+    storage_root = storage_root.resolve()
+    if not _inside(storage_root, root):
+        raise BatchManifestError("storage_root precisa permanecer dentro do root do laboratório")
     speech_database = _rooted_path(root, str(speech_database), "Speech database")
     if not speech_database.is_file() or not _inside(speech_database, root):
         raise BatchManifestError("Speech database precisa existir dentro do root do laboratório")
@@ -194,7 +201,7 @@ def run_complete_batch(
     if report_path is None:
         safe_batch = re.sub(r"[^A-Za-z0-9_.-]+", "_", manifest["batch_id"])
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        report_path = root / "storage" / "validation" / f"speech-studio-{safe_batch}-{stamp}.json"
+        report_path = storage_root / "storage" / "validation" / f"speech-studio-{safe_batch}-{stamp}.json"
     else:
         requested_report = Path(report_path).expanduser()
         if not requested_report.is_absolute():
@@ -227,7 +234,7 @@ def run_complete_batch(
         # Refuse to overwrite any existing result. A retry must use an isolated
         # destination or an explicitly reviewed cleanup; a prior valid output
         # is never deleted as a side effect of starting this batch.
-        target_storage = Storage(root)
+        target_storage = Storage(root, storage_root=storage_root)
         for item in items:
             destination = Path(
                 target_storage.result(
@@ -249,14 +256,14 @@ def run_complete_batch(
         if copy_only:
             # Synthetic copy-only mode tests the visual boundary without any
             # audio handoff; it does not pretend to validate Speech processing.
-            studio = build_studio(root)
+            studio = build_studio(root, storage_root=storage_root)
             results = [studio.process(item) for item in items]
         else:
             # Speech owns the complete first phase. It prepares the voice/effect
             # tracks plus BOTH timing graphs before any Studio method is invoked.
             safe_batch = re.sub(r"[^A-Za-z0-9_.-]+", "_", manifest["batch_id"]).strip("._-") or "batch"
             package_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-            package_root = root / "storage" / "validation" / "speech-audio-v5" / f"{safe_batch}-{package_stamp}"
+            package_root = storage_root / "storage" / "validation" / "speech-audio-v5" / f"{safe_batch}-{package_stamp}"
             configured_effect = os.getenv("ARMORED_SPEECH_EFFECT", "").strip()
             effect_source = (
                 Path(configured_effect).expanduser()
@@ -311,7 +318,7 @@ def run_complete_batch(
             # STRICT PHASE BOUNDARY: no Studio object was built and no visual
             # analysis ran until the whole Speech batch and both timing options
             # for every item passed validation above.
-            studio = build_studio(root)
+            studio = build_studio(root, storage_root=storage_root)
             visual_analyses = {}
             visual_plans = {}
             for item, _payload in speech_packages:

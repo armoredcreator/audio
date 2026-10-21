@@ -5,9 +5,11 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
+
+from armored_core.shopee_urls import is_supported_shopee_url
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +31,9 @@ class ShopeeResolvedLink:
 
 
 def _extract(url: str):
+    # IDs inside an arbitrary URL path are not evidence that the host is Shopee.
+    if not is_supported_shopee_url(url):
+        return None
     path = urlparse(url).path or ""
     for pattern in PATTERNS:
         match = pattern.search(path)
@@ -45,6 +50,8 @@ def resolve_short_url(
     original = str(url or "").strip()
     if not original:
         raise ValueError("URL Shopee vazia")
+    if not is_supported_shopee_url(original):
+        raise ValueError("URL fora dos domínios Shopee permitidos")
 
     started = time.perf_counter()
     direct = _extract(original)
@@ -55,26 +62,60 @@ def resolve_short_url(
     client = session or requests
     retries = max(1, min(int(os.getenv("SHOPEE_RESOLVE_MAX_RETRIES", "2")), 5))
     retry_base = max(0.0, float(os.getenv("SHOPEE_RESOLVE_RETRY_BASE_SECONDS", "1")))
+    redirect_statuses = {301, 302, 303, 307, 308}
     response = None
     resolved = ""
     for attempt in range(1, retries + 1):
         response = None
+        resolved = ""
+        current = original
         try:
-            response = client.get(
-                original,
-                headers={"User-Agent": "Mozilla/5.0"},
-                allow_redirects=True,
-                timeout=timeout,
-                stream=False,
-            )
-            response.raise_for_status()
-            resolved = response.url
+            # Do not let requests follow an unchecked redirect. Each hop must
+            # remain on an explicitly allowed Shopee hostname before it is fetched.
+            for hop in range(6):
+                if not is_supported_shopee_url(current):
+                    raise ValueError("Redirecionamento fora dos domínios Shopee permitidos")
+                response = client.get(
+                    current,
+                    headers={"User-Agent": "Mozilla/5.0"},
+                    allow_redirects=False,
+                    timeout=timeout,
+                    stream=False,
+                )
+                status = int(getattr(response, "status_code", 200))
+                if status in redirect_statuses:
+                    location = str(getattr(response, "headers", {}).get("Location", "") or "").strip()
+                    response.close()
+                    response = None
+                    if not location:
+                        raise ValueError("Redirecionamento Shopee sem cabeçalho Location")
+                    next_url = urljoin(current, location)
+                    if not is_supported_shopee_url(next_url):
+                        raise ValueError("Redirecionamento fora dos domínios Shopee permitidos")
+                    if hop == 5:
+                        raise ValueError("Redirecionamentos Shopee excederam o limite seguro")
+                    current = next_url
+                    continue
+
+                response.raise_for_status()
+                resolved = str(getattr(response, "url", "") or current).strip()
+                if not is_supported_shopee_url(resolved):
+                    raise ValueError("URL final fora dos domínios Shopee permitidos")
+                response.close()
+                response = None
+                break
+
+            if not resolved:
+                raise requests.RequestException("URL Shopee não chegou a uma resposta final")
             break
+        except ValueError:
+            if response is not None:
+                response.close()
+            raise
         except requests.exceptions.SSLError as exc:
             if response is not None:
                 response.close()
-            # A certificate validation error is configuration/security-related;
-            # retrying it cannot make the certificate trustworthy.
+            # Retrying certificate verification failures cannot make them safe.
             if "CERTIFICATE_VERIFY_FAILED" in str(exc).upper() or attempt >= retries:
                 raise
             log.warning(
@@ -92,16 +133,12 @@ def resolve_short_url(
                 attempt, retries, exc,
             )
             time.sleep(retry_base * attempt)
-    if response is None:
-        raise requests.RequestException("Falha ao resolver URL Shopee")
-    response.close()
+
     log.debug(
         "[SHOPEE_RESOLVER] mode=redirect elapsed=%.3fs",
         time.perf_counter() - started,
     )
-
     extracted = _extract(resolved)
     if extracted:
         return ShopeeResolvedLink(original, resolved, extracted[0], extracted[1])
-
     raise ValueError(f"Não foi possível extrair shop_id/item_id: {resolved}")

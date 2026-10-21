@@ -717,10 +717,14 @@ class Database:
         return f"{shop_id}:{item_id}"
 
     def _seed_historical_product_claims_locked(self) -> None:
-        """Seed identity claims from approved, non-duplicate historical rows.
+        """Seed product claims from history without rewriting historical items.
 
-        Caller must hold a write transaction. Source rows remain untouched; only
-        the auxiliary identity ledger is populated.
+        The caller holds a write transaction. Owner selection is deterministic:
+        confirmed/publication evidence first, then the furthest durable pipeline
+        progress, an existing rendered result, an existing ORIGINAL, and stable
+        historical order. SHA-shaped metadata is not treated as integrity proof
+        because validating it requires hashing the actual file; this seed path
+        must not assign extra ownership weight to an unverified checksum string.
         """
         seeded = self.conn.execute(
             "SELECT value FROM product_identity_claim_meta WHERE key='historical_seeded'"
@@ -728,25 +732,126 @@ class Database:
         if seeded:
             return
 
-        historical = self.conn.execute(
-            "SELECT content_id, ia_context_json FROM items "
+        def affirmative_flag(value: object) -> bool:
+            """Parse SQLite legacy booleans explicitly; never treat 'false' as true."""
+            if value is True:
+                return True
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return value == 1
+            if isinstance(value, str):
+                return value.strip().casefold() in {"1", "true", "yes", "y", "confirmed"}
+            return False
+
+        # Relative historical paths must not change rank when the process CWD
+        # changes. A canonical DB path is <project>/storage/database/file.sqlite;
+        # tiny test/standalone databases use their own parent as the anchor.
+        database_path = Path(self.path).expanduser().resolve()
+        db_parent = database_path.parent
+        if (
+            db_parent.name.casefold() == "database"
+            and db_parent.parent.name.casefold() == "storage"
+        ):
+            relative_path_base = db_parent.parent.parent
+        else:
+            relative_path_base = db_parent
+
+        publication_evidence: set[str] = set()
+        publication_columns = {
+            str(row[1]) for row in self.conn.execute("PRAGMA table_info(publications)").fetchall()
+        }
+        if "content_id" in publication_columns:
+            selected = ["content_id"]
+            selected.append("confirmed" if "confirmed" in publication_columns else "0 AS confirmed")
+            selected.append(
+                "verification_status" if "verification_status" in publication_columns
+                else "'' AS verification_status"
+            )
+            selected.append(
+                "published_message_id" if "published_message_id" in publication_columns
+                else "NULL AS published_message_id"
+            )
+            for publication in self.conn.execute(
+                "SELECT " + ", ".join(selected) + " FROM publications"
+            ).fetchall():
+                status = str(publication["verification_status"] or "").strip().upper()
+                if (
+                    affirmative_flag(publication["confirmed"])
+                    or bool(str(publication["published_message_id"] or "").strip())
+                    or status in {"CONFIRMED", "VERIFIED", "PUBLISHED", "DELIVERED"}
+                ):
+                    publication_evidence.add(str(publication["content_id"]))
+
+        rows = self.conn.execute(
+            "SELECT content_id, ia_context_json, state, original_path, original_sha256, "
+            "result_path, created_at FROM items "
             "WHERE state<>? AND affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'' "
             "ORDER BY created_at, content_id",
             (State.DUPLICATE.value,),
         ).fetchall()
-        owners: dict[str, str] = {}
-        for row in historical:
+
+        # Higher tuple values win; created_at/content_id provide stable tie-breaks.
+        state_progress = {
+            "PUBLISHED": 7,
+            "PUBLISHING": 6,
+            "RECOVERY": 5,
+            "STUDIO_COMPLETE": 4,
+            "STUDIO_BATCH": 4,
+            "STUDIO": 3,
+            "SPEECH": 3,
+            "IA": 2,
+            "RECEIVED": 1,
+            "VISION": 1,
+            "WAITING_VISION": 0,
+        }
+
+        def path_exists(value: object) -> bool:
+            raw = str(value or "").strip()
+            if not raw:
+                return False
+            try:
+                path = Path(raw).expanduser()
+                if not path.is_absolute():
+                    path = relative_path_base / path
+                return path.is_file()
+            except (OSError, ValueError, RuntimeError):
+                return False
+
+        candidates: dict[str, list[tuple[tuple[int, ...], str, str]]] = {}
+        for row in rows:
             try:
                 prior_context = json.loads(row["ia_context_json"] or "{}")
             except (TypeError, ValueError, json.JSONDecodeError):
                 continue
-            prior_key = self._canonical_product_key(prior_context)
-            if prior_key and prior_key not in owners:
-                owners[prior_key] = str(row["content_id"])
+            product_key = self._canonical_product_key(prior_context)
+            if not product_key:
+                continue
+
+            original_exists = path_exists(row["original_path"])
+            result_exists = path_exists(row["result_path"])
+            # The existence of an ORIGINAL is observable filesystem evidence.
+            # A 64-hex string alone is not; only compare file bytes to its digest
+            # in a separate integrity pass that is allowed to incur the I/O cost.
+            score = (
+                int(str(row["content_id"]) in publication_evidence),
+                int(state_progress.get(str(row["state"] or "").upper(), 0)),
+                int(result_exists),
+                int(original_exists),
+            )
+            candidates.setdefault(product_key, []).append(
+                (score, str(row["created_at"] or ""), str(row["content_id"]))
+            )
+
+        owners: dict[str, str] = {}
+        for product_key, entries in candidates.items():
+            # Score descending, then preserve earliest durable historical row.
+            winner = sorted(entries, key=lambda entry: (
+                tuple(-value for value in entry[0]), entry[1], entry[2]
+            ))[0]
+            owners[product_key] = winner[2]
+
         self.conn.executemany(
-            "INSERT OR IGNORE INTO product_identity_claims(product_key, owner_content_id) "
-            "VALUES(?, ?)",
-            list(owners.items()),
+            "INSERT OR IGNORE INTO product_identity_claims(product_key, owner_content_id) VALUES(?, ?)",
+            sorted(owners.items()),
         )
         self.conn.execute(
             "INSERT INTO product_identity_claim_meta(key,value) VALUES('historical_seeded','1')"
