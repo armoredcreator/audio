@@ -923,11 +923,6 @@ O código de `ArmoredSpeech/rvc_engine.py` já define `ArmoredSpeech/runtime/rvc
 
 
 
-#### 16.5 Segurança do script de migração dos assets RVC
-
-A auditoria do script encontrou um risco de escopo: a versão anterior enumerava todos os arquivos dentro de `ArmoredStudio/runtime/rvc/models`, apesar de a migração autorizar somente pesos e índices. O script agora considera exclusivamente extensões `.pth` e `.index`; caches, notas e outros artefatos não entram no plano nem são copiados.
-
-Foi adicionado um teste PowerShell executado em runner Windows com fixture descartável sintética. O teste cobre preview sem cópia, apply, igualdade SHA-256 dos pesos/índice/efeito, preservação das fontes e exclusão de arquivos não autorizados. A execução [RVC asset migration safety (Windows)](https://github.com/armoredcreator/audio/actions/runs/39654593363) registrou `RVC_ASSET_MIGRATION_SCRIPT_TEST=PASS`. Isso valida o comportamento do script com arquivos sintéticos, não confirma que os assets reais do usuário já foram migrados ou que o runtime Melody funciona.
 
 
 ---
@@ -976,3 +971,8 @@ A suíte agora cobre duas condições adicionais: (a) o Coordinator rejeita um r
 
 A execução CI do commit `adf722290923c2f5cab61abe7591478b246c59e1` terminou com 337 testes aprovados, 1 ignorado e `compileall` aprovado. Isso é evidência automatizada Linux/Python 3.11.9, não fechamento dos gates locais de Windows, assets RVC ou E2E real.
 
+#### 16.5 Segurança do script de migração dos assets RVC
+
+A auditoria do script encontrou um risco de escopo: a versão anterior enumerava todos os arquivos dentro de `ArmoredStudio/runtime/rvc/models`, apesar de a migração autorizar somente pesos e índices. O script agora considera exclusivamente extensões `.pth` e `.index`; caches, notas e outros artefatos não entram no plano nem são copiados.
+
+Foi adicionado um teste PowerShell executado em runner Windows com fixture descartável sintética. O teste cobre preview sem cópia, apply, igualdade SHA-256 dos pesos/índice/efeito, preservação das fontes e exclusão de arquivos não autorizados. A execução [RVC asset migration safety (Windows)](https://github.com/armoredcreator/audio/actions/runs/39654593363) registrou `RVC_ASSET_MIGRATION_SCRIPT_TEST=PASS`. Isso valida o comportamento do script com arquivos sintéticos, não confirma que os assets reais do usuário já foram migrados ou que o runtime Melody funciona.
