@@ -20,6 +20,8 @@ jobs:
           python-version: "3.11.9"
       - name: Compile auditor
         run: python -m py_compile scripts/audit_orphans.py
+      - name: Test auditor false-positive guards
+        run: python -m unittest discover -s tests -p 'test_orphan_audit_tool.py' -v
       - name: Run read-only audit
         run: python scripts/audit_orphans.py --out-dir "${{ runner.temp }}/orphan-audit"
       - name: Verify and summarize report
