@@ -39,7 +39,7 @@ def modname(p,root):
     return ".".join(parts) if parts and all(x.isidentifier() for x in parts) else None
 
 def parse_py(p):
-    try: source=p.read_text(encoding="utf-8")
+    try: source=p.read_text(encoding="utf-8-sig")
     except (OSError,UnicodeError): return set(),[], "unreadable"
     try: tree=ast.parse(source,filename=str(p))
     except SyntaxError as e: return set(),[],f"syntax error line {e.lineno}: {e.msg}"
@@ -84,38 +84,56 @@ def audit(root):
     candidates=[]
     for m,p in sorted(modules.items()):
         r=rel(p,root)
-        if p.name in ENTRY_NAMES or p.name=="__init__" or any(x.lower() in TEST_DIRS for x in Path(r).parts): continue
+        if p.name in ENTRY_NAMES or p.name=="__init__.py" or any(x.lower() in TEST_DIRS for x in Path(r).parts): continue
         if r.startswith("scripts/"): continue
         path_ref=any(owner!=r and (r in vals or p.name in vals) for owner,vals in refs.items())
         if not reverse.get(m) and not path_ref:
-            candidates.append({"path":r,"classification":"UNREFERENCED_REVIEW","dynamic_loading_present":bool(dynamic_files),
+            candidates.append({"path":r,"classification":"UNREFERENCED_REVIEW","dynamic_loading_detected_in_repository":bool(dynamic_files),
               "reason":"No static in-repository importer or literal path reference found. Check dynamic loading, CLI use, registries, workflows and external callers before removal."})
     # Exact duplicate source/config/text files; evidence only, never deletion authorization.
     hashes=defaultdict(list)
     for p in files:
         if p.suffix.lower() in {".py",".ps1",".bat",".cmd",".sh",".toml",".yaml",".yml",".json",".md",".txt"}:
-            try: hashes[digest(p)].append(rel(p,root))
+            try:
+                if p.stat().st_size == 0: continue
+                hashes[digest(p)].append(rel(p,root))
             except OSError: pass
     duplicates=[{"sha256":h,"paths":ps} for h,ps in hashes.items() if len(ps)>1]
     backups=[{"path":rel(p,root),"classification":"BACKUP_ARTIFACT_REVIEW"} for p in files if BACKUP.search(p.name)]
     # Dependency declarations are parsed conservatively. Import/distribution names do not always match.
     declared=set(); declaration_files=[]
-    depfiles=[root/"pyproject.toml",root/"setup.cfg",root/"setup.py"]+list(root.glob("requirements*.txt"))+list(root.glob("**/requirements*.txt"))
+    pyproject=root/"pyproject.toml"
+    if pyproject.is_file():
+        declaration_files.append(rel(pyproject,root))
+        try:
+            import tomllib
+            data=tomllib.loads(pyproject.read_text(encoding="utf-8-sig"))
+            project=data.get("project",{})
+            for spec in project.get("dependencies",[]) or []:
+                m=re.match(r"\\s*([A-Za-z0-9_.-]+)",spec)
+                if m: declared.add(re.sub(r"[-_.]+","-",m.group(1)).lower())
+            for group in (project.get("optional-dependencies",{}) or {}).values():
+                for spec in group or []:
+                    m=re.match(r"\\s*([A-Za-z0-9_.-]+)",spec)
+                    if m: declared.add(re.sub(r"[-_.]+","-",m.group(1)).lower())
+        except (OSError,ValueError) as e:
+            errors.append({"path":rel(pyproject,root),"error":f"dependency metadata parse error: {e}"})
+    depfiles=list(root.glob("requirements*.txt"))+list(root.glob("**/requirements*.txt"))
     for p in dict.fromkeys(depfiles):
         if not p.is_file() or any(x in SKIP_DIRS for x in p.parts): continue
         declaration_files.append(rel(p,root))
-        for line in p.read_text(encoding="utf-8",errors="ignore").splitlines():
-            s=line.split("#",1)[0].strip().strip(",").strip("'\\\"")
-            m=re.match(r"([A-Za-z0-9_.-]+)\s*(?:\[.*?\])?\s*(?:[<>=!~;].*)?$",s)
-            if m and not s.startswith((".","-")) and m.group(1).lower() not in {"dependencies","optional-dependencies","install_requires","extras_require","requires-python"}:
-                declared.add(re.sub(r"[-_.]+","-",m.group(1)).lower())
+        for line in p.read_text(encoding="utf-8-sig",errors="ignore").splitlines():
+            s=line.split("#",1)[0].strip()
+            if not s or s.startswith(("-",".")) or s.startswith(("http://","https://","git+")): continue
+            m=re.match(r"([A-Za-z0-9_.-]+)(?:\\[[^]]+\\])?\\s*(?:[<>=!~;].*)?$",s)
+            if m: declared.add(re.sub(r"[-_.]+","-",m.group(1)).lower())
     stdlib=set(getattr(__import__("sys"),"stdlib_module_names",()))
     used=set()
     for values in imports_by_file.values():
         for imp in values:
             top=imp.lstrip(".").split(".",1)[0]
             if top and top not in stdlib and top not in modules: used.add(top)
-    special={"cv2":"opencv-python-headless","dotenv":"python-dotenv","PIL":"pillow","yaml":"pyyaml","sklearn":"scikit-learn","bs4":"beautifulsoup4","google":"google-generativeai","fitz":"pymupdf","Crypto":"pycryptodome"}
+    special={"cv2":"opencv-python-headless","dotenv":"python-dotenv","PIL":"pillow","yaml":"pyyaml","sklearn":"scikit-learn","bs4":"beautifulsoup4","google":"google-generativeai","fitz":"pymupdf","Crypto":"pycryptodome","imageio_ffmpeg":"imageio-ffmpeg","audio_separator":"audio-separator","faster_whisper":"faster-whisper"}
     used_dists={re.sub(r"[-_.]+","-",special.get(x,x)).lower() for x in used}
     possibly_unused=[{"distribution":d,"classification":"POSSIBLY_UNUSED_DEPENDENCY","reason":"No matching import detected; may be optional, runtime-only, imported under another name, or dynamically loaded. Never auto-remove."} for d in sorted(declared) if d not in used_dists and d.replace("-","_") not in used]
     return {"generated_at_utc":datetime.now(timezone.utc).isoformat(),"root":str(root),
