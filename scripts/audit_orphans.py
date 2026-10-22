@@ -38,18 +38,29 @@ def modname(p,root):
     if parts and parts[-1]=="__init__": parts.pop()
     return ".".join(parts) if parts and all(x.isidentifier() for x in parts) else None
 
-def parse_py(p):
+def parse_py(p, root):
     try: source=p.read_text(encoding="utf-8-sig")
     except (OSError,UnicodeError): return set(),[], "unreadable"
     try: tree=ast.parse(source,filename=str(p))
     except SyntaxError as e: return set(),[],f"syntax error line {e.lineno}: {e.msg}"
     imports=set(); strings=[]
+    current=modname(p,root)
+    parts=current.split(".") if current else []
+    package=parts if p.name=="__init__.py" else parts[:-1]
     for n in ast.walk(tree):
         if isinstance(n,ast.Import): imports.update(a.name for a in n.names)
-        elif isinstance(n,ast.ImportFrom) and n.module: imports.add("."*n.level+n.module)
+        elif isinstance(n,ast.ImportFrom):
+            if n.level:
+                base=package[:max(0,len(package)-(n.level-1))]
+                if n.module: imports.add(".".join(base+n.module.split(".")))
+                else:
+                    for alias in n.names:
+                        if alias.name != "*": imports.add(".".join(base+[alias.name]))
+            elif n.module:
+                imports.add(n.module)
         elif isinstance(n,ast.Constant) and isinstance(n.value,str):
             s=n.value.strip()
-            if s and ("/" in s or "\\" in s or s.endswith((".py",".json",".yaml",".yml",".toml",".wav",".png"))): strings.append(s)
+            if s and ("/" in s or "\\\\" in s or s.endswith((".py",".json",".yaml",".yml",".toml",".wav",".png"))): strings.append(s)
     return imports,strings,None
 
 def file_refs(p):
@@ -68,7 +79,7 @@ def audit(root):
     modules={m:p for p in py if (m:=modname(p,root))}
     reverse=defaultdict(set); imports_by_file={}; errors=[]; dynamic_files=set()
     for p in py:
-        r=rel(p,root); imports,strings,err=parse_py(p); imports_by_file[r]=imports
+        r=rel(p,root); imports,strings,err=parse_py(p,root); imports_by_file[r]=imports
         if err: errors.append({"path":r,"error":err})
         try: src=p.read_text(encoding="utf-8",errors="ignore")
         except OSError: src=""
