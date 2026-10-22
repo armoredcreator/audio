@@ -110,11 +110,11 @@ def audit(root):
             data=tomllib.loads(pyproject.read_text(encoding="utf-8-sig"))
             project=data.get("project",{})
             for spec in project.get("dependencies",[]) or []:
-                m=re.match(r"\\s*([A-Za-z0-9_.-]+)",spec)
+                m=re.match(r"\s*([A-Za-z0-9_.-]+)",spec)
                 if m: declared.add(re.sub(r"[-_.]+","-",m.group(1)).lower())
             for group in (project.get("optional-dependencies",{}) or {}).values():
                 for spec in group or []:
-                    m=re.match(r"\\s*([A-Za-z0-9_.-]+)",spec)
+                    m=re.match(r"\s*([A-Za-z0-9_.-]+)",spec)
                     if m: declared.add(re.sub(r"[-_.]+","-",m.group(1)).lower())
         except (OSError,ValueError) as e:
             errors.append({"path":rel(pyproject,root),"error":f"dependency metadata parse error: {e}"})
@@ -125,7 +125,7 @@ def audit(root):
         for line in p.read_text(encoding="utf-8-sig",errors="ignore").splitlines():
             s=line.split("#",1)[0].strip()
             if not s or s.startswith(("-",".")) or s.startswith(("http://","https://","git+")): continue
-            m=re.match(r"([A-Za-z0-9_.-]+)(?:\\[[^]]+\\])?\\s*(?:[<>=!~;].*)?$",s)
+            m=re.match(r"([A-Za-z0-9_.-]+)(?:\[[^]]+\])?\s*(?:[<>=!~;].*)?$",s)
             if m: declared.add(re.sub(r"[-_.]+","-",m.group(1)).lower())
     stdlib=set(getattr(__import__("sys"),"stdlib_module_names",()))
     used=set()
