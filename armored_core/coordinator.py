@@ -30,7 +30,10 @@ class Coordinator:
         self.storage = storage
         self.sync = SyncService(db, storage)
         self.pipeline = Pipeline(db, storage, vision, studio, publisher, ia)
-        self.recovery = Recovery(db, storage, vision, studio, publisher, ia)
+        self.recovery = Recovery(
+            db, storage, vision, studio, publisher, ia,
+            speech_studio_runner=self._run_recovery_speech_studio,
+        )
         self.startup_reconciler = StartupReconciler(db, storage, publisher)
         self.source = source
         self._runtime_lock_held = False
@@ -93,7 +96,7 @@ class Coordinator:
                 from ArmoredVision.service import ArmoredVision
                 from ArmoredSync.service import LocalSource, TelegramReader, TelegramSource, MultiTelegramSource
 
-                vision = ArmoredVision()
+                vision = ArmoredVision(db=db)
                 routes = load_routes()
                 if staged and len(routes) != 3:
                     raise RuntimeError(
@@ -371,18 +374,31 @@ class Coordinator:
                     publisher.db = db
                 studio = self.pipeline.studio
                 ia = self.pipeline.ia
-            pipeline = Pipeline(
-                db,
-                self.storage,
-                self.pipeline.vision,
-                studio,
-                publisher,
-                ia,
-            )
-            pipeline.set_shutdown_checker(lambda: self._shutdown_requested)
-            if before_hub is not None:
-                pipeline.set_before_hub_checker(before_hub)
-            pipeline.run(item_id, stop_after_vision=stop_after_vision)
+            if stop_after_vision:
+                pipeline = Pipeline(
+                    db,
+                    self.storage,
+                    self.pipeline.vision,
+                    studio,
+                    publisher,
+                    ia,
+                )
+                pipeline.set_shutdown_checker(lambda: self._shutdown_requested)
+                pipeline.run(item_id, stop_after_vision=True)
+            else:
+                private_coordinator = Coordinator(
+                    db,
+                    self.storage,
+                    self.pipeline.vision,
+                    studio,
+                    publisher,
+                    source=None,
+                    ia=ia,
+                )
+                private_coordinator._shutdown_requested = self._shutdown_requested
+                if before_hub is not None:
+                    private_coordinator.pipeline.set_before_hub_checker(before_hub)
+                private_coordinator.run(item_id)
         finally:
             db.close()
 
@@ -687,6 +703,133 @@ class Coordinator:
                 else 0,
                 item.content_id,
             ))
+            available_items = [
+                candidate
+                for candidate in production_items
+                if candidate.content_id not in production_seen
+                and candidate.original_path.is_file()
+            ]
+
+            # Batch barrier for new work: complete IA for every eligible item,
+            # then prepare every Speech v5 package, then render the full Studio
+            # batch, and only after all results are validated may Hub begin.
+            # Earlier in-flight/recovery states are resolved first, in order.
+            phase_batch = []
+            for candidate in available_items:
+                if candidate.state in {State.RECEIVED, State.IA, State.SPEECH}:
+                    phase_batch.append(candidate)
+                else:
+                    break
+
+            if phase_batch:
+                batch_ids = [str(candidate.content_id) for candidate in phase_batch]
+                production_seen.update(batch_ids)
+                speech_ids = []
+                ia_failed = False
+
+                for candidate in phase_batch:
+                    try:
+                        current = self.db.get(candidate.content_id)
+                        if current.state in {State.RECEIVED, State.IA}:
+                            self.pipeline.run(current.content_id, stop_after_ia=True)
+                        current = self.db.get(candidate.content_id)
+                        if current.state != State.SPEECH:
+                            raise RuntimeError(
+                                "ia-phase-did-not-reach-speech:"
+                                f"{current.content_id}:{current.state.value}"
+                            )
+                        speech_ids.append(str(current.content_id))
+                    except Exception as exc:
+                        ia_failed = True
+                        self.log.exception(
+                            "[COORDINATOR][CATCH-UP][IA] %s failed; "
+                            "Speech/Studio/Hub are held for this batch: %s",
+                            candidate.content_id,
+                            exc,
+                        )
+
+                for batch_item_id in batch_ids:
+                    if batch_item_id not in processed:
+                        processed.append(batch_item_id)
+
+                if ia_failed or len(speech_ids) != len(batch_ids):
+                    checkpoint_blocked = True
+                    self._last_catch_up_completed_count = 0
+                    break
+
+                try:
+                    self._run_speech_studio_batch(speech_ids)
+                except Exception as exc:
+                    checkpoint_blocked = True
+                    self.log.exception(
+                        "[COORDINATOR][CATCH-UP][SPEECH/STUDIO] batch=%s failed; "
+                        "Hub is held: %s",
+                        speech_ids,
+                        exc,
+                    )
+                    break
+
+                # Every item in this batch is now PUBLISHING with an atomic,
+                # durable "speech-studio-v5-complete" event. Only now enter Hub.
+                for batch_item_id in speech_ids:
+                    try:
+                        if live_task is not None:
+                            def pause_source_for_hub():
+                                hub_pause_requested.set()
+                                try:
+                                    timeout = max(
+                                        5.0,
+                                        float(
+                                            os.getenv(
+                                                "ARMORED_CATCHUP_HUB_PAUSE_TIMEOUT",
+                                                "30",
+                                            )
+                                        ),
+                                    )
+                                except ValueError:
+                                    timeout = 30.0
+                                if not hub_paused.wait(timeout):
+                                    hub_pause_requested.clear()
+                                    raise TimeoutError(
+                                        "live Telegram discovery did not release its "
+                                        "session before Hub publication"
+                                    )
+
+                            await asyncio.to_thread(
+                                self._run_pipeline_with_private_database,
+                                batch_item_id,
+                                before_hub=pause_source_for_hub,
+                            )
+                        else:
+                            self.run(batch_item_id)
+
+                        current = self.db.get(batch_item_id)
+                        if (
+                            current.state != State.PUBLISHED
+                            or not current.cleanup_completed
+                            or current.result_path is None
+                            or not current.result_path.is_file()
+                        ):
+                            raise RuntimeError(
+                                "hub-did-not-reach-durable-published-state:"
+                                f"{batch_item_id}:{current.state.value}"
+                            )
+                    except Exception as exc:
+                        checkpoint_blocked = True
+                        self.log.exception(
+                            "[COORDINATOR][CATCH-UP][HUB] %s failed after the "
+                            "complete validated Studio batch; later publication is held: %s",
+                            batch_item_id,
+                            exc,
+                        )
+                        break
+                    finally:
+                        hub_pause_requested.clear()
+
+                if checkpoint_blocked:
+                    break
+                continue
+
             item = next(
                 (
                     candidate
@@ -1527,19 +1670,29 @@ class Coordinator:
             if self._runtime_lock_held:
                 self.db.release_runtime_lock("coordinator")
                 self._runtime_lock_held = False
-    def retry_waiting_vision(self, *, limit: int | None = 1) -> list[dict[str, str]]:
+    def retry_waiting_vision(
+        self,
+        *,
+        limit: int | None = 1,
+        content_ids: list[str] | tuple[str, ...] | None = None,
+    ) -> list[dict[str, str]]:
         """Explicitly retry WAITING_VISION items through Vision only.
 
         Requires the runtime lock. Positive limits run batches capped at 1000;
-        ``limit=None`` or ``limit=0`` snapshots all eligible rows and processes
-        each once. Never downloads media or runs Studio/IA/Hub. Rows without
-        an original URL are excluded by the database.
+        ``content_ids`` restricts execution to an explicit reviewed allowlist.
+        ``limit=None`` or ``limit=0`` snapshots all eligible rows only when no
+        allowlist is supplied. Never downloads media or runs Studio/IA/Hub.
+        Exact recent no-offer outcomes are persisted with an expiry and do not
+        trigger another affiliate API request during that interval.
         """
         if not self._runtime_lock_held:
             raise RuntimeError(
                 "WAITING_VISION retry requires the Coordinator runtime lock"
             )
-        candidates = self.db.pending_waiting_vision_retries(limit=limit)
+        candidates = self.db.pending_waiting_vision_retries(
+            limit=limit,
+            content_ids=content_ids,
+        )
         outcomes: list[dict[str, str]] = []
         started = time.perf_counter()
         total = len(candidates)
@@ -1586,8 +1739,391 @@ class Coordinator:
                 )
         return outcomes
 
+
+    def _has_speech_studio_v5_completion(self, item_id: str) -> bool:
+        """Return whether SQLite records the v5 render as the publication input."""
+        row = self.db.conn.execute(
+            "SELECT 1 FROM state_events WHERE content_id=? AND new_state=? AND reason=? LIMIT 1",
+            (str(item_id), State.PUBLISHING.value, "speech-studio-v5-complete"),
+        ).fetchone()
+        return row is not None
+
+    def _preflight_speech_studio_v5(self):
+        """Load Speech's real processor and validate all fixed render dependencies."""
+        # Explicit object injection exists for deterministic tests only. Normal
+        # Coordinator construction never sets this attribute and must preflight
+        # the actual Speech runtime before processing media.
+        injected = getattr(self, "_speech_processor_override", None)
+        if injected is not None:
+            return injected
+        import shutil
+        from ArmoredSpeech.model_processor import ModelProcessor
+
+        root = self.storage.root.resolve(strict=True)
+        processor = ModelProcessor()
+        preflight = getattr(getattr(processor, "intelligence", None), "preflight", None)
+        if not callable(preflight):
+            raise RuntimeError("ArmoredSpeech processor does not expose intelligence.preflight()")
+        preflight()
+
+        for label, key, fallback in (
+            ("FFmpeg", "ARMORED_FFMPEG", "ffmpeg"),
+            ("FFprobe", "ARMORED_FFPROBE", "ffprobe"),
+        ):
+            executable = (os.getenv(key) or fallback).strip()
+            if not executable or shutil.which(executable) is None:
+                raise RuntimeError(f"{label} não encontrado; configuração {key} inválida.")
+
+        configured_effect = (os.getenv("ARMORED_SPEECH_EFFECT") or "").strip()
+        effect = Path(configured_effect).expanduser() if configured_effect else root / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
+        if not effect.is_absolute():
+            effect = root / effect
+        effect = effect.resolve(strict=True)
+        try:
+            effect.relative_to(root)
+        except ValueError as exc:
+            raise RuntimeError("Asset de efeito Speech precisa permanecer dentro do root do projeto.") from exc
+        if not effect.is_file() or effect.stat().st_size <= 0:
+            raise RuntimeError("Asset canônico ArmoredSpeech/assets/efeitosonoro.wav ausente ou vazio.")
+
+        if os.getenv("ARMORED_STUDIO_INTRO", "1").strip() != "0":
+            configured_banner = (os.getenv("ARMORED_STUDIO_BANNER") or "").strip()
+            banner = Path(configured_banner).expanduser() if configured_banner else root / "ArmoredStudio" / "assets" / "banner.png"
+            if not banner.is_absolute():
+                banner = root / banner
+            banner = banner.resolve(strict=True)
+            try:
+                banner.relative_to(root)
+            except ValueError as exc:
+                raise RuntimeError("Banner do Studio precisa permanecer dentro do root do projeto.") from exc
+            if not banner.is_file() or banner.stat().st_size <= 0:
+                raise RuntimeError("Banner canônico do Studio ausente ou vazio.")
+        return processor
+
+    def _run_speech_studio_batch(self, item_ids: list[str]) -> dict[str, Path]:
+        """Run the complete Speech v5 hand-off before Studio, then persist results atomically.
+
+        The public Coordinator path may pass a one-item batch (LIVE). CATCH-UP can
+        pass all currently stock-backed items together. No Publisher is invoked here.
+        """
+        import json
+        import sqlite3
+        from datetime import datetime, timezone
+        from uuid import uuid4
+
+        from ArmoredSpeech.batch import SpeechItem, run_bulk
+        from ArmoredSpeech.studio_batch_runner import run_complete_batch
+        from armored_core.integrity import sha256_file
+
+        normalized_ids = [str(value) for value in item_ids]
+        if not normalized_ids or len(normalized_ids) != len(set(normalized_ids)):
+            raise ValueError("Speech/Studio batch requires unique non-empty content IDs")
+
+        root = self.storage.root.resolve(strict=True)
+        items = [self.db.get(item_id) for item_id in normalized_ids]
+        before_hashes: dict[str, str] = {}
+        for item in items:
+            if item.state != State.SPEECH:
+                raise RuntimeError(
+                    f"Speech/Studio v5 requires durable SPEECH state; "
+                    f"item={item.content_id}, state={item.state.value}"
+                )
+            if not item.affiliate_url or not item.affiliate_name:
+                raise RuntimeError(f"Speech/Studio v5 requires Vision-approved affiliate metadata: {item.content_id}")
+            original = item.original_path.resolve(strict=True)
+            workspace = item.workspace.resolve(strict=True)
+            try:
+                original.relative_to(workspace)
+                original.relative_to(root)
+                workspace.relative_to(root)
+            except ValueError as exc:
+                raise RuntimeError(f"Original/workspace escaped project root for {item.content_id}") from exc
+            if not original.is_file() or original.stat().st_size <= 0:
+                raise FileNotFoundError(f"immutable-original-missing-or-empty:{original}")
+            destination = self.storage.result(
+                item.content_id, item.affiliate_url, item.affiliate_name,
+                source_id=item.source_id,
+            ).resolve()
+            try:
+                destination.relative_to(root)
+            except ValueError as exc:
+                raise RuntimeError(f"Studio destination escaped project root: {destination}") from exc
+            if destination == original:
+                raise RuntimeError("Studio destination collides with immutable original")
+            if destination.exists():
+                raise FileExistsError(
+                    f"Studio refuses to overwrite an existing output; recovery/review required: {destination}"
+                )
+            before_hashes[str(item.content_id)] = sha256_file(original).lower()
+
+        run_id = (
+            "coordinator-"
+            + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            + "-"
+            + uuid4().hex[:12]
+        )
+        run_root = self.storage.storage / "validation" / "speech-studio-v5" / run_id
+        run_root.mkdir(parents=True, exist_ok=False)
+        manifest_path = run_root / "manifest.json"
+        studio_report_path = run_root / "studio-report.json"
+        speech_database = self.storage.database / "armoredspeech.sqlite3"
+
+        try:
+            processor = self._preflight_speech_studio_v5()
+            speech_items = [
+                SpeechItem(
+                    source_id=str(item.source_id),
+                    item_id=str(item.telegram_message_id),
+                    video_path=Path(item.original_path),
+                    source_order=index,
+                )
+                for index, item in enumerate(items)
+            ]
+            counts = run_bulk(
+                speech_items,
+                database=speech_database,
+                processor=processor,
+            )
+            if not isinstance(counts, dict):
+                raise RuntimeError("ArmoredSpeech.run_bulk returned an invalid result")
+            if int(counts.get("failed", 0) or 0) != 0 or int(counts.get("prepared", 0) or 0) != len(items):
+                raise RuntimeError(
+                    f"Speech did not prepare the complete batch: expected={len(items)}, counts={counts}"
+                )
+
+            # Verify Speech's persisted SQLite decisions in read-only mode.
+            db_uri = f"file:{speech_database.resolve().as_posix()}?mode=ro"
+            connection = sqlite3.connect(db_uri, uri=True)
+            try:
+                connection.row_factory = sqlite3.Row
+                rows = connection.execute(
+                    "SELECT source_id,item_id,status,wav_path,original_sha256_before,original_sha256_after "
+                    "FROM armored_speech_results"
+                ).fetchall()
+            finally:
+                connection.close()
+            decisions = {(str(row["source_id"]), str(row["item_id"])): row for row in rows}
+            manifest_items = []
+            for item in items:
+                identity = (str(item.source_id), str(item.telegram_message_id))
+                decision = decisions.get(identity)
+                if decision is None or str(decision["status"]) != "READY":
+                    status = str(decision["status"]) if decision is not None else "MISSING_DECISION"
+                    raise RuntimeError(f"Speech decision not READY for {identity}: {status}")
+                expected_hash = before_hashes[str(item.content_id)]
+                before = str(decision["original_sha256_before"] or "").lower()
+                after = str(decision["original_sha256_after"] or "").lower()
+                if not before or before != expected_hash or after != expected_hash:
+                    raise RuntimeError(f"Speech original hash evidence invalid for {identity}")
+                original = Path(item.original_path).resolve(strict=True)
+                if sha256_file(original).lower() != expected_hash:
+                    raise RuntimeError(f"Original changed during Speech for {identity}")
+                wav = Path(str(decision["wav_path"] or "")).resolve(strict=True)
+                try:
+                    wav.relative_to(Path(item.workspace).resolve(strict=True))
+                except ValueError as exc:
+                    raise RuntimeError(f"Speech WAV escaped item workspace for {identity}") from exc
+                if not wav.is_file() or wav.stat().st_size <= 0:
+                    raise RuntimeError(f"Speech WAV missing or empty for {identity}")
+
+                manifest_items.append({
+                    "source_id": str(item.source_id),
+                    "telegram_message_id": str(item.telegram_message_id),
+                    "content_id": str(item.content_id),
+                    "state": State.SPEECH.value,
+                    "workspace": str(Path(item.workspace).resolve()),
+                    "original_path": str(original),
+                    "original_sha256": expected_hash,
+                    "working_path": str(item.working_path.resolve()) if item.working_path else None,
+                    "affiliate_name": item.affiliate_name,
+                    "affiliate_url": item.affiliate_url,
+                    "original_url": item.original_url,
+                    "topic_id": item.topic_id,
+                    "topic_name": item.topic_name,
+                    "affiliate_urls": list(item.affiliate_urls),
+                    "ia_context": item.ia_context or {},
+                })
+
+            manifest = {
+                "schema_version": 1,
+                "phase": "ARMORED_SPEECH",
+                "phase_status": "COMPLETE",
+                "approved": True,
+                "batch_id": run_id,
+                "expected_item_count": len(manifest_items),
+                "items": manifest_items,
+            }
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            # Persist the hand-off fence for the entire set before any Studio
+            # render starts. A partial Studio failure cannot flow into Hub.
+            for item in items:
+                self.db.transition(
+                    item.content_id,
+                    State.STUDIO_BATCH,
+                    "speech-v5-ready-entering-studio-batch",
+                )
+
+            studio_runner_override = getattr(
+                self, "_speech_studio_batch_runner_override", None
+            )
+            studio_report = (studio_runner_override or run_complete_batch)(
+                root=root,
+                manifest_path=manifest_path,
+                speech_database=speech_database,
+                report_path=studio_report_path,
+                copy_only=False,
+                storage_root=self.storage.storage_root,
+            )
+            if (
+                not isinstance(studio_report, dict)
+                or studio_report.get("status") != "SUCCESS"
+                or studio_report.get("originals_intact") is not True
+            ):
+                raise RuntimeError("Speech/Studio did not confirm SUCCESS and original integrity")
+
+            expected_items = {
+                (str(item.source_id), str(item.telegram_message_id)): item
+                for item in items
+            }
+            processed_rows = studio_report.get("processed")
+            if not isinstance(processed_rows, list) or len(processed_rows) != len(items):
+                raise RuntimeError("Studio report does not contain exactly the requested batch")
+            outputs: dict[str, Path] = {}
+            seen: set[tuple[str, str]] = set()
+            for record in processed_rows:
+                if not isinstance(record, dict):
+                    raise RuntimeError("Studio report contains an invalid item record")
+                identity = (str(record.get("source_id") or ""), str(record.get("item_id") or ""))
+                item = expected_items.get(identity)
+                if item is None or identity in seen:
+                    raise RuntimeError(f"Studio report item identity invalid/duplicated: {identity}")
+                seen.add(identity)
+                expected_hash = before_hashes[str(item.content_id)]
+                if str(record.get("original_sha256_before") or "").lower() != expected_hash:
+                    raise RuntimeError(f"Studio did not confirm original hash for {identity}")
+                output = Path(str(record.get("output_path") or "")).resolve(strict=True)
+                expected_output = self.storage.result(
+                    item.content_id, item.affiliate_url, item.affiliate_name,
+                    source_id=item.source_id,
+                ).resolve(strict=True)
+                if output != expected_output or output == Path(item.original_path).resolve(strict=True):
+                    raise RuntimeError(f"Studio output path does not match canonical destination for {identity}")
+                try:
+                    output.relative_to(root)
+                except ValueError as exc:
+                    raise RuntimeError(f"Studio output escaped project root for {identity}") from exc
+                if not output.is_file() or output.stat().st_size <= 0:
+                    raise RuntimeError(f"Studio output invalid for {identity}")
+                if sha256_file(Path(item.original_path)).lower() != expected_hash:
+                    raise RuntimeError(f"Original changed during Studio for {identity}")
+                outputs[str(item.content_id)] = output
+
+            if set(outputs) != set(normalized_ids):
+                raise RuntimeError("Studio omitted one or more requested items")
+
+            # One SQLite transaction changes every item from STUDIO_BATCH to
+            # PUBLISHING only after the complete batch is rendered and verified.
+            self.db.complete_speech_studio_batch(outputs)
+            self.log.info(
+                "[COORDINATOR][SPEECH/STUDIO] v5 batch=%s items=%s complete; "
+                "publication may now begin",
+                run_id, len(outputs),
+            )
+            return outputs
+        except Exception as exc:
+            # Preserve the durable in-flight boundary on requested shutdown;
+            # Recovery on restart will rebuild from ORIGINAL instead of treating
+            # a killed native child as a completed render.
+            if self.pipeline._shutdown_checker():
+                self.log.warning(
+                    "[COORDINATOR][SPEECH/STUDIO] shutdown during v5 batch; "
+                    "preserving STUDIO_BATCH for restart: %s",
+                    exc,
+                )
+                raise KeyboardInterrupt from exc
+            # If the external phase failed, keep immutable ORIGINALs and write a
+            # durable failure event. Recovery recognizes this boundary and will
+            # rebuild derived artifacts through Speech v5, never legacy Studio.
+            reason = f"speech-studio-v5-failed:{type(exc).__name__}"
+            for item_id in normalized_ids:
+                try:
+                    current = self.db.get(item_id)
+                    if current.state in {State.SPEECH, State.STUDIO_BATCH}:
+                        self.db.transition(item_id, State.RECOVERY, reason)
+                except Exception:
+                    self.log.exception(
+                        "[COORDINATOR][SPEECH/STUDIO] could not persist failure boundary for %s",
+                        item_id,
+                    )
+            raise
+
+
+    def _run_recovery_speech_studio(self, item_id: str) -> None:
+        """Repair Speech/Studio through v5 without crossing into Hub.
+
+        Recovery can reconcile several interrupted items in one pass. It must
+        finish the derived batch for each item and leave publication to the
+        normal Coordinator loop only after the recovery pass has completed.
+        """
+        self._run_speech_studio_batch([str(item_id)])
+
     def run(self, item_id: str) -> None:
-        self.pipeline.run(item_id)
+        """Run one item through IA -> Speech v5 batch -> Studio -> Hub in order."""
+        item_id = str(item_id)
+        item = self.db.get(item_id)
+
+        if item.state in {State.PUBLISHED, State.WAITING_VISION, State.DUPLICATE, State.STUDIO_COMPLETE}:
+            # Preserve existing terminal/business outcomes. PUBLISHED may still
+            # need its already-authorized cleanup; the other states are fences.
+            self.pipeline.run(item_id)
+            return
+
+        if item.state in {State.RECOVERY, State.FAILED}:
+            if item.state == State.FAILED:
+                self.db.transition(item_id, State.RECOVERY, "legacy-failed-recovery")
+            self.recovery.reconcile(item_id)
+            return
+
+        if item.state == State.STUDIO:
+            # Existing rows from the pre-v5 path cannot be rendered/published
+            # again through the legacy Studio call. Force evidence-driven
+            # Recovery to rebuild the derived chain through Speech v5.
+            self.db.transition(item_id, State.RECOVERY, "legacy-studio-state-requires-speech-v5")
+            self.recovery.reconcile(item_id)
+            return
+
+        if item.state == State.STUDIO_BATCH:
+            # STUDIO_BATCH surviving a Coordinator invocation means the process
+            # stopped inside the external phase. Do not blindly reuse a partial
+            # output; the explicit Recovery path preserves ORIGINAL and rebuilds.
+            self.db.transition(item_id, State.RECOVERY, "interrupted-speech-studio-v5-batch")
+            self.recovery.reconcile(item_id)
+            return
+
+        if item.state == State.PUBLISHING:
+            if not self._has_speech_studio_v5_completion(item_id):
+                self.db.transition(item_id, State.RECOVERY, "legacy-publishing-state-requires-speech-studio-v5")
+                self.recovery.reconcile(item_id)
+                return
+            self.pipeline.run(item_id)
+            return
+
+        if item.state == State.SPEECH:
+            self._run_speech_studio_batch([item_id])
+            self.pipeline.run(item_id)
+            return
+
+        # Coordinator is the sole composition root. Stop Pipeline immediately
+        # after IA, so no standard path can call Studio without its v5 payload.
+        self.pipeline.run(item_id, stop_after_ia=True)
+        current = self.db.get(item_id)
+        if current.state == State.SPEECH:
+            self._run_speech_studio_batch([item_id])
+            self.pipeline.run(item_id)
 
     def recover(self, item_id: str) -> None:
         self.recovery.reconcile(item_id)
@@ -1610,7 +2146,8 @@ class Coordinator:
     def recover_pending(self):
         states = (
             State.RECEIVED.value, State.VISION.value, State.IA.value,
-            State.STUDIO.value, State.PUBLISHING.value, State.RECOVERY.value,
+            State.SPEECH.value, State.STUDIO_BATCH.value, State.STUDIO.value,
+            State.PUBLISHING.value, State.RECOVERY.value,
             State.FAILED.value, State.PUBLISHED.value,
         )
         placeholders = ",".join("?" for _ in states)

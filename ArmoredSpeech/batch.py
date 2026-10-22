@@ -49,83 +49,87 @@ def run_bulk(
     counts = {"prepared": 0, "rvc_eligible": 0, "blocked": 0, "failed": 0}
     ordered = sorted(items, key=lambda item: (item.source_order, item.source_id, item.item_id))
     database.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(database) as connection:
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute(SCHEMA)
-        connection.commit()
-        for item in ordered:
-            video = item.video_path.expanduser().resolve()
-            if not video.is_file():
-                decision = SpeechDecision(
-                    audio_class=AudioClass.UNKNOWN,
-                    language=None,
-                    speech_detected=False,
-                    music_detected=None,
-                    confidence=None,
-                    rationale="Original video is missing; no media was changed.",
-                )
-                record_result(
-                    connection, source_id=item.source_id, item_id=item.item_id,
-                    video_path=video, wav_path=None, decision=decision,
-                    status=SpeechStatus.FAILED, error="VIDEO_NOT_FOUND",
-                )
-                counts["failed"] += 1
-                continue
-
-            before = sha256(video)
-            wav = wav_path_for(video)
-            try:
-                decision = processor.analyze(video)
-                decision.validate()
-                # Unknown labels cannot produce an artifact that downstream code
-                # might mistake for approved narration.
-                if decision.audio_class is AudioClass.UNKNOWN:
+    connection = sqlite3.connect(database)
+    try:
+        with connection:
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute(SCHEMA)
+            connection.commit()
+            for item in ordered:
+                video = item.video_path.expanduser().resolve()
+                if not video.is_file():
+                    decision = SpeechDecision(
+                        audio_class=AudioClass.UNKNOWN,
+                        language=None,
+                        speech_detected=False,
+                        music_detected=None,
+                        confidence=None,
+                        rationale="Original video is missing; no media was changed.",
+                    )
                     record_result(
                         connection, source_id=item.source_id, item_id=item.item_id,
                         video_path=video, wav_path=None, decision=decision,
-                        status=SpeechStatus.BLOCKED, original_sha256_before=before,
-                        original_sha256_after=sha256(video), error="CLASSIFICATION_UNKNOWN",
+                        status=SpeechStatus.FAILED, error="VIDEO_NOT_FOUND",
                     )
-                    counts["blocked"] += 1
+                    counts["failed"] += 1
                     continue
 
-                processor.prepare_wav(video, wav, decision)
-                if not wav.is_file() or wav.stat().st_size == 0:
-                    raise RuntimeError("WAV_NOT_CREATED_OR_EMPTY")
-                after = sha256(video)
-                if before != after:
-                    raise RuntimeError("ORIGINAL_HASH_CHANGED")
+                before = sha256(video)
+                wav = wav_path_for(video)
+                try:
+                    decision = processor.analyze(video)
+                    decision.validate()
+                    # Unknown labels cannot produce an artifact that downstream code
+                    # might mistake for approved narration.
+                    if decision.audio_class is AudioClass.UNKNOWN:
+                        record_result(
+                            connection, source_id=item.source_id, item_id=item.item_id,
+                            video_path=video, wav_path=None, decision=decision,
+                            status=SpeechStatus.BLOCKED, original_sha256_before=before,
+                            original_sha256_after=sha256(video), error="CLASSIFICATION_UNKNOWN",
+                        )
+                        counts["blocked"] += 1
+                        continue
 
-                # Music-only/no-audio/no-usable/foreign speech still need a
-                # persisted decision and prepared sidecar for Studio; they are
-                # READY for Studio but explicitly not eligible for RVC.
-                record_result(
-                    connection, source_id=item.source_id, item_id=item.item_id,
-                    video_path=video, wav_path=wav, decision=decision,
-                    status=SpeechStatus.READY, original_sha256_before=before,
-                    original_sha256_after=after,
-                )
-                counts["prepared"] += 1
-                if decision.rvc_eligible:
-                    counts["rvc_eligible"] += 1
-                else:
-                    counts["blocked"] += 1
-            except Exception as exc:
-                after = sha256(video) if video.exists() else None
-                failed = SpeechDecision(
-                    audio_class=AudioClass.UNKNOWN,
-                    language=None,
-                    speech_detected=False,
-                    music_detected=None,
-                    confidence=None,
-                    rationale="Processing failed; fail-closed for downstream RVC.",
-                )
-                record_result(
-                    connection, source_id=item.source_id, item_id=item.item_id,
-                    video_path=video, wav_path=wav if wav.exists() else None,
-                    decision=failed, status=SpeechStatus.FAILED,
-                    original_sha256_before=before, original_sha256_after=after,
-                    error=f"{type(exc).__name__}: {exc}",
-                )
-                counts["failed"] += 1
+                    processor.prepare_wav(video, wav, decision)
+                    if not wav.is_file() or wav.stat().st_size == 0:
+                        raise RuntimeError("WAV_NOT_CREATED_OR_EMPTY")
+                    after = sha256(video)
+                    if before != after:
+                        raise RuntimeError("ORIGINAL_HASH_CHANGED")
+
+                    # Music-only/no-audio/no-usable/foreign speech still need a
+                    # persisted decision and prepared sidecar for Studio; they are
+                    # READY for Studio but explicitly not eligible for RVC.
+                    record_result(
+                        connection, source_id=item.source_id, item_id=item.item_id,
+                        video_path=video, wav_path=wav, decision=decision,
+                        status=SpeechStatus.READY, original_sha256_before=before,
+                        original_sha256_after=after,
+                    )
+                    counts["prepared"] += 1
+                    if decision.rvc_eligible:
+                        counts["rvc_eligible"] += 1
+                    else:
+                        counts["blocked"] += 1
+                except Exception as exc:
+                    after = sha256(video) if video.exists() else None
+                    failed = SpeechDecision(
+                        audio_class=AudioClass.UNKNOWN,
+                        language=None,
+                        speech_detected=False,
+                        music_detected=None,
+                        confidence=None,
+                        rationale="Processing failed; fail-closed for downstream RVC.",
+                    )
+                    record_result(
+                        connection, source_id=item.source_id, item_id=item.item_id,
+                        video_path=video, wav_path=wav if wav.exists() else None,
+                        decision=failed, status=SpeechStatus.FAILED,
+                        original_sha256_before=before, original_sha256_after=after,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                    counts["failed"] += 1
+    finally:
+        connection.close()
     return counts

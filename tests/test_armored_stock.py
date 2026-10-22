@@ -118,6 +118,66 @@ class ArmoredStockTests(unittest.TestCase):
             self.assertTrue(succeeding_path.is_file())
             self.assertEqual(report["outcomes"]["approved_missing_original"], 1)
 
+    def test_recovers_if_original_move_succeeds_but_sqlite_path_repair_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            storage = Storage(root)
+            source_id = "source1"
+            data = b"immutable original after interrupted path repair"
+            old_path = storage.workspace("88", source_id=source_id) / "88_finallinkoriginal.mp4"
+            old_path.write_bytes(data)
+            original_url = "https://s.shopee.com.br/short-code-88"
+            canonical = storage.original(
+                "88", original_url=original_url, source_id=source_id,
+            )
+            item = SimpleNamespace(
+                content_id="88",
+                telegram_message_id="88",
+                source_id=source_id,
+                state=State.RECEIVED,
+                affiliate_url="https://affiliate.invalid/88",
+                affiliate_name="Produto",
+                original_url=original_url,
+                original_path=old_path,
+                original_sha256=hashlib.sha256(data).hexdigest(),
+                topic_id=None,
+                topic_name=None,
+            )
+
+            class MutableDatabase:
+                failures_remaining = 1
+
+                def get(self, _content_id):
+                    return item
+
+                def repair_original_path(self, _content_id, path):
+                    if self.failures_remaining:
+                        self.failures_remaining -= 1
+                        raise RuntimeError("simulated-sqlite-path-repair-failure")
+                    item.original_path = path
+
+            coordinator = SimpleNamespace(
+                db=MutableDatabase(),
+                storage=storage,
+                source=None,
+            )
+            stock = ArmoredStock(coordinator)
+
+            with self.assertRaisesRegex(RuntimeError, "simulated-sqlite-path-repair-failure"):
+                asyncio.run(stock.materialize_item(item))
+
+            # The first attempt moved, but did not overwrite or corrupt, the original.
+            self.assertFalse(old_path.exists())
+            self.assertTrue(canonical.is_file())
+            self.assertEqual(canonical.read_bytes(), data)
+            self.assertEqual(item.original_path, old_path)
+
+            # A retry must reconcile the durable path and reuse the same bytes.
+            outcome = asyncio.run(stock.materialize_item(item))
+            self.assertEqual(outcome, "existing")
+            self.assertEqual(item.original_path, canonical)
+            self.assertEqual(canonical.read_bytes(), data)
+
     def test_migrates_existing_original_to_frozen_url_tail_name_without_changing_bytes(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

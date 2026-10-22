@@ -25,7 +25,12 @@ _SAFE_GLOBALS_LOCK = threading.RLock()
 
 
 def _trusted_safe_globals(torch_module, globals_to_allow):
-    """Temporarily allowlist trusted RVC checkpoint metadata."""
+    """Temporarily allowlist trusted RVC checkpoint metadata.
+
+    Use the scoped public context manager where available. On older PyTorch
+    versions, emulate its scope with the public add/get/clear API and restore
+    the process's previous allowlist even when inference raises.
+    """
     serialization = torch_module.serialization
     native_scope = getattr(serialization, "safe_globals", None)
 
@@ -57,7 +62,6 @@ def _trusted_safe_globals(torch_module, globals_to_allow):
                     add_globals(previous)
 
     return compatible_scope()
-
 
 DEFAULT_VOICE = "melody"
 DEFAULT_OUTPUT = RVC_ROOT / "output" / "audio_rvc.wav"

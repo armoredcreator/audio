@@ -80,6 +80,52 @@ class RecoveryTests(unittest.TestCase):
         self.db.close()
         self.td.cleanup()
 
+    def test_recovery_removes_symlink_to_external_directory_without_touching_target(self):
+        row = self.db.get(self.item)
+        workspace = row.workspace
+        external = Path(self.td.name) / "external-sentinel"
+        external.mkdir()
+        sentinel = external / "must-survive.txt"
+        sentinel.write_text("outside workspace", encoding="utf-8")
+        link = workspace / "linked-external-directory"
+        try:
+            link.symlink_to(external, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"directory symlinks unavailable in this environment: {exc}")
+
+        original_bytes = row.original_path.read_bytes()
+        recovery = Recovery(
+            self.db, self.storage, Vision(), Studio(self.storage), self.pub
+        )
+        recovery._reset_processing_artifacts(self.item)
+
+        self.assertFalse(link.exists())
+        self.assertFalse(link.is_symlink())
+        self.assertTrue(sentinel.is_file())
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "outside workspace")
+        self.assertEqual(self.db.get(self.item).original_path.read_bytes(), original_bytes)
+
+    def test_recovery_preserves_original_entry_even_if_original_is_a_symlink(self):
+        workspace = self.storage.workspace(self.item)
+        original = self.db.get(self.item).original_path
+        real_original = workspace / "real-original.mp4"
+        real_original.write_bytes(b"immutable-original")
+        original.unlink()
+        try:
+            original.symlink_to(real_original)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"file symlinks unavailable in this environment: {exc}")
+        self.db.repair_original_path(self.item, original)
+        recovery = Recovery(
+            self.db, self.storage, Vision(), Studio(self.storage), self.pub
+        )
+
+        recovery._reset_processing_artifacts(self.item)
+
+        self.assertTrue(original.is_symlink())
+        self.assertEqual(original.read_bytes(), b"immutable-original")
+        self.assertTrue(real_original.is_file())
+
     def test_ia_failure_recovers_without_rerunning_vision_and_keeps_context(self):
         class CountingVision:
             def __init__(self):

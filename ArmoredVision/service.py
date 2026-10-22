@@ -18,11 +18,13 @@ class ArmoredVision:
     armored_core and no JSON state from the legacy Vision is used.
     """
 
-    def __init__(self, api=None):
+    def __init__(self, api=None, db=None, no_offer_cache_ttl_seconds: int = 21600):
         # Coordinator creates one Vision service per run. Keep the API client
-        # for its lifetime so HTTP connections and safe in-run caches can be
-        # reused across historical candidates.
+        # and the SQLite-backed negative lookup cache for its lifetime so
+        # repeated exact products do not consume another API call immediately.
         self.api = api
+        self.db = db
+        self.no_offer_cache_ttl_seconds = max(0, int(no_offer_cache_ttl_seconds))
 
     @staticmethod
     def _ia_context(product: dict) -> dict:
@@ -62,7 +64,16 @@ class ArmoredVision:
                 "item preservado em WAITING_VISION"
             ) from exc
 
-        # Instantiate only after a product-shaped URL has been resolved.
+        product_key = f"{resolved.shop_id}:{resolved.item_id}"
+        if self.db is not None and self.db.has_active_vision_no_offer(product_key):
+            raise VisionUnresolvedError(
+                "[VISION:NO_AFFILIATE_OFFER_CACHED] "
+                f"consulta exata recente sem oferta para {product_key}; "
+                "Vision manteve o item em WAITING_VISION sem repetir a consulta"
+            )
+
+        # Instantiate only after a product-shaped URL has been resolved and no
+        # active exact-product negative result can short-circuit the API call.
         # The same client is retained across identify() calls.
         if api is None:
             api = ShopeeAffiliateAPI()
@@ -71,6 +82,13 @@ class ArmoredVision:
         try:
             product = api.get_exact_product(resolved.shop_id, resolved.item_id)
         except ShopeeProductNotFoundError as exc:
+            if self.db is not None:
+                self.db.record_vision_product_lookup(
+                    product_key,
+                    item.content_id,
+                    "OFFER_ABSENT",
+                    ttl_seconds=self.no_offer_cache_ttl_seconds,
+                )
             raise VisionUnresolvedError(
                 "[VISION:NO_AFFILIATE_OFFER] "
                 f"Vision V1 não encontrou oferta de afiliado para o produto Shopee "
@@ -78,6 +96,13 @@ class ArmoredVision:
                 "isso não comprova que o produto não exista ou esteja indisponível; "
                 "item preservado para futura recuperação"
             ) from exc
+        if self.db is not None:
+            self.db.record_vision_product_lookup(
+                product_key,
+                item.content_id,
+                "OFFER_FOUND",
+                ttl_seconds=0,
+            )
 
         # The incoming URL is identification input only. The final affiliate
         # link must come from the exact V1-resolved product, never from a

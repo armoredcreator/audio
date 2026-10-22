@@ -10,6 +10,7 @@ from typing import Any
 
 from armored_core.database import Database
 from armored_core.services import IngestMessage, SyncService
+from armored_core.shopee_urls import is_supported_shopee_url
 
 
 @dataclass(frozen=True)
@@ -135,7 +136,6 @@ class TelegramSource:
     """
 
     URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
-    SHOPEE_DOMAINS = ("shopee.com.br", "shopee.co", "shopee.ee")
     # Class defaults preserve legacy tests that instantiate TelegramSource via __new__.
     source: str | None = None
     source_id: str | None = None
@@ -283,12 +283,12 @@ class TelegramSource:
         text = str(getattr(message, "message", "") or "")
         for url in TelegramSource.URL_RE.findall(text):
             cleaned = url.rstrip(".,!?;:" + chr(34) + "'()[]{}<>")
-            if any(domain in cleaned.lower() for domain in TelegramSource.SHOPEE_DOMAINS):
+            if is_supported_shopee_url(cleaned):
                 return cleaned
         for entity in (getattr(message, "entities", None) or []):
-            url = getattr(entity, "url", None)
-            if url and any(domain in str(url).lower() for domain in TelegramSource.SHOPEE_DOMAINS):
-                return str(url)
+            url = str(getattr(entity, "url", "") or "").strip()
+            if is_supported_shopee_url(url):
+                return url
         return None
 
     @staticmethod
@@ -319,12 +319,15 @@ class TelegramSource:
             (str(original_url),),
         ).fetchall()
 
-        # Raw URL identity is global: another Telegram source must not create
-        # a second durable row for a URL that is already represented.
+        # Cross-source identity must be recorded in SQLite as DUPLICATE.
+        # Returning True here would discard the source/message identity before
+        # Database.reserve_item() can create the durable duplicate row/event.
+        # Let cross-source candidates reach reservation; same-source rediscovery
+        # is still suppressed below when an existing row safely represents it.
         if not rows:
             return False
         if any(str(row["source_id"] or "telegram") != current_source_id for row in rows):
-            return True
+            return False
 
         recoverable = False
         represented = False

@@ -179,8 +179,16 @@ def run_complete_batch(
     report_path: Path | None = None,
     copy_only: bool = False,
     storage_root: Path | None = None,
+    resume_package_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Preflight the full manifest and Speech registry, then invoke Studio in order."""
+    """Preflight the full manifest and Speech registry, then invoke Studio in order.
+
+    ``resume_package_root`` may point at a prior isolated Speech v5 package
+    directory. Exact item identities are reused only after validating their
+    persisted package and every referenced file. Missing items are prepared in
+    a new unique package directory; partial files in the prior directory are
+    left untouched.
+    """
     root = Path(root).resolve(strict=True)
     storage_root = Path(storage_root).expanduser() if storage_root is not None else root
     if not storage_root.is_absolute():
@@ -225,6 +233,13 @@ def run_complete_batch(
         "originals_intact": None,
         "started_at_utc": datetime.now(timezone.utc).isoformat(),
     }
+    if resume_package_root is not None:
+        report["speech_package_resume"] = {
+            "source_root": None,
+            "reused_item_ids": [],
+            "prepared_item_ids": [],
+            "new_package_root": None,
+        }
 
     previous_copy_mode = os.environ.get("ARMORED_STUDIO_FORCE_COPY")
     previous_allow_copy = os.environ.get("ARMORED_STUDIO_ALLOW_COPY")
@@ -277,15 +292,137 @@ def run_complete_batch(
                 )
             intro = os.getenv("ARMORED_STUDIO_INTRO", "1") != "0"
             intro_position = os.getenv("ARMORED_STUDIO_INTRO_POSITION", "final")
-            prepared = prepare_audio_packages_for_items(
-                items,
-                speech_database=speech_database,
-                workspace_root=root,
-                package_root=package_root,
-                effect_source_path=effect_source,
-                intro=intro,
-                intro_position=intro_position,
-            )
+            expected_items = {
+                (str(item.source_id), str(item.telegram_message_id)): item
+                for item in items
+            }
+            prepared_by_identity: dict[tuple[str, str], tuple[object, dict]] = {}
+            missing_items = list(items)
+            if resume_package_root is not None:
+                resume_root = Path(resume_package_root).expanduser()
+                if not resume_root.is_absolute():
+                    resume_root = root / resume_root
+                try:
+                    resume_root = resume_root.resolve(strict=True)
+                except (OSError, RuntimeError) as exc:
+                    raise BatchManifestError(
+                        f"Speech resume package root unavailable: {exc}"
+                    ) from exc
+                if not resume_root.is_dir() or not _inside(resume_root, root):
+                    raise BatchManifestError(
+                        "Speech resume package root must be a directory inside the lab root"
+                    )
+                resume_report = report["speech_package_resume"]
+                resume_report["source_root"] = str(resume_root)
+                package_by_identity: dict[tuple[str, str], dict] = {}
+                for package_file in resume_root.rglob("package.json"):
+                    if package_file.is_symlink():
+                        raise BatchManifestError(
+                            f"Speech resume package cannot be a symlink: {package_file}"
+                        )
+                    try:
+                        resolved_package = package_file.resolve(strict=True)
+                        if not _inside(resolved_package, root) or not resolved_package.is_file():
+                            raise BatchManifestError(
+                                f"Speech resume package escapes lab root: {package_file}"
+                            )
+                        payload = json.loads(resolved_package.read_text(encoding="utf-8-sig"))
+                    except (OSError, json.JSONDecodeError, RuntimeError) as exc:
+                        raise BatchManifestError(
+                            f"Invalid persisted Speech resume package {package_file}: {exc}"
+                        ) from exc
+                    if not isinstance(payload, dict):
+                        raise BatchManifestError(
+                            f"Persisted Speech resume package must be an object: {package_file}"
+                        )
+                    identity = (
+                        str(payload.get("source_id") or ""),
+                        str(payload.get("item_id") or ""),
+                    )
+                    if identity not in expected_items:
+                        continue
+                    if identity in package_by_identity:
+                        raise BatchManifestError(
+                            f"Multiple resume packages found for item {identity}; refusing to guess"
+                        )
+                    item = expected_items[identity]
+                    if str(payload.get("content_id") or "") != str(item.content_id):
+                        raise BatchManifestError(
+                            f"Speech resume content identity does not match Studio item {identity}"
+                        )
+                    try:
+                        validate_audio_package(
+                            payload,
+                            workspace_root=root,
+                            expected_source_id=identity[0],
+                            expected_item_id=identity[1],
+                            expected_original_path=Path(item.original_path),
+                        )
+                    except SpeechHandoffError as exc:
+                        raise BatchManifestError(
+                            f"Persisted Speech resume package is invalid for {identity}: {exc}"
+                        ) from exc
+                    package_by_identity[identity] = payload
+                    prepared_by_identity[identity] = (item, payload)
+                missing_items = [
+                    item for item in items
+                    if (str(item.source_id), str(item.telegram_message_id))
+                    not in package_by_identity
+                ]
+                resume_report["reused_item_ids"] = [
+                    str(item.telegram_message_id)
+                    for item in items
+                    if (str(item.source_id), str(item.telegram_message_id))
+                    in package_by_identity
+                ]
+                resume_report["prepared_item_ids"] = [
+                    str(item.telegram_message_id) for item in missing_items
+                ]
+
+            if missing_items:
+                package_root.mkdir(parents=True, exist_ok=False)
+                if resume_package_root is not None:
+                    report["speech_package_resume"]["new_package_root"] = str(package_root)
+                newly_prepared = prepare_audio_packages_for_items(
+                    missing_items,
+                    speech_database=speech_database,
+                    workspace_root=root,
+                    package_root=package_root,
+                    effect_source_path=effect_source,
+                    intro=intro,
+                    intro_position=intro_position,
+                )
+                for item, payload in newly_prepared:
+                    identity = (str(item.source_id), str(item.telegram_message_id))
+                    expected_item = expected_items.get(identity)
+                    if expected_item is None:
+                        raise BatchManifestError(
+                            f"Speech preparation returned an unrequested item {identity}"
+                        )
+                    if str(item.content_id) != str(expected_item.content_id):
+                        raise BatchManifestError(
+                            f"Speech preparation returned the wrong content identity for {identity}"
+                        )
+                    if identity in prepared_by_identity:
+                        raise BatchManifestError(
+                            f"Speech preparation returned a duplicate item {identity}"
+                        )
+                    prepared_by_identity[identity] = (expected_item, payload)
+            prepared = [
+                prepared_by_identity[(str(item.source_id), str(item.telegram_message_id))]
+                for item in items
+                if (str(item.source_id), str(item.telegram_message_id)) in prepared_by_identity
+            ]
+            if len(prepared) != len(items):
+                missing = [
+                    (str(item.source_id), str(item.telegram_message_id))
+                    for item in items
+                    if (str(item.source_id), str(item.telegram_message_id))
+                    not in prepared_by_identity
+                ]
+                raise BatchManifestError(
+                    f"Speech resume did not produce packages for the complete batch: {missing}"
+                )
 
             track_hash_cache: dict[tuple[str, int, int, int, int], str] = {}
             speech_packages: list[tuple[object, dict]] = []
@@ -508,6 +645,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--speech-database", type=Path, required=True, help="SQLite experimental do ArmoredSpeech")
     parser.add_argument("--report", type=Path, help="destino opcional do relatório JSON (dentro do root)")
     parser.add_argument(
+        "--resume-package-root",
+        type=Path,
+        help="reutiliza pacotes v5 íntegros dessa pasta e prepara somente os itens ausentes",
+    )
+    parser.add_argument(
         "--copy-only",
         action="store_true",
         help="teste sintético do handoff/contrato; não renderiza vídeo real",
@@ -520,6 +662,7 @@ def main(argv: list[str] | None = None) -> int:
             speech_database=args.speech_database,
             report_path=args.report,
             copy_only=args.copy_only,
+            resume_package_root=args.resume_package_root,
         )
     except Exception as exc:
         print(f"STUDIO_SPEECH_BATCH=FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)

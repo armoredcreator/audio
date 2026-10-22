@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from armored_core.database import Database
 from armored_core.models import PublicationCheck
@@ -11,6 +12,78 @@ from armored_core.storage import Storage
 from armored_core.coordinator import Coordinator
 from ArmoredSync.service import SyncMessage, TelegramSource
 
+
+
+def _install_coordinator_speech_studio_test_seam(coordinator):
+    """Inject deterministic Speech/Studio providers; never alter production defaults."""
+    from ArmoredSpeech.contracts import AudioClass, SpeechDecision
+
+    class SpeechProcessor:
+        intelligence = SimpleNamespace(preflight=lambda: None)
+
+        def analyze(self, _video_path):
+            return SpeechDecision(
+                audio_class=AudioClass.MUSIC_ONLY,
+                language=None,
+                speech_detected=False,
+                music_detected=True,
+                confidence=0.99,
+                rationale="isolated lifecycle fixture",
+            )
+
+        def prepare_wav(self, _video_path, wav_path, _decision):
+            wav_path = Path(wav_path)
+            wav_path.parent.mkdir(parents=True, exist_ok=True)
+            wav_path.write_bytes(b"isolated-speech-wav")
+
+    def studio_batch_runner(*, root, manifest_path, speech_database, report_path, copy_only, storage_root):
+        from ArmoredSpeech.studio_batch_runner import load_complete_batch
+        from armored_core.integrity import sha256_file
+        from armored_core.storage import Storage as LabStorage
+
+        if copy_only:
+            raise AssertionError("Lifecycle tests must use the contract-v5 path, not copy-only mode")
+        _, items, hashes = load_complete_batch(Path(root), Path(manifest_path))
+        storage = LabStorage(
+            Path(root),
+            storage_root=Path(storage_root) if storage_root is not None else None,
+        )
+        processed = []
+        for item in items:
+            identity = (str(item.source_id), str(item.telegram_message_id))
+            expected_hash = hashes[identity]
+            original = Path(item.original_path).resolve(strict=True)
+            rendered = coordinator.pipeline.studio.process(item)
+            rendered_path = Path(rendered.result_path).resolve(strict=True)
+            destination = storage.result(
+                item.content_id,
+                item.affiliate_url,
+                item.affiliate_name,
+                source_id=item.source_id,
+            ).resolve()
+            if rendered_path != destination:
+                if destination.exists():
+                    raise FileExistsError(f"test runner refuses to overwrite {destination}")
+                destination.write_bytes(rendered_path.read_bytes())
+            if not destination.is_file() or destination.stat().st_size <= 0:
+                raise RuntimeError(f"test Studio output missing for {identity}")
+            if sha256_file(original).lower() != expected_hash.lower():
+                raise RuntimeError(f"test Studio changed original for {identity}")
+            processed.append({
+                "source_id": identity[0],
+                "item_id": identity[1],
+                "output_path": str(destination),
+                "original_sha256_before": expected_hash,
+            })
+        return {
+            "status": "SUCCESS",
+            "originals_intact": True,
+            "processed": processed,
+            "report_path": str(report_path),
+        }
+
+    coordinator._speech_processor_override = SpeechProcessor()
+    coordinator._speech_studio_batch_runner_override = studio_batch_runner
 
 class FakeMessage:
     def __init__(self, message_id, video=False, text="", grouped_id=None):
@@ -36,8 +109,8 @@ class CandidateSource(TelegramSource):
     async def _topic_messages(self, source, topic_id):
         messages = [
             FakeMessage(1, video=True),
-            FakeMessage(2, text="https://shopee.com.br/x/abc"),
-            FakeMessage(3, video=True, text="https://shopee.com.br/x/def"),
+            FakeMessage(2, text="https://shopee.com.br/test-fixture/fixture-01"),
+            FakeMessage(3, video=True, text="https://shopee.com.br/test-fixture/fixture-02"),
         ]
         for message in messages:
             yield message
@@ -156,8 +229,8 @@ class SyncLifecycleTests(unittest.TestCase):
         asyncio.run(collect())
 
         self.assertEqual([candidate[0] for candidate in candidates], [1, 3])
-        self.assertEqual(candidates[0][4], "https://shopee.com.br/x/abc")
-        self.assertEqual(candidates[1][4], "https://shopee.com.br/x/def")
+        self.assertEqual(candidates[0][4], "https://shopee.com.br/test-fixture/fixture-01")
+        self.assertEqual(candidates[1][4], "https://shopee.com.br/test-fixture/fixture-02")
 
     def test_historical_candidate_resolves_shopee_from_same_grouped_album(self):
         source = CandidateSource(Path("."), FakeReader())
@@ -166,12 +239,12 @@ class SyncLifecycleTests(unittest.TestCase):
         async def grouped_messages(source_name, topic_id):
             # Telegram history is newest-first: 452, 451, 450.
             messages = [
-                FakeMessage(452, video=True, grouped_id=14295227350202649),
-                FakeMessage(451, text="", grouped_id=14295227350202649),
+                FakeMessage(452, video=True, grouped_id=1001),
+                FakeMessage(451, text="", grouped_id=1001),
                 FakeMessage(
                     450,
-                    text="https://s.shopee.com.br/5Ardb8fOzX",
-                    grouped_id=14295227350202649,
+                    text="https://s.shopee.com.br/test-link/fixture-03",
+                    grouped_id=1001,
                 ),
             ]
             for message in messages:
@@ -190,7 +263,7 @@ class SyncLifecycleTests(unittest.TestCase):
         self.assertEqual([candidate[0] for candidate in candidates], [452])
         self.assertEqual(
             candidates[0][4],
-            "https://s.shopee.com.br/5Ardb8fOzX",
+            "https://s.shopee.com.br/test-link/fixture-03",
         )
 
     def test_historical_grouped_two_videos_one_link_emits_one_candidate(self):
@@ -201,15 +274,15 @@ class SyncLifecycleTests(unittest.TestCase):
             messages = [
                 FakeMessage(
                     493,
-                    text="https://s.shopee.com.br/4fvTHpZbKQ",
-                    grouped_id=14295237464830177,
+                    text="https://s.shopee.com.br/test-link/fixture-04",
+                    grouped_id=1002,
                 ),
-                FakeMessage(492, video=True, grouped_id=14295237464830169),
+                FakeMessage(492, video=True, grouped_id=1003),
                 FakeMessage(
                     491,
                     video=True,
-                    text="https://s.shopee.com.br/8piEHew9WS",
-                    grouped_id=14295237464830169,
+                    text="https://s.shopee.com.br/test-link/fixture-05",
+                    grouped_id=1003,
                 ),
             ]
             for message in messages:
@@ -227,7 +300,7 @@ class SyncLifecycleTests(unittest.TestCase):
         self.assertEqual([candidate[0] for candidate in candidates], [491])
         self.assertEqual(
             candidates[0][4],
-            "https://s.shopee.com.br/8piEHew9WS",
+            "https://s.shopee.com.br/test-link/fixture-05",
         )
 
     def test_live_candidate_resolves_link_inside_group_and_advances_group_checkpoint(self):
@@ -247,7 +320,7 @@ class SyncLifecycleTests(unittest.TestCase):
                             messages = [
                                 FakeMessage(
                                     100,
-                                    text="https://s.shopee.com.br/live-group",
+                                    text="https://s.shopee.com.br/test-link/fixture-06",
                                     grouped_id=123456,
                                 ),
                                 FakeMessage(
@@ -293,7 +366,7 @@ class SyncLifecycleTests(unittest.TestCase):
             self.assertEqual(message.telegram_message_id, "102")
             self.assertEqual(
                 message.original_url,
-                "https://s.shopee.com.br/live-group",
+                "https://s.shopee.com.br/test-link/fixture-06",
             )
             self.assertEqual(checkpoints, {567: 102})
 
@@ -304,9 +377,9 @@ class SyncLifecycleTests(unittest.TestCase):
 
         async def grouped_messages(source_name, topic_id):
             for message in [
-                FakeMessage(302, video=True, grouped_id=9001),
-                FakeMessage(301, grouped_id=9001),
-                FakeMessage(300, text="https://s.shopee.com.br/grouped-iter", grouped_id=9001),
+                FakeMessage(302, video=True, grouped_id=101),
+                FakeMessage(301, grouped_id=101),
+                FakeMessage(300, text="https://s.shopee.com.br/test-link/fixture-07", grouped_id=101),
             ]:
                 yield message
 
@@ -329,16 +402,16 @@ class SyncLifecycleTests(unittest.TestCase):
                 os.environ["ARMORED_SYNC_SOURCE"] = old_source
 
         self.assertEqual([message.telegram_message_id for message in candidates], ["302"])
-        self.assertEqual(candidates[0].original_url, "https://s.shopee.com.br/grouped-iter")
+        self.assertEqual(candidates[0].original_url, "https://s.shopee.com.br/test-link/fixture-07")
 
     def test_collect_historical_batch_uses_grouped_association(self):
         source = CandidateSource(Path("."), FakeReader())
 
         async def grouped_messages(source_name, topic_id):
             for message in [
-                FakeMessage(402, video=True, grouped_id=9002),
-                FakeMessage(401, grouped_id=9002),
-                FakeMessage(400, text="https://s.shopee.com.br/grouped-batch", grouped_id=9002),
+                FakeMessage(402, video=True, grouped_id=102),
+                FakeMessage(401, grouped_id=102),
+                FakeMessage(400, text="https://s.shopee.com.br/test-link/fixture-08", grouped_id=102),
             ]:
                 yield message
 
@@ -354,30 +427,31 @@ class SyncLifecycleTests(unittest.TestCase):
                 os.environ["ARMORED_SYNC_SOURCE"] = old_source
 
         self.assertEqual([message.telegram_message_id for message in candidates], ["402"])
-        self.assertEqual(candidates[0].original_url, "https://s.shopee.com.br/grouped-batch")
+        self.assertEqual(candidates[0].original_url, "https://s.shopee.com.br/test-link/fixture-08")
         self.assertEqual(checkpoints, {10: 402})
 
-    def test_historical_grouped_duplicate_shopee_url_is_skipped(self):
+    def test_historical_cross_source_duplicate_is_reserved_durably_in_sqlite(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             storage = Storage(root)
             db = Database(storage.database / "db.sqlite")
-            db.reserve_item(
+            owner_id = db.reserve_item(
                 "already-there",
-                original_url="https://s.shopee.com.br/duplicate",
+                source_id="telegram",
+                original_url="https://s.shopee.com.br/test-link/fixture-09",
                 original_path=root / "already-there.mp4",
             )
 
             class ExistingUrlSource(TelegramSource):
                 async def _topic_messages(self, source_name, topic_id):
                     for message in [
-                        FakeMessage(502, video=True, grouped_id=9003),
-                        FakeMessage(501, grouped_id=9003),
-                        FakeMessage(500, text="https://s.shopee.com.br/duplicate", grouped_id=9003),
+                        FakeMessage(502, video=True, grouped_id=103),
+                        FakeMessage(501, grouped_id=103),
+                        FakeMessage(500, text="https://s.shopee.com.br/test-link/fixture-09", grouped_id=103),
                     ]:
                         yield message
 
-            source = ExistingUrlSource(root, FakeReader(), db)
+            source = ExistingUrlSource(root, FakeReader(), db, source_id="source")
             candidates = []
 
             async def collect():
@@ -386,8 +460,29 @@ class SyncLifecycleTests(unittest.TestCase):
 
             asyncio.run(collect())
 
-            self.assertEqual(candidates, [])
+            # Sync must preserve the new Telegram identity for SQLite reservation;
+            # URL de-duplication is durable state, not silent message loss.
+            self.assertEqual([candidate[0] for candidate in candidates], [502])
             self.assertEqual(source._historical_checkpoints, {10: 502})
+            duplicate_id = db.reserve_item(
+                str(candidates[0][0]),
+                source_id="source",
+                topic_id=10,
+                topic_name="topic",
+                original_url=candidates[0][4],
+            )
+            duplicate = db.conn.execute(
+                "SELECT state, duplicate_of_content_id, last_error FROM items WHERE content_id=?",
+                (duplicate_id,),
+            ).fetchone()
+            self.assertEqual(duplicate["state"], "DUPLICATE")
+            self.assertEqual(duplicate["duplicate_of_content_id"], owner_id)
+            self.assertEqual(duplicate["last_error"], f"duplicate-url-global:{owner_id}")
+            event = db.conn.execute(
+                "SELECT reason FROM state_events WHERE content_id=? ORDER BY id DESC LIMIT 1",
+                (duplicate_id,),
+            ).fetchone()
+            self.assertEqual(event["reason"], f"duplicate-url-global:{owner_id}")
             db.close()
 
     def test_live_group_with_two_distinct_links_does_not_skip_second_candidate(self):
@@ -403,9 +498,9 @@ class SyncLifecycleTests(unittest.TestCase):
                     class Client:
                         async def iter_messages(inner, *args, **kwargs):
                             for message in [
-                                FakeMessage(100, video=True, text="https://s.shopee.com.br/live-a", grouped_id=9010),
-                                FakeMessage(101, grouped_id=9010),
-                                FakeMessage(102, video=True, text="https://s.shopee.com.br/live-b", grouped_id=9010),
+                                FakeMessage(100, video=True, text="https://s.shopee.com.br/test-link/fixture-10", grouped_id=110),
+                                FakeMessage(101, grouped_id=110),
+                                FakeMessage(102, video=True, text="https://s.shopee.com.br/test-link/fixture-11", grouped_id=110),
                             ]:
                                 yield message
                     self.client = Client()
@@ -452,7 +547,7 @@ class SyncLifecycleTests(unittest.TestCase):
             db.set_sync_topic_checkpoint(567, "topic", 99)
             db.reserve_item(
                 "already-there",
-                original_url="https://s.shopee.com.br/live-duplicate",
+                original_url="https://s.shopee.com.br/test-link/fixture-12",
                 original_path=root / "already-there.mp4",
             )
 
@@ -463,7 +558,7 @@ class SyncLifecycleTests(unittest.TestCase):
                             yield FakeMessage(
                                 100,
                                 video=True,
-                                text="https://s.shopee.com.br/live-duplicate",
+                                text="https://s.shopee.com.br/test-link/fixture-12",
                             )
                     self.client = Client()
 
@@ -506,11 +601,12 @@ class SyncLifecycleTests(unittest.TestCase):
             source = LifecycleSource()
             source.history = [
                 SyncMessage("100", source_id="local", source_path=root / "100.mp4",
-                            original_url="https://shopee.com.br/x/a"),
+                            original_url="https://shopee.com.br/test-fixture/fixture-13"),
                 SyncMessage("101", source_id="local", source_path=root / "101.mp4",
-                            original_url="https://shopee.com.br/x/b"),
+                            original_url="https://shopee.com.br/test-fixture/fixture-14"),
             ]
             coordinator = Coordinator(db, storage, Vision(), Studio(storage), Publisher(), source)
+            _install_coordinator_speech_studio_test_seam(coordinator)
 
             processed = coordinator.run_catch_up()
             self.assertEqual(processed, ["100", "101"])
@@ -520,7 +616,7 @@ class SyncLifecycleTests(unittest.TestCase):
             live_path = root / "102.mp4"
             live_path.write_bytes(b"102")
             source.live = [SyncMessage("102", source_id="local", source_path=live_path,
-                                       original_url="https://shopee.com.br/x/c")]
+                                       original_url="https://shopee.com.br/test-fixture/fixture-15")]
 
             live = coordinator.run_live_once()
             self.assertEqual(live, ["102"])
@@ -578,7 +674,7 @@ class SyncLifecycleTests(unittest.TestCase):
                     return [SyncMessage(
                         value, source_id="telegram", topic_id=901,
                         topic_name="topic",
-                        original_url=f"https://shopee.com.br/x/live/{value}",
+                        original_url=f"https://shopee.com.br/test-fixture/fixture-16/{value}",
                         materialize=materialize,
                     )], {901: 99 + self.index}
 
@@ -588,6 +684,7 @@ class SyncLifecycleTests(unittest.TestCase):
             source = LiveSource()
             publisher = Publisher()
             coordinator = Coordinator(db, storage, Vision(), Studio(storage), publisher, source)
+            _install_coordinator_speech_studio_test_seam(coordinator)
 
             try:
                 self.assertEqual(coordinator.run_live_once(), ["201"])
@@ -615,12 +712,13 @@ class SyncLifecycleTests(unittest.TestCase):
             source.completed = True
             source.live = [SyncMessage(
                 "200", source_id="local", source_path=source_file,
-                original_url="https://shopee.com.br/x/restart",
+                original_url="https://shopee.com.br/test-fixture/fixture-17",
             )]
             publisher = Publisher()
             first = Coordinator(
                 db, storage, FailOnceVision(), Studio(storage), publisher, source
             )
+            _install_coordinator_speech_studio_test_seam(first)
 
             # Vision is the pre-download gate: technical failure remains
             # retryable in VISION while ORIGINAL is absent; no checkpoint/download.
@@ -637,12 +735,13 @@ class SyncLifecycleTests(unittest.TestCase):
             restarted_source.completed = True
             restarted_source.live = [SyncMessage(
                 "200", source_id="local", source_path=source_file,
-                original_url="https://shopee.com.br/x/restart",
+                original_url="https://shopee.com.br/test-fixture/fixture-17",
             )]
             second = Coordinator(
                 Database(storage.database / "db.sqlite"), storage,
                 Vision(), Studio(storage), publisher, restarted_source,
             )
+            _install_coordinator_speech_studio_test_seam(second)
             retried = second.run_live_once()
 
             self.assertEqual(retried, ["200"])
@@ -666,18 +765,19 @@ class SyncLifecycleTests(unittest.TestCase):
             source = LifecycleSource()
             source.history = [
                 SyncMessage("100", source_id="local", source_path=history_files["100"],
-                            original_url="https://shopee.com.br/x/a"),
+                            original_url="https://shopee.com.br/test-fixture/fixture-13"),
                 SyncMessage("101", source_id="local", source_path=history_files["101"],
-                            original_url="https://shopee.com.br/x/b"),
+                            original_url="https://shopee.com.br/test-fixture/fixture-14"),
             ]
             source.live = [
                 SyncMessage("102", source_id="local", source_path=history_files["102"],
-                            original_url="https://shopee.com.br/x/c"),
+                            original_url="https://shopee.com.br/test-fixture/fixture-15"),
                 SyncMessage("103", source_id="local", source_path=history_files["103"],
-                            original_url="https://shopee.com.br/x/d"),
+                            original_url="https://shopee.com.br/test-fixture/fixture-18"),
             ]
             publisher = Publisher()
             coordinator = Coordinator(db, storage, Vision(), Studio(storage), publisher, source)
+            _install_coordinator_speech_studio_test_seam(coordinator)
 
             coordinator.run_forever(max_cycles=1, poll_seconds=0)
 
@@ -710,13 +810,13 @@ class SyncLifecycleTests(unittest.TestCase):
                 first_path,
                 "100",
                 source_id="telegram",
-                original_url="https://s.shopee.com.br/AUuG5phvYW",
+                original_url="https://s.shopee.com.br/test-link/fixture-19",
             )
             second = sync.ingest(
                 second_path,
                 "101",
                 source_id="telegram",
-                original_url="https://s.shopee.com.br/AUuG5phvYW",
+                original_url="https://s.shopee.com.br/test-link/fixture-19",
             )
 
             self.assertNotEqual(first, second)
@@ -740,9 +840,9 @@ class SyncLifecycleTests(unittest.TestCase):
             from armored_core.services import SyncService
             sync = SyncService(db, storage)
             first = sync.ingest(path, "100", source_id="local",
-                                original_url="https://shopee.com.br/x/a")
+                                original_url="https://shopee.com.br/test-fixture/fixture-13")
             second = sync.ingest(path, "100", source_id="local",
-                                  original_url="https://shopee.com.br/x/a")
+                                  original_url="https://shopee.com.br/test-fixture/fixture-13")
             self.assertEqual(first, second)
             self.assertEqual(len(db.conn.execute("SELECT * FROM items").fetchall()), 1)
             db.close()
@@ -828,18 +928,19 @@ class SyncLifecycleTests(unittest.TestCase):
             source.completed = True
             source.live = [SyncMessage(
                 "300", source_id="local", source_path=source_file,
-                original_url="https://shopee.com.br/x/interrupted",
+                original_url="https://shopee.com.br/test-fixture/fixture-20",
             )]
             publisher = Publisher()
             coordinator = Coordinator(
                 db, storage, InterruptingVision(), InterruptingStudio(), publisher, source
             )
+            _install_coordinator_speech_studio_test_seam(coordinator)
             coordinator.pipeline.set_shutdown_checker(lambda: True)
 
             with self.assertRaises(KeyboardInterrupt):
                 coordinator.run_live_once()
 
-            self.assertEqual(db.get("300").state.value, "STUDIO")
+            self.assertEqual(db.get("300").state.value, "STUDIO_BATCH")
             self.assertFalse(db.get("300").cleanup_completed)
             self.assertIsNone(db.publication("300"))
             coordinator.close()

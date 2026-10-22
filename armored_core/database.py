@@ -2,6 +2,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import time
 from pathlib import Path
 from .models import Item, State
 
@@ -63,6 +64,16 @@ class Database:
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS vision_product_lookup_events (
+            lookup_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_key TEXT NOT NULL,
+            content_id TEXT NOT NULL,
+            outcome TEXT NOT NULL CHECK(outcome IN ('OFFER_FOUND','OFFER_ABSENT')),
+            checked_at REAL NOT NULL,
+            suppress_until REAL NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_vision_product_lookup_key_id
+            ON vision_product_lookup_events(product_key, lookup_id DESC);
         CREATE TABLE IF NOT EXISTS publications (
             content_id TEXT PRIMARY KEY,
             idempotency_key TEXT NOT NULL UNIQUE,
@@ -597,29 +608,100 @@ class Database:
         ).fetchall()
         return [self.get(str(row["content_id"])) for row in rows]
 
-    def pending_waiting_vision_retries(self, *, limit: int | None = 100) -> list[Item]:
+    def pending_waiting_vision_retries(
+        self,
+        *,
+        limit: int | None = 100,
+        content_ids: list[str] | tuple[str, ...] | None = None,
+    ) -> list[Item]:
         """Return unresolved Vision rows with a source URL and no approval.
 
         Includes WAITING_VISION decisions and VISION rows left behind by an
         interrupted/technical attempt. Positive limits are capped at 1000.
-        ``limit=None`` or ``limit=0`` snapshots every eligible row. Rows without
-        source URLs and rows already approved remain untouched.
+        ``limit=None`` or ``limit=0`` snapshots every eligible row unless an
+        explicit content-id allowlist is supplied. Rows without source URLs and
+        rows already approved remain untouched. Allowlist batches are capped at
+        1000 IDs to prevent accidental unbounded recovery calls.
         """
         query = (
             "SELECT content_id FROM items "
             "WHERE state IN (?, ?) AND original_url IS NOT NULL AND TRIM(original_url)<>'' "
             "AND (affiliate_url IS NULL OR TRIM(affiliate_url)='') "
-            "ORDER BY source_id, COALESCE(topic_id, 0), "
-            "CAST(telegram_message_id AS INTEGER), created_at, content_id"
         )
         retry_states = (State.WAITING_VISION.value, State.VISION.value)
         params: tuple = retry_states
+        if content_ids is not None:
+            unique_ids = list(dict.fromkeys(str(value).strip() for value in content_ids if str(value).strip()))
+            if not unique_ids:
+                return []
+            if len(unique_ids) > 1000:
+                raise ValueError("WAITING_VISION retry allowlist is capped at 1000 items")
+            placeholders = ",".join("?" for _ in unique_ids)
+            query += f"AND content_id IN ({placeholders}) "
+            params = (*params, *unique_ids)
+        query += (
+            "ORDER BY source_id, COALESCE(topic_id, 0), "
+            "CAST(telegram_message_id AS INTEGER), created_at, content_id"
+        )
         if limit not in (None, 0):
             bounded_limit = max(1, min(int(limit), 1000))
             query += " LIMIT ?"
             params = (*retry_states, bounded_limit)
+            if content_ids is not None:
+                params = (*retry_states, *unique_ids, bounded_limit)
         rows = self.conn.execute(query, params).fetchall()
         return [self.get(str(row["content_id"])) for row in rows]
+
+    def has_active_vision_no_offer(self, product_key: str, *, now: float | None = None) -> bool:
+        """Return whether an exact product has a still-active no-offer result."""
+        key = str(product_key or "").strip()
+        if not key:
+            return False
+        current_time = time.time() if now is None else float(now)
+        row = self.conn.execute(
+            "SELECT outcome, suppress_until FROM vision_product_lookup_events "
+            "WHERE product_key=? ORDER BY lookup_id DESC LIMIT 1",
+            (key,),
+        ).fetchone()
+        return bool(
+            row
+            and str(row["outcome"]) == "OFFER_ABSENT"
+            and float(row["suppress_until"] or 0) > current_time
+        )
+
+    def record_vision_product_lookup(
+        self,
+        product_key: str,
+        content_id: str,
+        outcome: str,
+        *,
+        ttl_seconds: int = 21600,
+        checked_at: float | None = None,
+    ) -> None:
+        """Append an exact Vision offer lookup result without rewriting history."""
+        key = str(product_key or "").strip()
+        item_id = str(content_id or "").strip()
+        status = str(outcome or "").strip().upper()
+        if not key or not item_id:
+            raise ValueError("product_key and content_id are required")
+        if status not in {"OFFER_FOUND", "OFFER_ABSENT"}:
+            raise ValueError("Vision lookup outcome must be OFFER_FOUND or OFFER_ABSENT")
+        if ttl_seconds < 0:
+            raise ValueError("ttl_seconds cannot be negative")
+        timestamp = time.time() if checked_at is None else float(checked_at)
+        suppress_until = timestamp + int(ttl_seconds) if status == "OFFER_ABSENT" else 0
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            self.conn.execute(
+                "INSERT INTO vision_product_lookup_events "
+                "(product_key, content_id, outcome, checked_at, suppress_until) "
+                "VALUES(?,?,?,?,?)",
+                (key, item_id, status, timestamp, suppress_until),
+            )
+            self.conn.commit()
+        except BaseException:
+            self.conn.rollback()
+            raise
     def pending_vision_candidates(self) -> list[Item]:
         """Return reserved rows whose Vision gate has not produced a decision."""
         rows = self.conn.execute(
@@ -636,13 +718,15 @@ class Database:
         rows = self.conn.execute(
             "SELECT content_id FROM items WHERE "
             "(state=? AND affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'') "
-            "OR state IN (?, ?, ?, ?) "
+            "OR state IN (?, ?, ?, ?, ?, ?) "
             "OR (state=? AND cleanup_completed=0) "
             "ORDER BY source_id, COALESCE(topic_id, 0), "
             "CAST(telegram_message_id AS INTEGER), created_at, content_id",
             (
                 State.RECEIVED.value,
                 State.IA.value,
+                State.SPEECH.value,
+                State.STUDIO_BATCH.value,
                 State.STUDIO.value,
                 State.PUBLISHING.value,
                 State.RECOVERY.value,
@@ -722,16 +806,38 @@ class Database:
 
         The caller holds a write transaction. Owner selection is deterministic:
         confirmed/publication evidence first, then the furthest durable pipeline
-        progress, existing rendered result, an existing ORIGINAL with valid SHA
-        metadata, and finally stable historical order. This prevents a missing
-        pre-download media row from stealing ownership from a verified peer while
-        retaining rows that already progressed or have publication evidence.
+        progress, an existing rendered result, and then ORIGINAL evidence. An
+        ORIGINAL with a SHA-256 that matches its bytes outranks one without a
+        verified digest; an unverified checksum string never adds weight.
         """
         seeded = self.conn.execute(
             "SELECT value FROM product_identity_claim_meta WHERE key='historical_seeded'"
         ).fetchone()
         if seeded:
             return
+
+        def affirmative_flag(value: object) -> bool:
+            """Parse SQLite legacy booleans explicitly; never treat 'false' as true."""
+            if value is True:
+                return True
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return value == 1
+            if isinstance(value, str):
+                return value.strip().casefold() in {"1", "true", "yes", "y", "confirmed"}
+            return False
+
+        # Relative historical paths must not change rank when the process CWD
+        # changes. A canonical DB path is <project>/storage/database/file.sqlite;
+        # tiny test/standalone databases use their own parent as the anchor.
+        database_path = Path(self.path).expanduser().resolve()
+        db_parent = database_path.parent
+        if (
+            db_parent.name.casefold() == "database"
+            and db_parent.parent.name.casefold() == "storage"
+        ):
+            relative_path_base = db_parent.parent.parent
+        else:
+            relative_path_base = db_parent
 
         publication_evidence: set[str] = set()
         publication_columns = {
@@ -753,7 +859,7 @@ class Database:
             ).fetchall():
                 status = str(publication["verification_status"] or "").strip().upper()
                 if (
-                    bool(publication["confirmed"])
+                    affirmative_flag(publication["confirmed"])
                     or bool(str(publication["published_message_id"] or "").strip())
                     or status in {"CONFIRMED", "VERIFIED", "PUBLISHED", "DELIVERED"}
                 ):
@@ -782,16 +888,14 @@ class Database:
             "WAITING_VISION": 0,
         }
 
-        def existing_absolute_file(value: object) -> Path | None:
+        def existing_file(value: object) -> Path | None:
             raw = str(value or "").strip()
             if not raw:
                 return None
             try:
                 path = Path(raw).expanduser()
-                # Relative paths are ambiguous here: never resolve them against
-                # whichever directory happened to launch the process.
                 if not path.is_absolute():
-                    return None
+                    path = relative_path_base / path
                 path = path.resolve(strict=True)
                 return path if path.is_file() else None
             except (OSError, ValueError, RuntimeError):
@@ -824,8 +928,8 @@ class Database:
             if not product_key:
                 continue
 
-            original_path = existing_absolute_file(row["original_path"])
-            result_path = existing_absolute_file(row["result_path"])
+            original_path = existing_file(row["original_path"])
+            result_path = existing_file(row["result_path"])
             original_exists = original_path is not None
             result_exists = result_path is not None
             sha_is_valid = valid_sha(row["original_sha256"], original_path)
@@ -835,7 +939,6 @@ class Database:
                 int(result_exists),
                 int(original_exists and sha_is_valid),
                 int(original_exists),
-                int(sha_is_valid),
             )
             candidates.setdefault(product_key, []).append(
                 (score, str(row["created_at"] or ""), str(row["content_id"]))
@@ -1174,6 +1277,51 @@ class Database:
             (str(path), item_id),
         )
         self.conn.commit()
+
+
+    def complete_speech_studio_batch(self, results: dict[str, Path]) -> None:
+        """Atomically persist the complete, hash-validated Speech v5 render batch."""
+        if not isinstance(results, dict) or not results:
+            raise ValueError("speech-studio-results-required")
+        prepared = {
+            str(item_id): str(Path(path).resolve(strict=True))
+            for item_id, path in results.items()
+        }
+        if len(prepared) != len(results):
+            raise ValueError("duplicate-content-id-in-speech-studio-results")
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            for item_id in sorted(prepared):
+                row = self.conn.execute(
+                    "SELECT state FROM items WHERE content_id=?",
+                    (item_id,),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(item_id)
+                old_state = State(str(row["state"]))
+                if old_state is not State.STUDIO_BATCH:
+                    raise RuntimeError(
+                        f"speech-studio-batch-state-mismatch:{item_id}:{old_state.value}"
+                    )
+                self.conn.execute(
+                    "UPDATE items SET result_path=?, state=?, last_error=NULL, "
+                    "updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
+                    (prepared[item_id], State.PUBLISHING.value, item_id),
+                )
+                self.conn.execute(
+                    "INSERT INTO state_events (content_id,old_state,new_state,reason) "
+                    "VALUES (?,?,?,?)",
+                    (
+                        item_id,
+                        State.STUDIO_BATCH.value,
+                        State.PUBLISHING.value,
+                        "speech-studio-v5-complete",
+                    ),
+                )
+            self.conn.commit()
+        except BaseException:
+            self.conn.rollback()
+            raise
 
     def set_result(self, item_id: str, path: Path) -> None:
         self.conn.execute(
