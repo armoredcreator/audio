@@ -22,7 +22,27 @@ jobs:
         run: python -m py_compile scripts/audit_orphans.py
       - name: Run read-only audit
         run: python scripts/audit_orphans.py --out-dir "${{ runner.temp }}/orphan-audit"
-      - name: Verify report artifacts
+      - name: Verify and summarize report
         run: |
-          test -n "$(find "${{ runner.temp }}/orphan-audit" -name 'orphan_audit_*.json' -print -quit)"
-          test -n "$(find "${{ runner.temp }}/orphan-audit" -name 'orphan_audit_*.md' -print -quit)"
+          REPORT="$(find "${{ runner.temp }}/orphan-audit" -name 'orphan_audit_*.json' -print -quit)"
+          MARKDOWN="$(find "${{ runner.temp }}/orphan-audit" -name 'orphan_audit_*.md' -print -quit)"
+          test -n "$REPORT"
+          test -n "$MARKDOWN"
+          python - "$REPORT" <<'PY'
+          import json, sys
+          r = json.load(open(sys.argv[1], encoding="utf-8"))
+          s = r["scope"]
+          print("AUDIT_SCOPE", json.dumps(s, ensure_ascii=False, sort_keys=True))
+          for key in ("python_unreferenced_candidates", "possible_unused_dependencies", "exact_duplicate_files", "backup_artifacts", "python_parse_issues"):
+              items = r[key]
+              print(f"AUDIT_{key.upper()}_COUNT={len(items)}")
+              for item in items:
+                  print("AUDIT_ITEM", json.dumps(item, ensure_ascii=False, sort_keys=True))
+          PY
+      - name: Upload audit reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: armoredaudiolab-orphan-audit-report
+          path: ${{ runner.temp }}/orphan-audit/orphan_audit_*
+          if-no-files-found: error
+          retention-days: 14
