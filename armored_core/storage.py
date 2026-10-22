@@ -24,9 +24,16 @@ class Storage:
     item_id remains an internal relational key only.
     """
 
-    def __init__(self, root: Path | None = None) -> None:
+    def __init__(self, root: Path | None = None, *, storage_root: Path | None = None) -> None:
+        # root remains the project/assets/configuration root. storage_root is an
+        # optional contained destination for generated media and per-run artifacts.
         self.root = (root or project_root()).resolve()
-        self.storage = self.root / "storage"
+        self.storage_root = (storage_root or self.root).resolve()
+        try:
+            self.storage_root.relative_to(self.root)
+        except ValueError as exc:
+            raise ValueError("storage_root must stay inside project root") from exc
+        self.storage = self.storage_root / "storage"
         self.database = self.storage / "database"
         self.videos = self.storage / "videos"
         self.logs = self.storage / "logs"

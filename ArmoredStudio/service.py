@@ -20,9 +20,9 @@ from .unified import UnifiedStudio
 class ArmoredStudio:
     """Canonical Studio boundary: mandatory analysis followed by processing."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, storage_root: Path | None = None):
         self.root = Path(root).resolve()
-        self.storage = Storage(self.root)
+        self.storage = Storage(self.root, storage_root=storage_root)
         self.engine = UnifiedStudio(self.root, self.storage)
 
     def analyze_visual(self, item: Item):
@@ -54,5 +54,6 @@ class ArmoredStudio:
         )
 
 
-def build(root: Path, **_kwargs):
-    return ArmoredStudio(root)
+def build(root: Path, **kwargs):
+    storage_root = kwargs.get("storage_root")
+    return ArmoredStudio(root, storage_root=Path(storage_root) if storage_root is not None else None)
