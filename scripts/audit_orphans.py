@@ -105,7 +105,7 @@ def audit(root):
         if not p.is_file() or any(x in SKIP_DIRS for x in p.parts): continue
         declaration_files.append(rel(p,root))
         for line in p.read_text(encoding="utf-8",errors="ignore").splitlines():
-            s=line.split("#",1)[0].strip().strip(",").strip("'""")
+            s=line.split("#",1)[0].strip().strip(",").strip("'\\\"")
             m=re.match(r"([A-Za-z0-9_.-]+)\s*(?:\[.*?\])?\s*(?:[<>=!~;].*)?$",s)
             if m and not s.startswith((".","-")) and m.group(1).lower() not in {"dependencies","optional-dependencies","install_requires","extras_require","requires-python"}:
                 declared.add(re.sub(r"[-_.]+","-",m.group(1)).lower())
