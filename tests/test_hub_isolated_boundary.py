@@ -121,3 +121,94 @@ def test_hub_rejects_unvalidated_input_before_any_transport(prepared, monkeypatc
         hub.publish_once(db.get(item_id))
     assert calls == []
     assert db.publication(item_id) is None
+
+
+def test_hub_test_lock_allows_only_matching_destination(prepared, monkeypatch):
+    hub, db, item_id = prepared
+    monkeypatch.setenv("ARMORED_HUB_TEST_CHAT_ID", "-1000000000001")
+    monkeypatch.setenv("ARMORED_HUB_TEST_TOPIC_ID", "10")
+    calls = fake_telegram(monkeypatch)
+
+    result = hub.publish_once(db.get(item_id))
+
+    assert result.confirmed
+    assert result.message_id == "7001"
+    assert calls.count("send") == 1
+    record = db.publication(item_id)
+    assert str(record["destination_chat_id"]) == "-1000000000001"
+    assert int(record["destination_topic_id"]) == 10
+
+
+@pytest.mark.parametrize(
+    ("allowed_chat", "allowed_topic"),
+    [
+        ("-1000000000002", "10"),
+        ("-1000000000001", "11"),
+        ("-1000000000001", None),
+        (None, "10"),
+        ("invalid", "10"),
+        ("-1000000000001", "0"),
+    ],
+)
+def test_hub_test_lock_rejects_bad_configuration_before_publication(
+    prepared, monkeypatch, allowed_chat, allowed_topic
+):
+    hub, db, item_id = prepared
+    for name, value in (
+        ("ARMORED_HUB_TEST_CHAT_ID", allowed_chat),
+        ("ARMORED_HUB_TEST_TOPIC_ID", allowed_topic),
+    ):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    calls = fake_telegram(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="test destination lock"):
+        hub.publish_once(db.get(item_id))
+
+    assert calls == []
+    assert db.publication(item_id) is None
+
+
+def test_hub_test_lock_checks_effective_route_not_fallback_env(prepared, monkeypatch):
+    hub, db, item_id = prepared
+    # The operator requested a test topic in the fallback variables, but
+    # a real source route still resolves to an operational destination.
+    monkeypatch.setenv("ARMORED_HUB_TOPIC_ID", "1329")
+    monkeypatch.setenv("ARMORED_HUB_TEST_CHAT_ID", "-1000000000001")
+    monkeypatch.setenv("ARMORED_HUB_TEST_TOPIC_ID", "1329")
+    hub.routes = (
+        SimpleNamespace(
+            source=SimpleNamespace(source_id="synthetic-source"),
+            hub=SimpleNamespace(chat_id="-1000000000001", topic_id=10),
+        ),
+    )
+    calls = fake_telegram(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="refused configured route"):
+        hub.publish_once(db.get(item_id))
+
+    assert calls == []
+    assert db.publication(item_id) is None
+
+
+def test_hub_test_lock_rejects_persisted_operational_destination(prepared, monkeypatch):
+    hub, db, item_id = prepared
+    # An older send attempt may persist a destination that takes precedence
+    # over both routes and the fallback environment.
+    db.publication_started(
+        item_id,
+        destination_chat_id="-1000000000001",
+        destination_topic_id=10,
+    )
+    monkeypatch.setenv("ARMORED_HUB_TEST_CHAT_ID", "-1000000000001")
+    monkeypatch.setenv("ARMORED_HUB_TEST_TOPIC_ID", "1329")
+    monkeypatch.setenv("ARMORED_HUB_TOPIC_ID", "1329")
+    calls = fake_telegram(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="refused configured route"):
+        hub.publish_once(db.get(item_id))
+
+    assert calls == []
+    assert int(db.publication(item_id)["destination_topic_id"]) == 10
