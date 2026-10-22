@@ -283,3 +283,23 @@ def test_successful_mutation_response_is_cached_without_second_network_call(monk
     assert api.generate_short_link(origin) == {"short_link": "https://s.shopee.example/link"}
     assert len(api.session.calls) == 1
     assert sleeps == []
+
+
+@pytest.mark.parametrize(
+    "graphql_errors",
+    [
+        [{"message": "internal error", "extensions": {"code": "INTERNAL_SERVER_ERROR"}}],
+        [{"message": "unexpected GraphQL failure"}],
+    ],
+)
+def test_ambiguous_mutation_graphql_error_is_not_replayed(monkeypatch, graphql_errors):
+    api, sleeps = make_api(monkeypatch, [FakeResponse(body={"errors": graphql_errors})])
+    origin = "https://shopee.com.br/product/10/20"
+
+    with pytest.raises(ShopeeMutationOutcomeUnknownError):
+        api.generate_short_link(origin)
+    with pytest.raises(ShopeeMutationOutcomeUnknownError):
+        api.generate_short_link(origin)
+
+    assert len(api.session.calls) == 1
+    assert sleeps == []
