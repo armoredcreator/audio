@@ -427,6 +427,16 @@ class ShopeeAffiliateAPI:
                         status_code=status,
                         response_metadata=metadata,
                     )
+                if is_mutation:
+                    # GraphQL errors do not prove the remote mutation had no
+                    # side effect. Unless Shopee definitively rejected auth or
+                    # quota above, block replay until external reconciliation.
+                    raise ShopeeMutationOutcomeUnknownError(
+                        f"{safe_summary}: efeito remoto não confirmado; "
+                        "não repetir a mutação automaticamente",
+                        status_code=status,
+                        response_metadata=metadata,
+                    )
                 if category == "transient" and can_retry and attempt < max_attempts:
                     delay = self._response_retry_delay(response, attempt)
                     log.warning(
