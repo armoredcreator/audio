@@ -13,7 +13,11 @@ $Requirements = Join-Path $PSScriptRoot "requirements-analysis.txt"
 
 if (!(Test-Path -LiteralPath $Python -PathType Leaf)) {
     if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
-        throw "Python Launcher (py) nao encontrado. Instale Python 3.11 e tente novamente."
+        throw "Python Launcher (py) nao encontrado. Instale Python 3.11.9 e tente novamente."
+    }
+    $LauncherVersion = (& py -3.11 -c "import sys; print('.'.join(map(str, sys.version_info[:3])))").Trim()
+    if ($LASTEXITCODE -ne 0 -or $LauncherVersion -ne '3.11.9') {
+        throw "O ambiente unificado exige Python 3.11.9. Launcher selecionou: $LauncherVersion"
     }
     Write-Host "[ArmoredSpeech] Criando o unico ambiente compartilhado: $SharedEnv"
     & py -3.11 -m venv $SharedEnv
@@ -23,8 +27,8 @@ if (!(Test-Path -LiteralPath $Python -PathType Leaf)) {
 }
 
 $Version = (& $Python -c "import sys; print('.'.join(map(str, sys.version_info[:3])))").Trim()
-if ($LASTEXITCODE -ne 0 -or $Version -notmatch '^3\.11\.') {
-    throw "O ambiente compartilhado precisa usar Python 3.11.x. Encontrado: $Version"
+if ($LASTEXITCODE -ne 0 -or $Version -ne '3.11.9') {
+    throw "O ambiente compartilhado precisa usar Python 3.11.9. Encontrado: $Version"
 }
 
 Write-Host "[ArmoredSpeech] Usando o ambiente compartilhado: $Python (Python $Version)"

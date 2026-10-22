@@ -152,7 +152,7 @@ def _retry_delay(headers: Any, attempt: int) -> float:
             except (TypeError, ValueError, OverflowError):
                 seconds = -1.0
         if seconds >= 0:
-            return min(seconds, _MAX_RETRY_DELAY_SECONDS)
+            return seconds
 
     try:
         base = max(0.0, float(os.getenv("SHOPEE_API_RETRY_BASE_SECONDS", "2")))
@@ -222,6 +222,7 @@ class ShopeeAffiliateAPI:
         # replay for this client lifetime unless a separate reconciliation can
         # establish the mutation outcome.
         self._short_link_unknown: set[str] = set()
+        self.last_response_metadata: dict[str, Any] = {}
 
     def close(self) -> None:
         self.session.close()
@@ -245,6 +246,20 @@ class ShopeeAffiliateAPI:
         # The env var historically means total attempts, not retries-after-first.
         return min(max(1, configured), _MAX_ATTEMPTS)
 
+    def _response_retry_delay(self, response: Any, attempt: int) -> float:
+        headers = getattr(response, "headers", {})
+        delay = _retry_delay(headers, attempt)
+        if delay > _MAX_RETRY_DELAY_SECONDS:
+            metadata = _response_metadata(headers)
+            self._close_response(response)
+            raise ShopeeRateLimitError(
+                "Shopee requested a retry window beyond this run; stop instead of retrying early",
+                retry_after=metadata.get("retry-after"),
+                status_code=int(getattr(response, "status_code", 200)),
+                response_metadata=metadata,
+            )
+        return delay
+
     def _post(
         self,
         query: str,
@@ -267,6 +282,7 @@ class ShopeeAffiliateAPI:
         # Even if a caller opts in accidentally, mutations are not retried.
         can_retry = bool(allow_transient_retries and not is_mutation)
         max_attempts = self._max_attempts()
+        self.last_response_metadata = {}
 
         for attempt in range(1, max_attempts + 1):
             ts = int(time.time())
@@ -312,6 +328,7 @@ class ShopeeAffiliateAPI:
 
             status = int(getattr(response, "status_code", 200))
             metadata = _response_metadata(getattr(response, "headers", {}))
+            self.last_response_metadata = {"status_code": status, "headers": metadata}
             retry_after = metadata.get("retry-after")
 
             if status in _AUTH_HTTP_STATUSES:
@@ -340,7 +357,7 @@ class ShopeeAffiliateAPI:
                         response_metadata=metadata,
                     )
                 if status in _RETRYABLE_HTTP_STATUSES and can_retry and attempt < max_attempts:
-                    delay = _retry_delay(getattr(response, "headers", {}), attempt)
+                    delay = self._response_retry_delay(response, attempt)
                     self._close_response(response)
                     log.warning(
                         "[SHOPEE_API] operation=%s attempt=%s/%s transient_http_status=%s retry_delay=%.2fs",
@@ -378,7 +395,7 @@ class ShopeeAffiliateAPI:
                         response_metadata=metadata,
                     ) from exc
                 if can_retry and attempt < max_attempts:
-                    delay = _retry_delay(getattr(response, "headers", {}), attempt)
+                    delay = self._response_retry_delay(response, attempt)
                     log.warning(
                         "[SHOPEE_API] operation=%s attempt=%s/%s invalid_json retry_delay=%.2fs",
                         operation, attempt, max_attempts, delay,
@@ -411,7 +428,7 @@ class ShopeeAffiliateAPI:
                         response_metadata=metadata,
                     )
                 if category == "transient" and can_retry and attempt < max_attempts:
-                    delay = _retry_delay(getattr(response, "headers", {}), attempt)
+                    delay = self._response_retry_delay(response, attempt)
                     log.warning(
                         "[SHOPEE_API] operation=%s attempt=%s/%s transient_graphql_error retry_delay=%.2fs",
                         operation, attempt, max_attempts, delay,
@@ -436,7 +453,7 @@ class ShopeeAffiliateAPI:
         # The bounded loop always returns or raises. This guard is defensive.
         raise ShopeeTransientAPIError("Shopee: tentativas esgotadas sem resultado")
 
-    def get_exact_product(self, shop_id: str, item_id: str):
+    def get_exact_product(self, shop_id: str, item_id: str, *, allow_transient_retries: bool = True):
         key = (str(shop_id), str(item_id))
         cached = self._product_cache.get(key)
         if cached is not None:
@@ -446,11 +463,18 @@ class ShopeeAffiliateAPI:
         data = self._post(
             PRODUCT_OFFER_QUERY,
             {"itemId": key[1], "shopId": key[0], "page": 1, "limit": 1},
+            allow_transient_retries=allow_transient_retries,
         )
-        nodes = data.get("data", {}).get("productOfferV2", {}).get("nodes") or []
+        envelope = data.get("data") if isinstance(data, dict) else None
+        offer = envelope.get("productOfferV2") if isinstance(envelope, dict) else None
+        nodes = offer.get("nodes") if isinstance(offer, dict) else None
+        if not isinstance(nodes, list):
+            raise ShopeeAPIError("Resposta Shopee incompleta: productOfferV2.nodes não é uma lista")
         if not nodes:
             raise ShopeeProductNotFoundError(f"Produto não encontrado: {shop_id}:{item_id}")
         product = nodes[0]
+        if not isinstance(product, dict):
+            raise ShopeeAPIError("Resposta Shopee incompleta: nó de produto inválido")
         if str(product.get("shopId")) != key[0] or str(product.get("itemId")) != key[1]:
             raise ShopeeAPIError("Produto Shopee divergente")
         self._product_cache[key] = dict(product)

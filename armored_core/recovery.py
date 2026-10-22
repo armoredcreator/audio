@@ -80,10 +80,14 @@ class Recovery:
 
     def _resume_durable_result(self, item_id: str, reason: str) -> None:
         self.db.transition(item_id, State.PUBLISHING, reason)
-        self.pipeline.run(item_id)
+        # Coordinator-owned v5 recovery prepares the durable boundary only.
+        # Its outer loop decides when the whole recovered batch may enter Hub.
+        if self.speech_studio_runner is None:
+            self.pipeline.run(item_id)
 
     def reconcile(self, item_id: str) -> None:
         item = self.db.get(item_id)
+        starting_state = item.state
 
         # Capture the failure evidence BEFORE Recovery writes its own
         # startup-recovery state event. Otherwise the evidence would be lost.
@@ -91,6 +95,10 @@ class Recovery:
 
         # ShopeeProductNotFound/VisionUnresolved remains WAITING_VISION.
         if item.state == State.WAITING_VISION:
+            if self.speech_studio_runner is not None:
+                # Coordinator retries require the explicit reviewed Vision
+                # allowlist and runtime lease; generic recovery cannot opt in.
+                return
             self.db.transition(item_id, State.VISION, "recovery-retry-waiting-vision")
             item = self.db.get(item_id)
             last_event = self.db.last_state_event(item_id)
@@ -165,7 +173,7 @@ class Recovery:
         # ArmoredIA is its own recoverable stage. Its failure never
         # invalidates or reruns a product already resolved by Vision V1.
         if (
-            item.state == State.IA
+            starting_state == State.IA
             or (
                 last_event
                 and last_event["old_state"] == State.IA.value

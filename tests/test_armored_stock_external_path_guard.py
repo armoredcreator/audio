@@ -126,3 +126,15 @@ def test_stock_still_repairs_legacy_path_inside_storage_root(tmp_path):
     assert canonical.is_file()
     assert _sha256(canonical) == expected_hash
     assert db.repaired_paths == [canonical]
+
+
+def test_stock_blocks_changed_canonical_original_without_overwriting(tmp_path):
+    storage = Storage(tmp_path)
+    item = _item(tmp_path / "placeholder.mp4")
+    item.original_path = storage.original(item.content_id, ".mp4", original_url=item.original_url, source_id=item.source_id).resolve()
+    item.original_path.write_bytes(b"modified original")
+    item.original_sha256 = hashlib.sha256(b"verified original").hexdigest()
+    coordinator = SimpleNamespace(storage=storage, db=FakeDatabase(item), source=None)
+    with pytest.raises(RuntimeError, match="original-immutable-hash-mismatch"):
+        asyncio.run(ArmoredStock(coordinator).materialize_item(item))
+    assert item.original_path.read_bytes() == b"modified original"

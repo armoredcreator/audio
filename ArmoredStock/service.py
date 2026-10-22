@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import logging
-import hashlib
 from collections import Counter
 from typing import Any
 
 from armored_core.models import State
 from armored_core.services import IngestMessage
+from armored_core.integrity import sha256_file
 
 log = logging.getLogger(__name__)
 
@@ -42,11 +42,7 @@ class ArmoredStock:
 
     @staticmethod
     def _sha256(path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
+        return sha256_file(path)
 
     async def materialize_item(
         self,
@@ -117,7 +113,17 @@ class ArmoredStock:
             coordinator.db.repair_original_path(item.content_id, canonical_original)
             item = coordinator.db.get(item.content_id)
 
-        if item.original_path.is_file():
+        if item.original_path.exists():
+            if not item.original_path.is_file() or item.original_path.stat().st_size <= 0:
+                raise RuntimeError(f"existing-original-is-not-a-nonempty-file:{item.content_id}")
+            actual_digest = self._sha256(item.original_path)
+            expected_digest = str(getattr(item, "original_sha256", "") or "").strip().lower()
+            if expected_digest and actual_digest.lower() != expected_digest:
+                raise RuntimeError(f"original-immutable-hash-mismatch:{item.content_id}")
+            if not expected_digest:
+                finalize = getattr(coordinator.db, "finalize_original_path", None)
+                if callable(finalize):
+                    finalize(item.content_id, item.original_path, actual_digest)
             return "existing"
 
         source_materializer = getattr(source, "materialize_candidate_async", None) if source is not None else None

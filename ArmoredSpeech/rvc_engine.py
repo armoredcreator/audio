@@ -116,7 +116,17 @@ def _backend_output_tail(stdout: str, stderr: str, limit: int = 12) -> str:
     return " | ".join(lines[-limit:])
 
 
+def _require_new_output(entrada, saida) -> None:
+    source, destination = Path(entrada), Path(saida)
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(f"RVC refuses to overwrite an existing file: {destination}")
+    if source.resolve() == destination.resolve():
+        raise ValueError("RVC input and output must be different files")
+
+
 def converter_interno(entrada, saida, modelo, index, item_id=None):
+    # Check before backend setup or exception cleanup can touch the output.
+    _require_new_output(entrada, saida)
     import scipy.io.wavfile as wavfile
 
     prefix = f"[SPEECH][ITEM {item_id}] " if item_id else "[SPEECH] "
@@ -243,9 +253,8 @@ def converter_voz(entrada, saida=None, voz=DEFAULT_VOICE, item_id=None):
     entrada = Path(entrada)
     saida = Path(saida) if saida is not None else DEFAULT_OUTPUT
     validar_arquivo(entrada, "Áudio de entrada")
+    _require_new_output(entrada, saida)
     saida.parent.mkdir(parents=True, exist_ok=True)
-    if saida.exists():
-        saida.unlink()
     return executar_no_rvc(entrada, saida, voz, item_id)
 
 

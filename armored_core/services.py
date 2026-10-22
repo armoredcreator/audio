@@ -1,5 +1,4 @@
 from __future__ import annotations
-import hashlib
 import inspect
 import shutil
 from dataclasses import dataclass
@@ -7,6 +6,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 from .database import Database
 from .models import Item, PublicationCheck, State
+from .integrity import sha256_file
 
 
 class VisionUnresolvedError(RuntimeError):
@@ -120,11 +120,7 @@ class SyncService:
 
     @staticmethod
     def _sha256(path: Path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
+        return sha256_file(path)
 
     def _finish_ingest(self, content_id: str, original: Path, partial: Path) -> int:
         if not partial.is_file() or partial.stat().st_size <= 0:
@@ -133,12 +129,45 @@ class SyncService:
         self.db.finalize_original_path(content_id, original, self._sha256(original))
         return content_id
 
+    def _reuse_existing_original(self, content_id: str, original: Path) -> bool:
+        """Reuse an existing original only after checking its durable hash.
+
+        A previous process may have completed the atomic rename but failed
+        before persisting the SHA-256. Preserve those bytes and finish the
+        metadata write on retry instead of deleting or downloading over them.
+        """
+        if not original.exists():
+            return False
+        if not original.is_file() or original.stat().st_size <= 0:
+            raise IOError(f"existing-original-is-not-a-nonempty-file:{original}")
+
+        before = original.stat()
+        digest = self._sha256(original)
+        after = original.stat()
+        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+            raise IOError(f"existing-original-changed-during-hash:{original}")
+
+        row = self.db.conn.execute(
+            "SELECT original_sha256 FROM items WHERE content_id=?",
+            (str(content_id),),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"existing-original-has-no-item-row:{content_id}")
+        expected = str(row["original_sha256"] or "").strip().lower()
+        if expected and digest.lower() != expected:
+            raise IOError(f"existing-original-hash-mismatch:{content_id}")
+        if not expected:
+            self.db.finalize_original_path(content_id, original, digest)
+        return True
+
     @staticmethod
     def _cleanup_ingest_files(original: Path, partial: Path) -> None:
+        # The final path may already contain a complete original if a failure
+        # occurred after the atomic rename but before SQLite committed its
+        # hash. Keep it for an idempotent retry; only an unfinished .part file
+        # is disposable here.
         if partial.exists():
             partial.unlink()
-        if original.exists():
-            original.unlink()
 
     def reserve_message(self, message: IngestMessage) -> str:
         """Reserve one candidate in SQLite without downloading its media."""
@@ -184,7 +213,7 @@ class SyncService:
     async def materialize_message_async(self, message: IngestMessage) -> int:
         """Materialize an already-reserved candidate into its immutable path."""
         item_id, original, partial = self._prepare_ingest(message)
-        if original.exists():
+        if self._reuse_existing_original(item_id, original):
             return item_id
         try:
             if partial.exists():
@@ -206,7 +235,7 @@ class SyncService:
 
     def ingest_message(self, message: IngestMessage) -> int:
         item_id, original, partial = self._prepare_ingest(message)
-        if original.exists():
+        if self._reuse_existing_original(item_id, original):
             return item_id
         try:
             if partial.exists():
@@ -228,7 +257,7 @@ class SyncService:
 
     async def ingest_message_async(self, message: IngestMessage) -> int:
         item_id, original, partial = self._prepare_ingest(message)
-        if original.exists():
+        if self._reuse_existing_original(item_id, original):
             return item_id
         try:
             if partial.exists():
