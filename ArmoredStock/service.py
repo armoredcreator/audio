@@ -74,14 +74,31 @@ class ArmoredStock:
         # approved item; it validates only the selected item's durable approval.
 
         # Repair only a missing path. Never overwrite an immutable ORIGINAL.
+        storage_root = (getattr(coordinator.storage, "storage_root", None) or getattr(coordinator.storage, "root")).resolve()
         canonical_original = coordinator.storage.original(
             item.content_id,
             ".mp4",
             original_url=item.original_url,
             source_id=item.source_id,
-        )
+        ).resolve()
+        try:
+            canonical_original.relative_to(storage_root)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"canonical-original-outside-storage-root:{item.content_id}:{canonical_original}"
+            ) from exc
+
         if item.original_path != canonical_original:
             old_path = item.original_path
+            if not old_path.is_absolute():
+                old_path = storage_root / old_path
+            old_path = old_path.resolve()
+            try:
+                old_path.relative_to(storage_root)
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"refusing-to-repair-original-outside-storage-root:{item.content_id}:{old_path}"
+                ) from exc
             if old_path.is_file():
                 old_digest = self._sha256(old_path)
                 expected_digest = str(getattr(item, "original_sha256", "") or "").strip()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import contextlib
+import threading
 import io
 import os
 import subprocess
@@ -19,6 +20,44 @@ SHARED_ENV_DIR = REPO_ROOT / ".venv"
 RVC_ROOT = (SPEECH_ROOT / "runtime" / "rvc").resolve()
 MODELS_DIR = RVC_ROOT / "models"
 BASE_DIR = SPEECH_ROOT
+
+_SAFE_GLOBALS_LOCK = threading.RLock()
+
+
+def _trusted_safe_globals(torch_module, globals_to_allow):
+    """Temporarily allowlist trusted RVC checkpoint metadata."""
+    serialization = torch_module.serialization
+    native_scope = getattr(serialization, "safe_globals", None)
+
+    if callable(native_scope):
+        return native_scope(globals_to_allow)
+
+    add_globals = getattr(serialization, "add_safe_globals", None)
+    get_globals = getattr(serialization, "get_safe_globals", None)
+    clear_globals = getattr(serialization, "clear_safe_globals", None)
+
+    if not all(callable(function) for function in (
+        add_globals, get_globals, clear_globals
+    )):
+        raise RuntimeError(
+            "PyTorch does not expose a supported safe-global API; "
+            "refusing an unsafe checkpoint-loading fallback."
+        )
+
+    @contextlib.contextmanager
+    def compatible_scope():
+        with _SAFE_GLOBALS_LOCK:
+            previous = list(get_globals())
+            try:
+                add_globals(globals_to_allow)
+                yield
+            finally:
+                clear_globals()
+                if previous:
+                    add_globals(previous)
+
+    return compatible_scope()
+
 
 DEFAULT_VOICE = "melody"
 DEFAULT_OUTPUT = RVC_ROOT / "output" / "audio_rvc.wav"
@@ -110,7 +149,7 @@ def converter_interno(entrada, saida, modelo, index, item_id=None):
         # Legacy Fairseq checkpoints commonly include argparse.Namespace
         # alongside Dictionary metadata. Both are explicitly allowlisted;
         # we do not switch torch.load to unrestricted pickle loading.
-        with torch.serialization.safe_globals([Dictionary, argparse.Namespace]):
+        with _trusted_safe_globals(torch, [Dictionary, argparse.Namespace]):
             wav_opt = rvc.vc.vc_single(
                 sid=0,
                 input_audio_path=str(entrada),

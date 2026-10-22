@@ -383,7 +383,7 @@ def test_real_runner_prepares_all_speech_variants_before_studio_analysis(tmp_pat
             destination.write_bytes(b"synthetic rendered video")
             return SimpleNamespace(result_path=destination)
 
-    def fake_build_studio(_root):
+    def fake_build_studio(_root, **_kwargs):
         events.append(("studio-created", None))
         return FakeStudio()
 
@@ -435,7 +435,7 @@ def test_real_runner_blocks_all_studio_calls_if_any_v5_package_is_invalid(tmp_pa
             events.append(("studio-render", str(item.telegram_message_id)))
             raise AssertionError("No Studio call is allowed when any v5 package is invalid")
 
-    def fake_build_studio(_root):
+    def fake_build_studio(_root, **_kwargs):
         events.append(("studio-created", None))
         return FakeStudio()
 

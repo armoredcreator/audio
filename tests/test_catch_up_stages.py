@@ -124,6 +124,9 @@ class FakeCoordinator:
         self.sync = FakeSync(db)
         self.pipeline = FakePipeline(db)
         self.storage = SimpleNamespace(
+            # The Stock path guard requires a declared root. All test fixture paths
+            # in this module are created beneath the system temporary directory.
+            root=Path(tempfile.gettempdir()).resolve(),
             original=lambda content_id, suffix, original_url=None, source_id=None:
                 self.db.get(content_id).original_path
         )

@@ -65,12 +65,12 @@ def _manifest(root: Path, rows: list[dict]) -> Path:
     return path
 
 
-def _studio_runner(*, root, manifest_path, speech_database, report_path, copy_only):
+def _studio_runner(*, root, manifest_path, speech_database, report_path, copy_only, storage_root=None):
     assert copy_only is False
     manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
     assert all(item["state"] == "SPEECH" for item in manifest["items"])
     output = []
-    storage = Storage(Path(root))
+    storage = Storage(Path(root), storage_root=Path(storage_root) if storage_root is not None else None)
     for item in manifest["items"]:
         original = Path(item["original_path"])
         result = storage.result(
@@ -222,3 +222,68 @@ def test_project_environment_loader_ignores_production_runtime_and_telegram_sett
         "BOT_API_PORT",
     ):
         assert key not in os.environ
+
+
+def test_repeated_pipeline_runs_keep_storage_and_outputs_isolated(tmp_path, monkeypatch):
+    video = tmp_path / "same-video.mp4"
+    video.write_bytes(b"immutable-video-for-two-independent-runs")
+    original_bytes = video.read_bytes()
+    manifest = _manifest(tmp_path, [{
+        "source_id": "source1",
+        "telegram_message_id": "901",
+        "source_path": "same-video.mp4",
+        "original_url": "https://shopee.co/repeated-run-isolation",
+    }])
+    monkeypatch.setenv("ARMORED_IA_ENABLED", "1")
+    monkeypatch.setenv("ARMORED_IA_CAPTION_ENABLED", "1")
+
+    reports = []
+    for _ in range(2):
+        reports.append(run_lab_pipeline(
+            tmp_path,
+            manifest,
+            ia_provider="ollama",
+            require_live_preflight=False,
+            vision_factory=FakeVision,
+            ia_factory=FakeIA,
+            speech_processor=FakeSpeechProcessor(),
+            studio_runner=_studio_runner,
+        ))
+
+    original_paths = []
+    result_paths = []
+    run_roots = []
+    for report in reports:
+        run_root = Path(report["run_directory"]).resolve()
+        workspace_root = (run_root / "workspace").resolve()
+        run_roots.append(run_root)
+        assert Path(report["storage_root"]).resolve() == workspace_root
+        assert report["storage_isolated"] is True
+        db = Database(Path(report["database"]))
+        try:
+            row = db.conn.execute(
+                "SELECT original_path, result_path FROM items WHERE telegram_message_id='901'"
+            ).fetchone()
+            original_path = Path(row["original_path"]).resolve()
+            result_path = Path(row["result_path"]).resolve()
+            assert original_path.is_file() and result_path.is_file()
+            assert original_path.is_relative_to(workspace_root)
+            assert result_path.is_relative_to(workspace_root)
+            original_paths.append(original_path)
+            result_paths.append(result_path)
+        finally:
+            db.close()
+
+    assert run_roots[0] != run_roots[1]
+    assert original_paths[0] != original_paths[1]
+    assert result_paths[0] != result_paths[1]
+    assert video.read_bytes() == original_bytes
+    assert not list((tmp_path / "storage").glob("Videos GRUPO_FONTE_*"))
+
+
+def test_storage_root_rejects_path_outside_project_root(tmp_path):
+    from armored_core.storage import Storage
+    import pytest
+
+    with pytest.raises(ValueError, match="storage_root must stay inside project root"):
+        Storage(tmp_path, storage_root=tmp_path.parent / "outside-lab")
