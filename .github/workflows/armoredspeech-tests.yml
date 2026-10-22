@@ -19,6 +19,7 @@ on:
       - "ArmoredStudio/**"
       - "armored_core/**"
       - "scripts/**"
+      - "tests/**"
       - "pyproject.toml"
       - "README.md"
       - "ArmoredSpeech/README.md"
