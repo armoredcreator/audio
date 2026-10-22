@@ -510,13 +510,18 @@ class ShopeeAffiliateAPI:
         except ShopeeMutationOutcomeUnknownError:
             self._short_link_unknown.add(origin)
             raise
-        link = (result.get("data", {}).get("generateShortLink") or {}).get("shortLink")
-        if not link:
+        # A 2xx GraphQL response is not proof that the remote mutation failed
+        # or succeeded. Every malformed/missing envelope must be treated as an
+        # ambiguous outcome, never as a plain AttributeError that permits replay.
+        envelope = result.get("data") if isinstance(result, dict) else None
+        operation = envelope.get("generateShortLink") if isinstance(envelope, dict) else None
+        link = operation.get("shortLink") if isinstance(operation, dict) else None
+        short_link = link.strip() if isinstance(link, str) else ""
+        if not short_link:
             self._short_link_unknown.add(origin)
             raise ShopeeMutationOutcomeUnknownError(
-                "Shopee não confirmou shortLink; o resultado da mutação é desconhecido. "
-                "Não repetir automaticamente sem reconciliação."
+                "Shopee não confirmou shortLink; resposta ausente ou malformada. "
+                "Resultado da mutação desconhecido; não repetir sem reconciliação."
             )
-        short_link = str(link).strip()
         self._short_link_cache[origin] = short_link
         return {"short_link": short_link}
