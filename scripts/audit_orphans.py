@@ -86,7 +86,7 @@ def audit(root):
         r=rel(p,root); imports,strings,err=parse_py(p,root); imports_by_file[r]=imports
         try:
             source=p.read_text(encoding="utf-8-sig",errors="ignore")
-            if re.search(r"if\\s+__name__\\s*==\\s*['\\\"]__main__['\\\"]\\s*:",source):
+            if "__name__" in source and "__main__" in source and "if" in source:
                 standalone_entrypoints.append(r)
         except OSError: pass
         if err: errors.append({"path":r,"error":err})
