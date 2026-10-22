@@ -171,7 +171,7 @@ def audit(root):
         if p.suffix.lower() not in DOC_EXTS: continue
         try: source=p.read_text(encoding="utf-8-sig",errors="ignore")
         except OSError: continue
-        if re.search(r"audio-separator",source,re.I) and re.search(r"shutil\\.which|_resolve_executable|subprocess\\.(?:run|Popen)",source):
+        if re.search(r"audio-separator",source,re.I) and re.search(r"shutil\.which|_resolve_executable|subprocess\.(?:run|Popen)",source):
             runtime_cli_used.add("audio-separator")
     possibly_unused=[{"distribution":d,"classification":"POSSIBLY_UNUSED_DEPENDENCY","reason":"No matching Python import detected. Check optional/runtime use and declaration scope before removal; never auto-remove."} for d in sorted(declared) if d not in used_dists and d.replace("-","_") not in used and d not in runtime_cli_used]
     return {"generated_at_utc":datetime.now(timezone.utc).isoformat(),"root":str(root),
