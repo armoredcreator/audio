@@ -86,9 +86,18 @@ def audit(root):
         r=rel(p,root); imports,strings,err=parse_py(p,root); imports_by_file[r]=imports
         try:
             source=p.read_text(encoding="utf-8-sig",errors="ignore")
-            if "__name__" in source and "__main__" in source and "if" in source:
+            tree=ast.parse(source,filename=str(p))
+            if any(
+                isinstance(node,ast.If)
+                and isinstance(node.test,ast.Compare)
+                and isinstance(node.test.left,ast.Name)
+                and node.test.left.id=="__name__"
+                and any(isinstance(op,ast.Eq) for op in node.test.ops)
+                and any(isinstance(value,ast.Constant) and value.value=="__main__" for value in node.test.comparators)
+                for node in ast.walk(tree)
+            ):
                 standalone_entrypoints.append(r)
-        except OSError: pass
+        except (OSError,SyntaxError): pass
         if err: errors.append({"path":r,"error":err})
         try: src=p.read_text(encoding="utf-8",errors="ignore")
         except OSError: src=""
@@ -155,7 +164,16 @@ def audit(root):
             if top and top not in stdlib and top not in modules: used.add(top)
     special={"cv2":"opencv-python-headless","dotenv":"python-dotenv","PIL":"pillow","yaml":"pyyaml","sklearn":"scikit-learn","bs4":"beautifulsoup4","google":"google-generativeai","fitz":"pymupdf","Crypto":"pycryptodome","imageio_ffmpeg":"imageio-ffmpeg","audio_separator":"audio-separator","faster_whisper":"faster-whisper"}
     used_dists={re.sub(r"[-_.]+","-",special.get(x,x)).lower() for x in used}
-    possibly_unused=[{"distribution":d,"classification":"POSSIBLY_UNUSED_DEPENDENCY","reason":"No matching import detected; may be optional, runtime-only, imported under another name, or dynamically loaded. Never auto-remove."} for d in sorted(declared) if d not in used_dists and d.replace("-","_") not in used]
+    # Some optional packages are consumed as executable CLIs, not Python imports.
+    # Detect known command-based use separately to avoid reporting these as dead deps.
+    runtime_cli_used=set()
+    for p in files:
+        if p.suffix.lower() not in DOC_EXTS: continue
+        try: source=p.read_text(encoding="utf-8-sig",errors="ignore")
+        except OSError: continue
+        if re.search(r"audio-separator",source,re.I) and re.search(r"shutil\\.which|_resolve_executable|subprocess\\.(?:run|Popen)",source):
+            runtime_cli_used.add("audio-separator")
+    possibly_unused=[{"distribution":d,"classification":"POSSIBLY_UNUSED_DEPENDENCY","reason":"No matching Python import detected. Check optional/runtime use and declaration scope before removal; never auto-remove."} for d in sorted(declared) if d not in used_dists and d.replace("-","_") not in used and d not in runtime_cli_used]
     return {"generated_at_utc":datetime.now(timezone.utc).isoformat(),"root":str(root),
       "scope":{"files_scanned":len(files),"python_files":len(py),"python_modules":len(modules),"dynamic_loading_files":sorted(dynamic_files),"standalone_entrypoints":sorted(standalone_entrypoints)},
       "python_unreferenced_candidates":candidates,"possible_unused_dependencies":possibly_unused,"exact_duplicate_files":duplicates,
