@@ -71,6 +71,29 @@ def normalize_phone(value: str) -> str:
     return phone
 
 
+async def request_login_code(client, phone, api_id, api_hash, diagnostics):
+    """No generic resend; follow at most one server-rejected DC redirect.
+
+    Telethon already switches its session DC before raising PhoneMigrateError.
+    That error rejects the first request; timeout/auth/flood errors never retry.
+    """
+    from telethon import functions, types
+    from telethon.errors import PhoneMigrateError
+    before = getattr(client.session, "dc_id", None)
+    diagnostics.update(login_dc_before=before, login_request_attempts=1)
+    def request():
+        return functions.auth.SendCodeRequest(phone, int(api_id), api_hash, types.CodeSettings())
+    try:
+        return await asyncio.wait_for(client(request()), timeout=30)
+    except PhoneMigrateError as exc:
+        after = getattr(client.session, "dc_id", None)
+        diagnostics["login_dc_after"] = after
+        if after == before or after != exc.new_dc:
+            raise RuntimeError("LOGIN_DC_REDIRECT_NOT_CONFIRMED") from exc
+        diagnostics["login_request_attempts"] = 2
+        return await asyncio.wait_for(client(request()), timeout=30)
+
+
 def prepare_workspace(root: Path) -> Path:
     """Only a fresh directory or this tool's marked directory is accepted."""
     root = Path(root).absolute()
@@ -235,7 +258,8 @@ async def _interactive_locked(args, workspace):
     client = TelegramClient(str(workspace / SESSION_NAME), int(api_id), api_hash,
                             device_model="Armored isolated historical recovery",
                             request_retries=0, connection_retries=1,
-                            flood_sleep_threshold=0, receive_updates=False)
+                              flood_sleep_threshold=0, receive_updates=False,
+                              raise_last_call_error=True)
     status = {"started_at_utc": utc_now(), "selection": selection,
               "operational_database_opened": False, "publishing_enabled": False,
               "session_origin": "new dedicated session; never copied"}
@@ -250,11 +274,11 @@ async def _interactive_locked(args, workspace):
             status["stage"] = "LOCAL_PHONE_INPUT"
             phone = normalize_phone(getpass.getpass("Telefone com codigo do pais (entrada oculta): ").strip())
             status["stage"] = "REQUESTING_ONE_LOGIN_CODE"
-            # Use the public raw request to avoid send_code_request's implicit
-            # AuthRestart/resend loop. One failed request stops this invocation.
-            from telethon import functions, types
-            sent = await client(functions.auth.SendCodeRequest(
-                phone, int(api_id), api_hash, types.CodeSettings()))
+            # Keep the actual RPC error instead of Telethon's generic ValueError.
+            # Only an explicitly rejected phone-DC redirect can make one further
+            # request; ambiguous failure, quota or authentication never resends.
+            from telethon import types
+            sent = await request_login_code(client, phone, api_id, api_hash, status)
             if not isinstance(sent, types.auth.SentCode):
                 raise RuntimeError("LOGIN_RESPONSE_REQUIRES_EXPLICIT_REVIEW")
             status["stage"] = "LOCAL_CODE_INPUT"

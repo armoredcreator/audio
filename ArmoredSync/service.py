@@ -11,6 +11,7 @@ from typing import Any
 from armored_core.database import Database
 from armored_core.services import IngestMessage, SyncService
 from armored_core.shopee_urls import is_supported_shopee_url
+from armored_core.storage import Storage
 
 
 @dataclass(frozen=True)
@@ -521,8 +522,8 @@ class TelegramSource:
         necessary as long as Telegram keeps delivering data.
         """
         target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists():
-            target.unlink()
+        if target.exists() or target.is_symlink():
+            raise FileExistsError(f"Telegram download refuses to overwrite an existing target: {target}")
 
         telegram_size = getattr(getattr(message, "document", None), "size", None)
         idle_timeout = max(
@@ -538,7 +539,7 @@ class TelegramSource:
             request_size=1024 * 1024,
         ).__aiter__()
 
-        with target.open("wb") as output:
+        with target.open("xb") as output:
             while True:
                 try:
                     chunk = await asyncio.wait_for(
@@ -604,6 +605,8 @@ class TelegramSource:
         Retries are confined to materialization. They do not alter Vision state,
         advance historical checkpoints, or invoke downstream processing.
         """
+        if target.exists() or target.is_symlink():
+            raise FileExistsError(f"Telegram materialization refuses an existing target: {target}")
         source = self.source or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         if not source:
             raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
@@ -630,14 +633,13 @@ class TelegramSource:
                 await self._download_to(message, target)
                 return
             except Exception as exc:
-                # Never leave a partial file that could be mistaken for an ORIGINAL.
-                try:
-                    if target.exists():
-                        target.unlink()
-                except OSError:
-                    logging.getLogger(__name__).exception(
-                        "[SYNC][DOWNLOAD] Não foi possível remover arquivo parcial: %s", target
-                    )
+                # A collision is not our failed download; never move or retry it.
+                if isinstance(exc, FileExistsError):
+                    raise
+                if target.exists() or target.is_symlink():
+                    Storage(self.root).preserve_artifacts([target], workspace=target.parent,
+                        content_id=Database.content_id_for(str(telegram_message_id), self.source_id or source),
+                        reason="telegram-download-attempt-failed")
 
                 if attempt >= max_attempts or not self._is_retryable_download_error(exc):
                     raise

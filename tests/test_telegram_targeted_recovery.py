@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts.recover_telegram_original import (
-    MARKER, prepare_workspace, recover_one, select_record, session_lock, verify_media, normalize_phone,
+    MARKER, prepare_workspace, recover_one, select_record, session_lock, verify_media, normalize_phone, request_login_code,
 )
 
 
@@ -38,6 +38,41 @@ def test_invalid_phone_is_rejected_before_network(value):
 
 def test_phone_is_normalized_without_persisting_its_value():
     assert normalize_phone("+55 (11) 99999-1234") == "5511999991234"
+
+
+def test_login_follows_one_confirmed_dc_redirect_without_logging_phone():
+    from telethon.errors import PhoneMigrateError
+    calls=[];sent=object()
+    class Client:
+        session=SimpleNamespace(dc_id=2)
+        async def __call__(self,request):
+            calls.append(type(request).__name__)
+            if len(calls)==1:
+                self.session.dc_id=1
+                raise PhoneMigrateError(request=request,capture=1)
+            return sent
+    diagnostics={}
+    assert asyncio.run(request_login_code(Client(),'5511999991234',1,'synthetic',diagnostics)) is sent
+    assert len(calls)==2
+    assert diagnostics=={'login_dc_before':2,'login_dc_after':1,'login_request_attempts':2}
+    assert '5511999991234' not in json.dumps(diagnostics)
+
+
+@pytest.mark.parametrize('failure',['timeout','authentication','flood','repeated_redirect'])
+def test_login_never_repeats_ambiguous_auth_or_quota_failure(failure):
+    from telethon.errors import ApiIdInvalidError,FloodWaitError,PhoneMigrateError
+    calls=[]
+    class Client:
+        session=SimpleNamespace(dc_id=2)
+        async def __call__(self,request):
+            calls.append(request)
+            if failure=='timeout':raise TimeoutError('synthetic timeout')
+            if failure=='authentication':raise ApiIdInvalidError(request=request)
+            if failure=='flood':raise FloodWaitError(request=request,capture=60)
+            raise PhoneMigrateError(request=request,capture=1)
+    with pytest.raises(Exception):
+        asyncio.run(request_login_code(Client(),'5511999991234',1,'synthetic',{}))
+    assert len(calls)==1
 
 
 def test_concurrent_login_or_recovery_cannot_open_the_same_session(tmp_path):

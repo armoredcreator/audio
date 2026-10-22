@@ -22,8 +22,13 @@ python scripts/recover_telegram_original.py --workspace PRIVATE_NEW_DIRECTORY --
 The operator enters their telephone number, Telegram login code and optional
 two-step verification password directly in that terminal. Entries are hidden.
 Do not put login secrets in chat, command arguments, reports or Git. There is
-one login-code request; authentication or flood errors stop the run instead of
-retrying. Account creation and password changes are outside this tool.
+no generic resend loop: authentication, flood or ambiguous timeout errors stop
+the run. A server-rejected `PhoneMigrateError` permits at most one further RPC,
+only after the SDK confirms the new session's DC changed to that exact target.
+The rejected redirect does not establish code delivery. The real last RPC error
+is retained instead of Telethon's generic exhausted-attempt `ValueError`.
+Reports contain only request counts/DC numbers, never phone or code. Account
+creation and password changes are outside this tool.
 
 Telegram describes authorization and its account-specific flood limits in its
 [official authorization documentation](https://core.telegram.org/api/auth).

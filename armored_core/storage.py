@@ -58,13 +58,14 @@ class Storage:
         backup_root = self.backups.resolve(strict=True)
         workspace.relative_to(root)
         backup_root.relative_to(root)
-        if backup_root.is_relative_to(workspace):
-            raise RuntimeError("recovery-backup-directory-overlaps-workspace")
         for path in paths:
             if path.absolute().parent != workspace:
                 raise RuntimeError("recovery-artifact-outside-workspace")
             if not path.is_symlink():
-                path.resolve(strict=True).relative_to(workspace)
+                resolved = path.resolve(strict=True)
+                resolved.relative_to(workspace)
+                if path.is_dir() and backup_root.is_relative_to(resolved):
+                    raise RuntimeError("recovery-backup-directory-overlaps-artifact")
         archive = backup_root / ("recovery-" + uuid4().hex)
         archive.resolve().relative_to(backup_root)
         archive.mkdir(exist_ok=False)
