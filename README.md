@@ -27,6 +27,19 @@ transporte simulado e banco isolado; `ARMORED_HUB_DRY_RUN=1` bloqueia envio e
 verificação externa antes de qualquer alteração de publicação. A aprovação
 dos testes não autoriza publicar em canais reais.
 
+
+Para um envio **real e explicitamente autorizado** em tópico de teste, use
+somente uma cópia isolada da configuração e configure **a rota efetiva** para
+o chat/tópico de teste, além de definir
+`ARMORED_HUB_TEST_CHAT_ID` e `ARMORED_HUB_TEST_TOPIC_ID` com os mesmos
+identificadores. A trava rejeita env incompleto, rota operacional ou destino
+pré-existente diferente **antes** de criar uma intenção de publicação ou abrir
+o transporte Telegram. Ela **não redireciona** rotas e não supera
+`ARMORED_HUB_DRY_RUN=1`; para envio real autorizado essa variável deve
+estar desativada. Não alterar rotas operacionais nem reaproveitar registros
+de publicação de produção apenas para testar.
+
+
 Uma amostra histórica isolada concluiu IA local → Speech → Studio e retomada
 após interrupção com Hub simulado, mantendo o render e o original. Isso não
 comprova descoberta Telegram e consulta Shopee atuais: a aprovação Vision
