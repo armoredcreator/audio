@@ -1,0 +1,28 @@
+name: Orphan auditor smoke test
+
+on:
+  push:
+    paths:
+      - "scripts/audit_orphans.py"
+      - ".github/workflows/orphan-audit-smoke.yml"
+  pull_request:
+    paths:
+      - "scripts/audit_orphans.py"
+      - ".github/workflows/orphan-audit-smoke.yml"
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11.9"
+      - name: Compile auditor
+        run: python -m py_compile scripts/audit_orphans.py
+      - name: Run read-only audit
+        run: python scripts/audit_orphans.py --out-dir "${{ runner.temp }}/orphan-audit"
+      - name: Verify report artifacts
+        run: |
+          test -n "$(find "${{ runner.temp }}/orphan-audit" -name 'orphan_audit_*.json' -print -quit)"
+          test -n "$(find "${{ runner.temp }}/orphan-audit" -name 'orphan_audit_*.md' -print -quit)"
