@@ -51,6 +51,10 @@ vinculados ao commit/árvore em que foram executados.
   A redescoberta de itens já publicados utiliza o ID original da mensagem
   para o cursor, preserva o namespace da fonte no SQLite e não avança sobre
   uma falha anterior. Esses dois cenários têm regressão específica.
+- **Separação vocal:** o executável do ambiente ativo tem prioridade sobre
+  um CLI global encontrado no PATH. WAVs e recibos existentes são preservados;
+  a escrita é exclusiva e os estágios parciais permanecem disponíveis após
+  falha. A inferência curta não substitui a validação dessa separação real.
 - **Recuperação:** há ferramenta de sessão Telegram nova e recuperação de uma
   mensagem exata; credenciais são fornecidas somente no terminal local.
   Consulte [TARGETED_TELEGRAM_RECOVERY](TARGETED_TELEGRAM_RECOVERY.md).

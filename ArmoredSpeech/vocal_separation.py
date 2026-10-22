@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import nullcontext
 from pathlib import Path
 
 from armored_core.path_utils import path_is_within
@@ -41,15 +42,16 @@ def _resolve_executable(name: str, env_var: str) -> str:
         if discovered:
             return discovered
         raise VocalSeparationError(f"{env_var} points to an unavailable executable: {configured}")
-    discovered = shutil.which(name)
-    if discovered:
-        return discovered
     # Direct execution via .venv\\Scripts\\python.exe does not necessarily
-    # activate that environment on PATH. Look beside the active interpreter.
+    # activate that environment on PATH. Prefer its packaged executable to a
+    # global CLI that may use another interpreter/dependency installation.
     sibling_name = f"{name}.exe" if os.name == "nt" else name
     sibling = Path(sys.executable).resolve().parent / sibling_name
     if sibling.is_file():
         return str(sibling)
+    discovered = shutil.which(name)
+    if discovered:
+        return discovered
     raise VocalSeparationError(
         f"{name} is unavailable. Configure {env_var} or install the optional "
         "ArmoredSpeech separation dependency."
@@ -152,11 +154,17 @@ def separate_vocal_stem(
     """Separate vocals from source video and publish a verified mono 16 kHz PCM WAV."""
     root = Path(workspace_root).resolve(strict=True)
     source = Path(source_video).resolve(strict=True)
-    target = Path(output_wav).expanduser().resolve()
+    requested_target = Path(output_wav).expanduser()
+    if requested_target.is_symlink():
+        raise VocalSeparationError("EXISTING_SEPARATION_ARTIFACT: output is a symlink")
+    target = requested_target.resolve()
     if not source.is_file() or not _inside(source, root):
         raise VocalSeparationError(f"Source video must exist inside the lab root: {source}")
     if not _inside(target, root) or target == source or target.suffix.lower() != ".wav":
         raise VocalSeparationError(f"Vocal output must be a WAV inside the lab root: {target}")
+    receipt_path = _receipt_path(target)
+    if target.exists() or receipt_path.exists() or receipt_path.is_symlink():
+        raise VocalSeparationError("EXISTING_SEPARATION_ARTIFACT: preserve and validate the existing WAV/receipt")
     target.parent.mkdir(parents=True, exist_ok=True)
     if not _inside(target.parent, root):
         raise VocalSeparationError("Vocal output parent escaped the lab root")
@@ -198,10 +206,12 @@ def separate_vocal_stem(
         return result
 
     try:
-        with tempfile.TemporaryDirectory(
+        # Preserve partial stems and diagnostics after interruption or failure.
+        # Retention is deliberate; cleanup requires a separate reviewed action.
+        with nullcontext(tempfile.mkdtemp(
             prefix=f".{target.stem}.separation-",
             dir=str(target.parent),
-        ) as temporary:
+        )) as temporary:
             stage = Path(temporary)
             raw_wav = stage / "source-audio.wav"
             stems_dir = stage / "stems"
@@ -247,7 +257,12 @@ def separate_vocal_stem(
                 raise VocalSeparationError("NORMALIZED_VOCAL_DURATION_MISMATCH")
             if _sha256(source) != source_hash_before:
                 raise VocalSeparationError("SOURCE_VIDEO_HASH_CHANGED_DURING_SEPARATION")
-            normalized.replace(target)
+            # Exclusive creation also closes the race after the initial guard.
+            # An interrupted copy remains invalid until its receipt validates.
+            with normalized.open("rb") as incoming, target.open("xb") as destination:
+                shutil.copyfileobj(incoming, destination)
+                destination.flush()
+                os.fsync(destination.fileno())
 
         receipt = {
             "schema_version": 1,
@@ -264,13 +279,10 @@ def separate_vocal_stem(
             "rms": round(float(final_metrics["rms"]), 8),
             "peak": round(float(final_metrics["peak"]), 8),
         }
-        receipt_path = _receipt_path(target)
-        temporary_receipt = receipt_path.with_name(f".{receipt_path.name}.tmp")
-        temporary_receipt.write_text(
-            json.dumps(receipt, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(temporary_receipt, receipt_path)
+        with receipt_path.open("x", encoding="utf-8") as destination:
+            destination.write(json.dumps(receipt, ensure_ascii=False, indent=2) + "\n")
+            destination.flush()
+            os.fsync(destination.fileno())
         verified = validate_vocal_separation_receipt(
             source, target, workspace_root=root
         )
