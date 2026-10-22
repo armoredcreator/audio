@@ -52,12 +52,16 @@ def parse_py(p, root):
         elif isinstance(n,ast.ImportFrom):
             if n.level:
                 base=package[:max(0,len(package)-(n.level-1))]
-                if n.module: imports.add(".".join(base+n.module.split(".")))
-                else:
-                    for alias in n.names:
-                        if alias.name != "*": imports.add(".".join(base+[alias.name]))
+                source=".".join(base+(n.module.split(".") if n.module else []))
+                if source: imports.add(source)
+                for alias in n.names:
+                    if alias.name != "*":
+                        child=".".join(([source] if source else base)+[alias.name])
+                        imports.add(child)
             elif n.module:
                 imports.add(n.module)
+                for alias in n.names:
+                    if alias.name != "*": imports.add(n.module+"."+alias.name)
         elif isinstance(n,ast.Constant) and isinstance(n.value,str):
             s=n.value.strip()
             if s and ("/" in s or "\\\\" in s or s.endswith((".py",".json",".yaml",".yml",".toml",".wav",".png"))): strings.append(s)
@@ -77,9 +81,14 @@ def digest(p):
 def audit(root):
     files=collect(root); py=[p for p in files if p.suffix==".py"]
     modules={m:p for p in py if (m:=modname(p,root))}
-    reverse=defaultdict(set); imports_by_file={}; errors=[]; dynamic_files=set()
+    reverse=defaultdict(set); imports_by_file={}; errors=[]; dynamic_files=set(); standalone_entrypoints=[]
     for p in py:
         r=rel(p,root); imports,strings,err=parse_py(p,root); imports_by_file[r]=imports
+        try:
+            source=p.read_text(encoding="utf-8-sig",errors="ignore")
+            if re.search(r"if\\s+__name__\\s*==\\s*['\\\"]__main__['\\\"]\\s*:",source):
+                standalone_entrypoints.append(r)
+        except OSError: pass
         if err: errors.append({"path":r,"error":err})
         try: src=p.read_text(encoding="utf-8",errors="ignore")
         except OSError: src=""
@@ -96,7 +105,7 @@ def audit(root):
     for m,p in sorted(modules.items()):
         r=rel(p,root)
         if p.name in ENTRY_NAMES or p.name=="__init__.py" or any(x.lower() in TEST_DIRS for x in Path(r).parts): continue
-        if r.startswith("scripts/"): continue
+        if r.startswith("scripts/") or r in standalone_entrypoints: continue
         path_ref=any(owner!=r and (r in vals or p.name in vals) for owner,vals in refs.items())
         if not reverse.get(m) and not path_ref:
             candidates.append({"path":r,"classification":"UNREFERENCED_REVIEW","dynamic_loading_detected_in_repository":bool(dynamic_files),
@@ -148,7 +157,7 @@ def audit(root):
     used_dists={re.sub(r"[-_.]+","-",special.get(x,x)).lower() for x in used}
     possibly_unused=[{"distribution":d,"classification":"POSSIBLY_UNUSED_DEPENDENCY","reason":"No matching import detected; may be optional, runtime-only, imported under another name, or dynamically loaded. Never auto-remove."} for d in sorted(declared) if d not in used_dists and d.replace("-","_") not in used]
     return {"generated_at_utc":datetime.now(timezone.utc).isoformat(),"root":str(root),
-      "scope":{"files_scanned":len(files),"python_files":len(py),"python_modules":len(modules),"dynamic_loading_files":sorted(dynamic_files)},
+      "scope":{"files_scanned":len(files),"python_files":len(py),"python_modules":len(modules),"dynamic_loading_files":sorted(dynamic_files),"standalone_entrypoints":sorted(standalone_entrypoints)},
       "python_unreferenced_candidates":candidates,"possible_unused_dependencies":possibly_unused,"exact_duplicate_files":duplicates,
       "backup_artifacts":backups,"python_parse_issues":errors,"dependency_declaration_files":sorted(set(declaration_files)),
       "safety":{"read_only":True,"automatic_source_deletion":False,"limitations":["Static analysis cannot prove absence of dynamic imports, reflection, plugin entrypoints, subprocess calls or external invocation.","Dependency mapping is heuristic; optional runtimes such as RVC/PyTorch/Fairseq need separate runtime-aware review.","Exact duplicate files are evidence for review, not permission to delete."]}}
