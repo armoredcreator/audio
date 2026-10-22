@@ -674,7 +674,7 @@ Branches de correção relacionadas à visão, URL canônica, catch-up e gates e
 
 A exigência operacional para a próxima fase é Python **3.11.9** e um só ambiente compartilhado do AudioLab para Sync, Vision, Stock, IA, Speech e Studio. O setup ainda não está configurado para garantir esse requisito:
 
-- `pyproject.toml` do AudioLab declara apenas `opencv-python-headless==4.10.0.84` e `imageio-ffmpeg==0.6.0`, e `requires-python = ">=3.11"`.
+- `pyproject.toml` do AudioLab declara `opencv-python-headless==4.10.0.84` e `requires-python = ">=3.11,<3.12"`. O FFmpeg é resolvido como executável externo configurado ou disponível no `PATH`; `imageio-ffmpeg` foi removido por não haver uso no código.
 - O workflow CI do AudioLab usa `python-version: "3.11"`, sem fixar o patch 3.11.9.
 - `ArmoredSpeech/requirements-analysis.txt` fixa `numpy==1.23.5`.
 - `requirements.txt` operacional fixa um intervalo incompatível com isso: `numpy>=1.26,<3`. Esses dois requisitos não podem ser resolvidos juntos sem revisão e validação.

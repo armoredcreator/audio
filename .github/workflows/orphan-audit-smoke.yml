@@ -1,0 +1,50 @@
+name: Orphan auditor smoke test
+
+on:
+  push:
+    paths:
+      - "scripts/audit_orphans.py"
+      - ".github/workflows/orphan-audit-smoke.yml"
+  pull_request:
+    paths:
+      - "scripts/audit_orphans.py"
+      - ".github/workflows/orphan-audit-smoke.yml"
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11.9"
+      - name: Compile auditor
+        run: python -m py_compile scripts/audit_orphans.py
+      - name: Test auditor false-positive guards
+        run: python -m unittest discover -s tests -p 'test_orphan_audit_tool.py' -v
+      - name: Run read-only audit
+        run: python scripts/audit_orphans.py --out-dir "${{ runner.temp }}/orphan-audit"
+      - name: Verify and summarize report
+        run: |
+          REPORT="$(find "${{ runner.temp }}/orphan-audit" -name 'orphan_audit_*.json' -print -quit)"
+          MARKDOWN="$(find "${{ runner.temp }}/orphan-audit" -name 'orphan_audit_*.md' -print -quit)"
+          test -n "$REPORT"
+          test -n "$MARKDOWN"
+          python - "$REPORT" <<'PY'
+          import json, sys
+          r = json.load(open(sys.argv[1], encoding="utf-8"))
+          s = r["scope"]
+          print("AUDIT_SCOPE", json.dumps(s, ensure_ascii=False, sort_keys=True))
+          for key in ("python_unreferenced_candidates", "possible_unused_dependencies", "exact_duplicate_files", "backup_artifacts", "python_parse_issues"):
+              items = r[key]
+              print(f"AUDIT_{key.upper()}_COUNT={len(items)}")
+              for item in items:
+                  print("AUDIT_ITEM", json.dumps(item, ensure_ascii=False, sort_keys=True))
+          PY
+      - name: Upload audit reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: armoredaudiolab-orphan-audit-report
+          path: ${{ runner.temp }}/orphan-audit/orphan_audit_*
+          if-no-files-found: error
+          retention-days: 14
