@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from typing import Callable
 
@@ -29,8 +28,22 @@ class Recovery:
         self.pipeline = Pipeline(db, storage, vision, studio, publisher, ia)
         self.speech_studio_runner = speech_studio_runner
 
+    def _preserve_artifacts(self, item_id: str, paths: list[Path], reason: str) -> None:
+        """Move selected entries to a unique, receipted backup; never delete bytes."""
+        if not paths:
+            return
+        item = self.db.get(item_id)
+        self.storage.preserve_artifacts(paths, workspace=item.workspace,
+                                        content_id=str(item_id), reason=reason)
+
+    def preserve_partial_download(self, item_id: str) -> None:
+        item = self.db.get(item_id)
+        partial = item.original_path.with_suffix(item.original_path.suffix + ".part")
+        if partial.exists() or partial.is_symlink():
+            self._preserve_artifacts(item_id, [partial], "interrupted-original-download")
+
     def _reset_processing_artifacts(self, item_id: str) -> None:
-        """Keep only the immutable ORIGINAL before rebuilding derived artifacts."""
+        """Archive derived entries before rebuilding; keep immutable ORIGINAL."""
         item = self.db.get(item_id)
         original = item.original_path.resolve()
         workspace = item.workspace.resolve()
@@ -43,19 +56,15 @@ class Recovery:
             if not original_entry.is_absolute():
                 original_entry = original_entry.resolve()
             original_entry = original_entry.absolute()
+            preserve = []
             for path in list(workspace.iterdir()):
                 # Preserve both the stored ORIGINAL entry and its resolved target.
                 # The stored entry itself may be a symlink to the immutable file.
                 if path.absolute() == original_entry or path.resolve() == original:
                     continue
-                # Never recurse through a symlink. Unlink only the link itself,
-                # including links to directories outside the workspace.
-                if path.is_symlink():
-                    path.unlink()
-                elif path.is_dir():
-                    shutil.rmtree(path)
-                else:
-                    path.unlink()
+                # Moving the link preserves it without traversing its target.
+                preserve.append(path)
+            self._preserve_artifacts(item_id, preserve, "rebuild-derived-artifacts")
 
         self.db.set_working(item_id, None)
         self.db.set_result(item_id, None)

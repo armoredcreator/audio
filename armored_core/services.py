@@ -90,13 +90,8 @@ class SyncService:
                     original_url=existing["original_url"] or message.original_url,
                     source_id=message.source_id,
                 )
-                # Only incomplete .part artifacts are disposable. Remove stale
-                # partials in this item's workspace before restarting the download.
-                for stale_partial in original.parent.glob("*.part"):
-                    try:
-                        stale_partial.unlink()
-                    except FileNotFoundError:
-                        pass
+                self.storage.preserve_artifacts(list(original.parent.glob("*.part")),
+                    workspace=original.parent, content_id=item_id, reason="legacy-incomplete-download")
                 self.db.repair_original_path(item_id, original)
             partial = original.with_suffix(original.suffix + ".part")
             return item_id, original, partial
@@ -160,14 +155,13 @@ class SyncService:
             self.db.finalize_original_path(content_id, original, digest)
         return True
 
-    @staticmethod
-    def _cleanup_ingest_files(original: Path, partial: Path) -> None:
+    def _cleanup_ingest_files(self, original: Path, partial: Path, *, content_id: str | None = None) -> None:
         # The final path may already contain a complete original if a failure
         # occurred after the atomic rename but before SQLite committed its
-        # hash. Keep it for an idempotent retry; only an unfinished .part file
-        # is disposable here.
-        if partial.exists():
-            partial.unlink()
+        # hash. Keep it for an idempotent retry; archive unfinished bytes too.
+        if partial.exists() or partial.is_symlink():
+            self.storage.preserve_artifacts([partial], workspace=partial.parent,
+                content_id=content_id, reason="interrupted-original-download")
 
     def reserve_message(self, message: IngestMessage) -> str:
         """Reserve one candidate in SQLite without downloading its media."""
@@ -212,34 +206,14 @@ class SyncService:
 
     async def materialize_message_async(self, message: IngestMessage) -> int:
         """Materialize an already-reserved candidate into its immutable path."""
-        item_id, original, partial = self._prepare_ingest(message)
-        if self._reuse_existing_original(item_id, original):
-            return item_id
-        try:
-            if partial.exists():
-                partial.unlink()
-            if message.materialize is not None:
-                result = message.materialize(partial)
-                if inspect.isawaitable(result):
-                    await result
-            else:
-                source = message.source_path.resolve()
-                if not source.is_file():
-                    raise FileNotFoundError(source)
-                shutil.copy2(source, partial)
-            return self._finish_ingest(item_id, original, partial)
-        except Exception:
-            self._cleanup_ingest_files(original, partial)
-            self.db.rollback_ingest()
-            raise
+        return await self.ingest_message_async(message)
 
     def ingest_message(self, message: IngestMessage) -> int:
         item_id, original, partial = self._prepare_ingest(message)
         if self._reuse_existing_original(item_id, original):
             return item_id
         try:
-            if partial.exists():
-                partial.unlink()
+            self._cleanup_ingest_files(original, partial, content_id=item_id)
             if message.materialize is not None:
                 result = message.materialize(partial)
                 if inspect.isawaitable(result):
@@ -251,7 +225,7 @@ class SyncService:
                 shutil.copy2(source, partial)
             return self._finish_ingest(item_id, original, partial)
         except Exception:
-            self._cleanup_ingest_files(original, partial)
+            self._cleanup_ingest_files(original, partial, content_id=item_id)
             self.db.rollback_ingest()
             raise
 
@@ -260,8 +234,7 @@ class SyncService:
         if self._reuse_existing_original(item_id, original):
             return item_id
         try:
-            if partial.exists():
-                partial.unlink()
+            self._cleanup_ingest_files(original, partial, content_id=item_id)
             if message.materialize is not None:
                 result = message.materialize(partial)
                 if inspect.isawaitable(result):
@@ -273,7 +246,7 @@ class SyncService:
                 shutil.copy2(source, partial)
             return self._finish_ingest(item_id, original, partial)
         except Exception:
-            self._cleanup_ingest_files(original, partial)
+            self._cleanup_ingest_files(original, partial, content_id=item_id)
             self.db.rollback_ingest()
             raise
 

@@ -64,6 +64,13 @@ vinculados ao commit/árvore em que foram executados.
   `armored_core.integrity.sha256_file`; a validação de formato e o ranking
   permanecem iguais. Os 13 testes focais de deduplicação passaram antes e
   depois da unificação.
+- **Retomada e threads:** Vision executado em segundo plano utiliza uma cópia
+  do serviço vinculada à conexão SQLite da própria thread. Cache negativo,
+  oferta e erro de autenticação têm regressões, sem transformar falha técnica
+  em ausência de oferta. Sync e Recovery arquivam derivados e downloads
+  parciais em backups únicos com recibo e verificação SHA-256 dos arquivos.
+  A operação de armazenamento é compartilhada; o ponto de entrada assíncrono
+  de materialização delega à implementação canônica, preservando sua interface.
 - **Recuperação:** há ferramenta de sessão Telegram nova e recuperação de uma
   mensagem exata; credenciais são fornecidas somente no terminal local.
   Consulte [TARGETED_TELEGRAM_RECOVERY](TARGETED_TELEGRAM_RECOVERY.md).
