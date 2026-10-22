@@ -92,7 +92,7 @@ def test_pipeline_persists_every_caption_candidate_and_selected_score(monkeypatc
         assert rows[2]["policy_valid"] == 1
         assert rows[2]["selected"] == 1
         assert rows[2]["score"] > rows[1]["score"]
-        assert db.get(item_id).publication_caption == "Cantinho prático 🧡\n#cozinha"
+        assert db.get(item_id).publication_caption == "Cantinho 🧡 prático\n#cozinha"
         assert db.get(item_id).state == State.PUBLISHED
         db.close()
 

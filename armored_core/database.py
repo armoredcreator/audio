@@ -3,6 +3,7 @@ import hashlib
 import json
 import sqlite3
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from .models import Item, State
 
@@ -122,6 +123,16 @@ class Database:
             selected INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(content_id, batch_id, candidate_index)
+        );
+        CREATE TABLE IF NOT EXISTS ia_generation_attempts (
+            attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT,
+            status TEXT NOT NULL,
+            error_type TEXT,
+            started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            finished_at TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_caption_candidates_content
             ON caption_candidates(content_id, created_at);
@@ -1041,6 +1052,13 @@ class Database:
             self.conn.rollback()
             raise
 
+    def has_speech_studio_v5_completion(self, item_id: str) -> bool:
+        """Durable render boundary shared by Coordinator and publication."""
+        return self.conn.execute(
+            "SELECT 1 FROM state_events WHERE content_id=? AND new_state=? AND reason=? LIMIT 1",
+            (str(item_id), State.PUBLISHING.value, "speech-studio-v5-complete"),
+        ).fetchone() is not None
+
     def commit_vision_result(
         self,
         item_id: str,
@@ -1228,6 +1246,31 @@ class Database:
             (json.dumps(context or {}, ensure_ascii=False, default=str), str(item_id)),
         )
         self.conn.commit()
+
+    @contextmanager
+    def ia_generation_attempt(self, item_id: str, *, provider: str, model: str | None):
+        """Record configured identity before I/O; interrupted runs stay STARTED."""
+        attempt_id = self.conn.execute(
+            "INSERT INTO ia_generation_attempts(content_id,provider,model,status) VALUES(?,?,?,'STARTED')",
+            (str(item_id), provider, model),
+        ).lastrowid
+        self.conn.commit()
+        try:
+            yield attempt_id
+        except BaseException as exc:
+            status = "INTERRUPTED" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "FAILED"
+            self.conn.execute(
+                "UPDATE ia_generation_attempts SET status=?,error_type=?,finished_at=CURRENT_TIMESTAMP WHERE attempt_id=?",
+                (status, type(exc).__name__, attempt_id),
+            )
+            self.conn.commit()
+            raise
+        else:
+            self.conn.execute(
+                "UPDATE ia_generation_attempts SET status='COMPLETE',finished_at=CURRENT_TIMESTAMP WHERE attempt_id=?",
+                (attempt_id,),
+            )
+            self.conn.commit()
 
     def set_caption(self, item_id: str, caption: str) -> None:
         self.conn.execute(

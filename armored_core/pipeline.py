@@ -244,7 +244,10 @@ class Pipeline:
                     raise RuntimeError("armored-ia-service-not-configured")
                 if not item.ia_context:
                     raise RuntimeError("armored-ia-context-missing")
-                with self.trace.stage(item_id, "IA"):
+                configuration = getattr(self.ia, "provider_configuration", None)
+                provider_metadata = configuration() if callable(configuration) else {"provider": "custom", "model": None}
+                self.trace.emit(item_id, "IA", "CONFIGURED", **provider_metadata)
+                with self.trace.stage(item_id, "IA"), self.db.ia_generation_attempt(item_id, **provider_metadata):
                     generate_with_evidence = getattr(
                         self.ia,
                         "generate_caption_with_evidence",

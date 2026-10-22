@@ -56,6 +56,9 @@ def prepare_wav_asset(
     """
     video_path = Path(video_path).expanduser().resolve(strict=True)
     wav_path = Path(wav_path).expanduser().resolve()
+    if video_path == wav_path or (wav_path.exists() and os.path.samefile(video_path, wav_path)):
+        raise ValueError("Speech WAV output must not alias the immutable original")
+    decision.validate()
     wav_path.parent.mkdir(parents=True, exist_ok=True)
 
     if decision.needs_vocal_separation:

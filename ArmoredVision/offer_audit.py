@@ -7,6 +7,7 @@ IN_FLIGHT and are never silently repeated by a resumed run.
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import time
 from pathlib import Path
@@ -67,22 +68,29 @@ class OfferAudit:
                     self.db.execute("INSERT OR IGNORE INTO products(product_key,shop_id,item_id) VALUES(?,?,?)", (key, shop, item))
                 self.db.execute("INSERT OR IGNORE INTO records VALUES(?,?,?)", (str(row["content_id"]), key, row.get("primary_cause")))
 
-    def import_previous_check(self, shop_id, item_id, checked_at, outcome):
+    def import_previous_check(self, shop_id, item_id, checked_at, outcome, *, checked_at_source=None):
         # An old no-node summary without the response envelope cannot prove a
         # valid empty nodes list. Preserve it without claiming current absence.
         key = f"{shop_id}:{item_id}"
+        metadata = {"legacy_checked_at_source": checked_at_source,
+                    "legacy_time_precision": "timestamp" if checked_at is not None else "date_or_unavailable",
+                    "response_envelope_available": False}
         with self.db:
-            self.db.execute("UPDATE products SET outcome=?,checked_at=? WHERE product_key=? AND outcome='NOT_QUERIED'", (outcome, checked_at, key))
+            self.db.execute("UPDATE products SET outcome=?,checked_at=?,metadata_json=? WHERE product_key=? "
+                            "AND (outcome='NOT_QUERIED' OR (outcome=? AND checked_at IS NULL))",
+                            (outcome, checked_at, json.dumps(metadata), key, outcome))
 
     def run(self, api, *, budget_id: str, request_limit: int = 1,
             evidence: str = "single-request observation; quota unknown",
             verified_budget: bool = False, valid_until: float | None = None,
             interval_seconds: float = 5.0):
-        if request_limit < 1 or request_limit > 1000 or (not verified_budget and request_limit != 1):
+        if not isinstance(request_limit, int) or isinstance(request_limit, bool) or request_limit < 1 or request_limit > 1000 or (not verified_budget and request_limit != 1):
             raise ValueError("Unknown quota permits one observation only; larger budgets require verified evidence")
-        if interval_seconds < 0:
-            raise ValueError("Negative request interval")
-        if verified_budget and (not valid_until or valid_until <= time.time() or not evidence.strip()):
+        if not math.isfinite(interval_seconds) or interval_seconds < 0:
+            raise ValueError("Request interval must be finite and non-negative")
+        if not isinstance(budget_id, str) or not budget_id.strip():
+            raise ValueError("A stable non-empty budget identity is required")
+        if verified_budget and (not valid_until or not math.isfinite(valid_until) or valid_until <= time.time() or not evidence.strip()):
             raise ValueError("A verified budget requires dated, unexpired evidence")
         existing = self.db.execute("SELECT * FROM budgets WHERE budget_id=?", (budget_id,)).fetchone()
         if existing and (existing["request_limit"] != request_limit or existing["evidence"] != evidence or existing["valid_until"] != valid_until):
@@ -164,7 +172,7 @@ class OfferAudit:
         directory.mkdir(parents=True, exist_ok=True)
         for name, query in (
             ("identities.jsonl", "SELECT * FROM products ORDER BY product_key"),
-            ("records.jsonl", "SELECT r.*,COALESCE(p.outcome,'IDENTITY_UNRESOLVED') AS current_offer_outcome,p.checked_at,p.error_type FROM records r LEFT JOIN products p USING(product_key) ORDER BY content_id"),
+            ("records.jsonl", "SELECT r.*,COALESCE(p.outcome,'IDENTITY_UNRESOLVED') AS current_offer_outcome,p.checked_at,p.error_type,p.metadata_json AS current_offer_metadata FROM records r LEFT JOIN products p USING(product_key) ORDER BY content_id"),
         ):
             with (directory / name).open("x", encoding="utf-8") as output:
                 for row in self.db.execute(query):

@@ -1,9 +1,10 @@
+<!-- Public copy: local roots and operational source identifiers use placeholders. -->
 # ARMORED AUDIOLAB --- DOCUMENTO MESTRE DE INTEGRAÇÃO, UNIFICAÇÕES E CORREÇÕES
 
 **Atualizado em:** 21/10/2026\
 **Repositório:** `https://github.com/armoredcreator/audio`\
 **Raiz local de referência:**
-`C:\Users\Administrador\Downloads\ArmoredAudioLab`\
+`<LAB_ROOT>`\
 **Branch validada nesta etapa:**
 `feat/full-pipeline-migration-20261020`\
 **HEAD observado:** `572402f0636f41b2f6538e663c4b457dee1d9ab9`\
@@ -354,10 +355,10 @@ necessário; não inferir estado atual além da saída mais recente.
 
 Política alvo: - frase principal com exatamente 2--3 palavras, excluindo
 o coração fixo e hashtags; - exatamente um coração laranja `🧡`
-adicionado centralmente; - não aceitar emojis fornecidos pelo modelo
+adicionado centralmente (`A 🧡 B` ou `A B 🧡 C`); - não aceitar emojis fornecidos pelo modelo
 (incluindo ™️/©️/®️, bandeiras, ZWJ e variações de apresentação); - 1--2
-hashtags válidas, sem duplicação por caixa; - respostas inválidas devem
-ter fallback determinístico; - Gemini e Ollama devem obedecer à mesma
+hashtags válidas, sem duplicação por caixa; - um lote sem candidata válida
+deve manter o item em `RECOVERY`, sem inventar legenda; - Gemini e Ollama devem obedecer à mesma
 política final; não rejeitar lote de Ollama de maneira diferente sem
 regra explícita.
 
@@ -382,7 +383,7 @@ preservar.
 ### 5.8 Mídias históricas indisponíveis
 
 Dois itens históricos ficaram adiados/indisponíveis: -
-`-1002039708059_8845` - `-1002698134896_104718`
+`<SOURCE_1_ID>_8845` - `<SOURCE_2_ID>_104718`
 
 Não fazer retry cego nem alterar estados para simular sucesso. Preservar
 a condição de adiamento até haver evidência ou política explícita de
@@ -474,7 +475,7 @@ início/fim, cortes, ruídos, clipping audível e sincronização.
 ## 7. Histórico e proteção de produção
 
 O banco operacional de produção fica em:
-`C:\Users\Administrador\Downloads\ArmoredCreator-final\storage\database\armoredcreator.db`
+`<OPERATIONAL_ROOT>\storage\database\armoredcreator.db`
 
 Princípios: - nunca abrir esse banco para escrita durante testes do
 laboratório; - nunca copiar fixtures para os diretórios operacionais; -
@@ -493,13 +494,13 @@ auditoria read-only.
 
 ### Fontes Telegram esperadas em produção
 
-1.  `-1003788989075` --- `GRUPO GRÁTIS DESAFIO 30 DIAS - SHOPEE VÍDEOS`
-2.  `-1002698134896` --- `PACK DE VÍDEOS GRATUITO`
-3.  `-1002039708059` --- `Videos Achadinhos Afiliados Shopee`, username
+1.  `<SOURCE_3_ID>` --- `GRUPO GRÁTIS DESAFIO 30 DIAS - SHOPEE VÍDEOS`
+2.  `<SOURCE_2_ID>` --- `PACK DE VÍDEOS GRATUITO`
+3.  `<SOURCE_1_ID>` --- `Videos Achadinhos Afiliados Shopee`, username
     `achadosshopebrasil`, `broadcast=True`, `forum=False`; esta fonte
     não exige `topic_id`.
 
-Destino Hub: `-1004341972306`; tópicos 228, 1160 e 1327. Esses valores
+Destino Hub: `<SOURCE_4_ID>`; tópicos 228, 1160 e 1327. Esses valores
 são dados de configuração sensíveis ao ambiente: confirmar no arquivo de
 configuração local, não duplicar tokens/segredos no documento nem
 imprimir credenciais.

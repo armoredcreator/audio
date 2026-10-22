@@ -174,4 +174,13 @@ def validate_caption(
     # Description/category overlap is deliberately allowed. With only 2–3
     # words available, rejecting ordinary contextual vocabulary causes false
     # negatives and unnecessary Gemini calls.
-    return f"{main} 🧡\n{' '.join('#' + tag for tag in hashtags)}"
+    # One central heart: A 🧡 B for two words; A B 🧡 C for three.
+    # Preserve the user's punctuation and wording instead of rebuilding words.
+    matches = list(WORD_RE.finditer(main))
+    middle = (len(matches) - 1) // 2
+    insertion = matches[middle].end()
+    next_word = matches[middle + 1].start()
+    while insertion < next_word and not main[insertion].isspace():
+        insertion += 1
+    centered = f"{main[:insertion].rstrip()} 🧡 {main[insertion:].lstrip()}"
+    return f"{centered}\n{' '.join('#' + tag for tag in hashtags)}"

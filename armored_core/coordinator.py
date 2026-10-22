@@ -1103,15 +1103,15 @@ class Coordinator:
             ):
                 marker = getattr(source, "mark_ingested", None)
                 if marker is not None:
-                    marker(item_id)
+                    marker(str(message.telegram_message_id))
 
                 # A previously completed item may be rediscovered after an
                 # earlier candidate was recovered. Its checkpoint is safe to
                 # advance now because this item is durably PUBLISHED+cleanup.
                 topic_id = getattr(message, "topic_id", None)
                 commit = getattr(source, "commit_live_checkpoints", None)
-                if topic_id is not None and commit is not None:
-                    commit({int(topic_id): int(item_id)})
+                if topic_id is not None and commit is not None and not checkpoint_blocked:
+                    commit({int(topic_id): int(message.telegram_message_id)})
                 continue
 
             materialized = False
@@ -1298,8 +1298,15 @@ class Coordinator:
                 if "limit" not in str(exc):
                     raise
                 messages, checkpoints = await fetch_batch()
-                messages = messages[:1]
                 checkpoints = dict(checkpoints) if messages else {}
+
+        if len(messages) > 1 and checkpoints:
+            # Never truncate an adapter's batch and then commit a checkpoint
+            # covering messages that were not reserved or processed.
+            raise RuntimeError("LIVE adapter must return at most one candidate per poll")
+        # Cursor-free local adapters retain their original one-item contract;
+        # there is no durable source checkpoint to advance past later inputs.
+        messages = messages[:1]
 
         if not messages:
             commit = getattr(source, "commit_live_checkpoints", None)
@@ -1742,11 +1749,7 @@ class Coordinator:
 
     def _has_speech_studio_v5_completion(self, item_id: str) -> bool:
         """Return whether SQLite records the v5 render as the publication input."""
-        row = self.db.conn.execute(
-            "SELECT 1 FROM state_events WHERE content_id=? AND new_state=? AND reason=? LIMIT 1",
-            (str(item_id), State.PUBLISHING.value, "speech-studio-v5-complete"),
-        ).fetchone()
-        return row is not None
+        return self.db.has_speech_studio_v5_completion(item_id)
 
     def _preflight_speech_studio_v5(self):
         """Load Speech's real processor and validate all fixed render dependencies."""

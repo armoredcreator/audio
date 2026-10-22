@@ -10,6 +10,31 @@ O manual reúne a arquitetura, ownership por módulo, contrato ativo Speech → 
 
 ## Estado de validação
 
+### Candidato de integração em continuação — PR #19
+
+O alvo é Python **3.11.9 unificado**, com instalação isolada reproduzível
+descrita em [PYTHON311_RUNTIME](docs/PYTHON311_RUNTIME.md). O pacote RVC de
+compatibilidade é um fork explícito; modelos Melody e ambientes existentes
+permanecem preservados.
+
+O provedor padrão de legenda agora é **Ollama local**, modelo `gemma3:1b`,
+configurável por `ARMORED_IA_OLLAMA_MODEL`. Gemini é opcional e só é selecionado
+explicitamente. O adaptador não baixa modelos nem inventa legendas/hashtags:
+campos gerados pelo modelo passam pela política comum. Consulte `.env.example`.
+
+O Hub está incluído no pacote e na composição do Coordinator. Validações usam
+transporte simulado e banco isolado; `ARMORED_HUB_DRY_RUN=1` bloqueia envio e
+verificação externa antes de qualquer alteração de publicação. A aprovação
+dos testes não autoriza publicar em canais reais.
+
+Uma amostra histórica isolada concluiu IA local → Speech → Studio e retomada
+após interrupção com Hub simulado, mantendo o render e o original. Isso não
+comprova descoberta Telegram e consulta Shopee atuais: a aprovação Vision
+histórica foi reaproveitada. Recuperação dos originais WAITING_VISION, revisão
+manual restante e autorização operacional continuam gates separados.
+
+### Evidência histórica anterior do laboratório
+
 Código testado de referência: commit 23b398d8150a79bb59299733c5340db307b4119c, branch de laboratório test/armoredstudio-speech-integration-20261015.
 
 - **Testes locais:** 127 testes aprovados; compileall, imports e auditoria estática de ownership passaram.

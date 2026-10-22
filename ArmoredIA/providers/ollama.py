@@ -8,33 +8,8 @@ from typing import Any
 import requests
 
 from .base import AIProviderError
-
-
-def _context_text(product: dict[str, Any]) -> str:
-    fields = (
-        ("Nome interno", "productName"),
-        ("ID do item", "itemId"),
-        ("ID da loja", "shopId"),
-        ("Loja", "shopName"),
-        ("Categorias", "productCatIds"),
-        ("Preço mínimo", "priceMin"),
-        ("Preço máximo", "priceMax"),
-        ("Vendas", "sales"),
-        ("Avaliação", "ratingStar"),
-        ("Marca", "brand"),
-        ("Marca alternativa", "brandName"),
-        ("Modelo", "model"),
-        ("Modelo alternativo", "modelName"),
-        ("Descrição", "description"),
-        ("Atributos", "attributes"),
-        ("Características", "technicalCharacteristics"),
-    )
-    lines = []
-    for label, key in fields:
-        value = product.get(key)
-        if value not in (None, "", [], {}):
-            lines.append(f"{label}: {value}")
-    return "\n".join(lines)
+from .context import context_text as _context_text
+from .transport import bounded_number, close_response, retryable_failure
 
 
 class OllamaProvider:
@@ -42,6 +17,10 @@ class OllamaProvider:
 
     def __init__(self, requester=None):
         self.requester = requester or requests.post
+
+    @staticmethod
+    def configuration() -> dict[str, str]:
+        return {"provider": "ollama", "model": (os.getenv("ARMORED_IA_OLLAMA_MODEL") or "gemma3:1b").strip()}
 
     @staticmethod
     def _extract_candidates(data: dict[str, Any], limit: int) -> list[str]:
@@ -62,6 +41,13 @@ class OllamaProvider:
         for entry in raw:
             value = entry.get("text") if isinstance(entry, dict) else entry
             caption = str(value or "").strip()
+            if isinstance(entry, dict) and "hashtags" in entry:
+                tags = entry["hashtags"]
+                if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+                    raise AIProviderError("Ollama retornou hashtags sem estrutura válida")
+                # Join only model-generated fields. No hashtag or caption is
+                # invented locally; the common policy still validates both.
+                caption += "\n" + " ".join(tags)
             if not caption:
                 continue
             if caption in seen:
@@ -79,7 +65,7 @@ class OllamaProvider:
             raise AIProviderError(f"Ollama task não suportada: {task}")
 
         base_url = (os.getenv("ARMORED_IA_OLLAMA_URL") or "http://localhost:11434").strip().rstrip("/")
-        model = (os.getenv("ARMORED_IA_OLLAMA_MODEL") or "qwen3:8b").strip()
+        model = self.configuration()["model"]
         if not model:
             raise AIProviderError("ARMORED_IA_OLLAMA_MODEL está vazio")
 
@@ -105,7 +91,7 @@ PARA CADA OPÇÃO:
 - Não use hashtags para contornar as regras.
 - Uma palavra genérica da categoria é permitida.
 
-Retorne SOMENTE um objeto JSON válido com a chave "captions" e exatamente a quantidade solicitada de legendas. Cada item deve conter apenas o texto principal e 1 ou 2 hashtags no final, sem emoji.
+Retorne SOMENTE um objeto JSON válido com a chave "captions". Cada item é um objeto com "text" (apenas 2 ou 3 palavras, sem emoji e sem hashtag) e "hashtags" (lista obrigatória de 1 ou 2 hashtags começando com #). Gere você mesmo o texto e as hashtags; não deixe campos vazios.
 """.strip()
         prompt += (
             "\n\nCONTEXTO V1 — identidade já resolvida:\n"
@@ -119,43 +105,80 @@ Retorne SOMENTE um objeto JSON válido com a chave "captions" e exatamente a qua
             "properties": {
                 "captions": {
                     "type": "array",
-                    "items": {"type": "string"},
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "text": {"type": "string", "minLength": 3, "maxLength": 80},
+                            "hashtags": {"type": "array", "minItems": 1, "maxItems": 2,
+                                         "items": {"type": "string", "pattern": "^#[A-Za-zÀ-ÿ0-9_]+$"}},
+                        },
+                        "required": ["text", "hashtags"],
+                        "additionalProperties": False,
+                    },
                     "minItems": min(max(1, limit), 10),
                     "maxItems": min(max(1, limit), 10),
                 }
             },
             "required": ["captions"],
         }
-        attempts = max(1, int(os.getenv("ARMORED_IA_MAX_ATTEMPTS", "3")))
-        retry_delay = max(0.0, float(os.getenv("ARMORED_IA_RETRY_DELAY", "2")))
-        timeout = max(1, int(os.getenv("ARMORED_IA_OLLAMA_TIMEOUT", "180")))
+        attempts_value = bounded_number("ARMORED_IA_MAX_ATTEMPTS", 3, 1, 10)
+        if not attempts_value.is_integer():
+            raise AIProviderError("Configuração IA inválida: ARMORED_IA_MAX_ATTEMPTS")
+        attempts = int(attempts_value)
+        retry_delay = bounded_number("ARMORED_IA_RETRY_DELAY", 2, 0, 60)
+        timeout = bounded_number("ARMORED_IA_OLLAMA_TIMEOUT", 180, 1, 600)
+        max_tokens = bounded_number("ARMORED_IA_OLLAMA_MAX_TOKENS", 512, 64, 4096)
+        if not max_tokens.is_integer():
+            raise AIProviderError("ARMORED_IA_OLLAMA_MAX_TOKENS deve ser inteiro")
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "format": schema,
+            "options": {"temperature": 0.7, "num_predict": int(max_tokens)},
+        }
+        think = os.getenv("ARMORED_IA_OLLAMA_THINK")
+        if think is not None:
+            if think.strip().casefold() not in {"0", "1", "true", "false"}:
+                raise AIProviderError("ARMORED_IA_OLLAMA_THINK deve ser 0, 1, true ou false")
+            # Opt-in only. Configure values supported by the selected model's
+            # /api/show response; preserve its default when this is unset.
+            payload["think"] = think.strip().casefold() in {"1", "true"}
 
         for attempt in range(1, attempts + 1):
+            response = None
             try:
                 response = self.requester(
                     f"{base_url}/api/generate",
-                    json={
-                        "model": model,
-                        "prompt": prompt,
-                        "stream": False,
-                        "format": schema,
-                        "options": {"temperature": 0.7},
-                    },
+                    json=payload,
                     timeout=timeout,
                 )
                 response.raise_for_status()
-                return self._extract_candidates(response.json(), min(max(1, limit), 10))
+                try:
+                    return self._extract_candidates(response.json(), min(max(1, limit), 10))
+                except ValueError as exc:
+                    raise AIProviderError("Ollama não retornou JSON estruturado") from exc
             except requests.RequestException as exc:
-                if attempt < attempts:
+                if response is None:
+                    response = getattr(exc, "response", None)
+                status = getattr(response, "status_code", None)
+                if retryable_failure(exc) and attempt < attempts:
+                    close_response(response)
+                    response = None
                     time.sleep(retry_delay)
                     continue
                 raise AIProviderError(
-                    f"Ollama indisponível após {attempt} tentativa(s): {exc}"
-                ) from exc
+                    f"Ollama indisponível após {attempt} tentativa(s): "
+                    + (f"HTTP {status}" if status is not None else type(exc).__name__)
+                ) from None
             except AIProviderError:
                 if attempt < attempts:
+                    close_response(response)
+                    response = None
                     time.sleep(retry_delay)
                     continue
                 raise
+            finally:
+                close_response(response)
 
         raise AIProviderError("Ollama indisponível após todas as tentativas")

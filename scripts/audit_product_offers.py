@@ -12,6 +12,25 @@ from ArmoredVision.offer_audit import OfferAudit
 from ArmoredVision.modules.v1.shopee_api import ShopeeAffiliateAPI
 
 
+def aware_timestamp(value):
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("An explicit timezone is required; do not infer the host timezone")
+    return parsed.timestamp()
+
+
+def legacy_check_time(row):
+    raw = row.get("checked_at_utc") or row.get("checked_at") or row.get("checked_date")
+    if not raw:
+        return None, None
+    try:
+        return aware_timestamp(str(raw)), str(raw)
+    except (ValueError, TypeError):
+        # Date-only receipts remain date-only evidence. Midnight is not an
+        # observed query time and must never be invented during migration.
+        return None, str(raw)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
@@ -34,8 +53,10 @@ def main():
                     if row.get("shop_id") and row.get("item_id"):
                         # Legacy summaries omitted the raw envelope; keep that
                         # limitation rather than treating missing nodes as [].
-                        audit.import_previous_check(row["shop_id"], row["item_id"], None,
-                                                    "LEGACY_QUERY_RESPONSE_SHAPE_UNAVAILABLE")
+                        checked_at, raw_time = legacy_check_time(row)
+                        audit.import_previous_check(row["shop_id"], row["item_id"], checked_at,
+                                                    "LEGACY_QUERY_RESPONSE_SHAPE_UNAVAILABLE",
+                                                    checked_at_source=raw_time)
         result = {"requests_this_run": 0, "stop_reason": "PREVIEW_ONLY", "summary": audit.summary()}
         if args.execute:
             if not args.budget_id:
@@ -43,8 +64,8 @@ def main():
             kwargs = {"budget_id": args.budget_id}
             if args.verified_budget:
                 grant = json.loads(args.verified_budget.read_text(encoding="utf-8"))
-                kwargs.update(request_limit=int(grant["request_limit"]), evidence=str(grant["evidence"]),
-                              valid_until=datetime.fromisoformat(grant["valid_until"]).timestamp(),
+                kwargs.update(request_limit=grant["request_limit"], evidence=str(grant["evidence"]),
+                              valid_until=aware_timestamp(grant["valid_until"]),
                               interval_seconds=float(grant["interval_seconds"]), verified_budget=True)
             api = ShopeeAffiliateAPI()
             try:

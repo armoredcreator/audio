@@ -75,6 +75,11 @@ the input. They do not delete a prior result to begin another conversion.
 
 ## RVC environment evidence and remaining migration gate
 
+The diagnosis below records the earlier environment. The corrected isolated
+Python 3.11.9 installation, explicit compatibility fork and current evidence are
+documented in [PYTHON311_RUNTIME](PYTHON311_RUNTIME.md). Do not interpret the
+historical conflicts below as the status of that corrected installation.
+
 The deployment target is one repository-root `.venv` using **Python 3.11.9**
 for the complete pipeline, including RVC. `.python-version` records the exact
 target and the setup entry point rejects other interpreter versions before

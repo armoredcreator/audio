@@ -69,3 +69,20 @@ def test_coordinator_recovery_leaves_waiting_vision_for_explicit_allowlist(tmp_p
         assert db.conn.execute("SELECT COUNT(*) FROM state_events WHERE content_id=?", (item_id,)).fetchone()[0] == events_before
     finally:
         coordinator.close()
+
+
+def test_v5_hub_preflight_failure_reuses_render_without_external_check(tmp_path):
+    coordinator, db, item_id = fixture(tmp_path)
+    result = db.get(item_id).workspace / "validated-result.mp4"
+    result.write_bytes(b"validated render preserved")
+    db.set_result(item_id, result)
+    db.transition(item_id, State.PUBLISHING, "speech-studio-v5-complete")
+    db.publication_started(item_id)
+    db.transition(item_id, State.RECOVERY, "hub-preflight-unavailable")
+    try:
+        coordinator.recover(item_id)
+        assert db.get(item_id).state is State.PUBLISHING
+        assert result.read_bytes() == b"validated render preserved"
+        assert db.publication(item_id)["verification_status"] == "PENDING"
+    finally:
+        coordinator.close()

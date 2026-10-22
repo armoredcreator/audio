@@ -17,7 +17,7 @@ from .selector import (
 
 
 def _configured_provider() -> AIProvider:
-    name = (os.getenv("ARMORED_IA_PROVIDER") or "gemini").strip().casefold()
+    name = (os.getenv("ARMORED_IA_PROVIDER") or "ollama").strip().casefold()
     if name == "gemini":
         return GeminiProvider()
     if name == "ollama":

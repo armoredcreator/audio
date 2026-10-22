@@ -1007,6 +1007,14 @@ class TelegramSource:
 
     async def fetch_live_batch_async(self, limit: int | None = None) -> tuple[list[SyncMessage], dict[int, int]]:
         """Discover all new LIVE candidates, resolving grouped albums consistently."""
+        if limit is not None:
+            if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+                raise ValueError("LIVE batch limit must be a positive integer")
+            # A bounded compatibility call uses the canonical one-candidate
+            # cursor. The old full-scan path computed the newest checkpoint
+            # before stopping at the limit and could skip undispatched videos.
+            message, checkpoints = await self.fetch_live_candidate_async()
+            return ([] if message is None else [message]), checkpoints
         source = self.source or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         if not source:
             raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")

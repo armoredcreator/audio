@@ -9,11 +9,13 @@ on:
       - "ArmoredVision/**"
       - "ArmoredStock/**"
       - "ArmoredIA/**"
+      - "ArmoredHub/**"
       - "tests/**"
       - "armored_core/**"
       - "scripts/**"
       - "tests/**"
       - "pyproject.toml"
+      - ".python-version"
       - "README.md"
       - "ArmoredSpeech/README.md"
       - "docs/**"
@@ -26,11 +28,13 @@ on:
       - "ArmoredVision/**"
       - "ArmoredStock/**"
       - "ArmoredIA/**"
+      - "ArmoredHub/**"
       - "tests/**"
       - "armored_core/**"
       - "scripts/**"
       - "tests/**"
       - "pyproject.toml"
+      - ".python-version"
       - "README.md"
       - "ArmoredSpeech/README.md"
       - "docs/**"
@@ -46,5 +50,5 @@ jobs:
           python-version: "3.11.9"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e . pytest
-      - run: python -m compileall -q ArmoredSpeech ArmoredStudio armored_core ArmoredSync ArmoredVision ArmoredStock ArmoredIA tests
+      - run: python -m compileall -q ArmoredSpeech ArmoredStudio armored_core ArmoredSync ArmoredVision ArmoredStock ArmoredIA ArmoredHub tests
       - run: python -m pytest -q

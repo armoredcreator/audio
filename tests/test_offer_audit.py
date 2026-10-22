@@ -154,3 +154,38 @@ def test_vision_does_not_persist_auth_or_quota_as_negative_cache(tmp_path, monke
         assert db.conn.execute("SELECT COUNT(*) FROM vision_product_lookup_events").fetchone()[0] == 0
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"request_limit": 1.5}, {"request_limit": True},
+    {"interval_seconds": float("nan")}, {"interval_seconds": float("inf")},
+    {"valid_until": float("nan"), "verified_budget": True},
+    {"budget_id": ""},
+])
+def test_invalid_budget_is_rejected_before_any_query(tmp_path, kwargs):
+    audit = OfferAudit(tmp_path / "checks.offer-audit.sqlite3")
+    audit.seed(rows())
+    api = API(ShopeeProductNotFoundError("valid empty nodes"))
+    arguments = {"budget_id": "test", **kwargs}
+    with pytest.raises(ValueError):
+        audit.run(api, **arguments)
+    assert api.calls == 0
+    assert audit.db.execute("SELECT COUNT(*) FROM attempts").fetchone()[0] == 0
+    audit.close()
+
+
+def test_legacy_query_time_is_preserved_without_inventing_date_only_precision(tmp_path):
+    from scripts.audit_product_offers import aware_timestamp, legacy_check_time
+    with pytest.raises(ValueError, match="timezone"):
+        aware_timestamp("2026-10-22T12:00:00")
+    assert legacy_check_time({"checked_date": "2026-10-22"}) == (None, "2026-10-22")
+    stamp, source = legacy_check_time({"checked_at_utc": "2026-10-22T15:03:01Z"})
+    audit = OfferAudit(tmp_path / "checks.offer-audit.sqlite3")
+    audit.seed(rows())
+    audit.import_previous_check("10", "20", stamp, "LEGACY_QUERY_RESPONSE_SHAPE_UNAVAILABLE", checked_at_source=source)
+    audit.import_previous_check("10", "21", None, "LEGACY_QUERY_RESPONSE_SHAPE_UNAVAILABLE", checked_at_source="2026-10-22")
+    result = audit.db.execute("SELECT checked_at,metadata_json FROM products WHERE product_key='10:20'").fetchone()
+    assert result["checked_at"] == stamp
+    assert source in result["metadata_json"]
+    assert audit.summary()["by_outcome"] == {"LEGACY_QUERY_RESPONSE_SHAPE_UNAVAILABLE": 2}
+    audit.close()

@@ -1,7 +1,8 @@
+<!-- Public copy: local roots and operational source identifiers use placeholders. -->
 # ArmoredAudioLab — manual canônico de arquitetura, operação e evidências
 
-**Versão:** 2.1  
-**Revisão:** 20/10/2026 (horário local de São Paulo)  
+**Versão:** 2.2
+**Revisão:** 22/10/2026 (horário local de São Paulo)
 **Repositório:** armoredcreator/audio  
 **Branch estável de laboratório:** test/armoredstudio-speech-integration-20261015  
 **Base de código consolidada antes da auditoria Sync:** a2af33c378c12a4599c7fe8bf6de3cb541575d86  
@@ -12,7 +13,63 @@ Este é o documento canônico: reúne arquitetura, fronteiras de responsabilidad
 
 ---
 
+## 0. Continuação autorizada da PR #19 — situação atual
+
+Esta seção atualiza a fotografia histórica das seções seguintes. O candidato
+parte de `31a14614dc026ec846d3e64831a36e3971ea688a`; testes devem permanecer
+vinculados ao commit/árvore em que foram executados.
+
+- **Python 3.11.9 unificado:** ambiente isolado corrigido e uma segunda
+  instalação limpa passaram em `pip check`, imports e inferência Melody curta.
+  O fork explícito `rvc-python 0.1.5+armored311.1` conserva o código de inferência
+  upstream e sua licença. Receita, lock, hashes e a limitação de proveniência
+  do wheel Fairseq estão em [PYTHON311_RUNTIME](PYTHON311_RUNTIME.md).
+- **IA:** Ollama local é o padrão, com `gemma3:1b` configurável; Gemini é opcional.
+  Texto e hashtags são gerados pelo modelo e validados pela política única.
+  O coração é inserido entre as palavras. Nenhuma candidata válida implica
+  `RECOVERY`, sem legenda inventada. Consulte `.env.example` e
+  [GEMINI_RECOVERY](GEMINI_RECOVERY.md) para os limites de transporte opcionais.
+  Provedor e modelo selecionados são registrados antes da geração em
+  `ia_generation_attempts` e no trace, com conclusão, falha ou interrupção.
+  A tabela é criada nas cópias isoladas; nenhuma migração foi aplicada à base
+  operacional. Promoção de esquema continua sujeita ao backup e à autorização.
+- **Integração histórica isolada:** uma amostra real retomou IA com Ollama,
+  concluiu Speech/Studio, renderizou H.264/AAC 1080×1920 e passou decodificação.
+  A interrupção antes do Hub foi retomada preservando o mesmo render; uma
+  chamada ao transporte simulado concluiu a fronteira de publicação no banco
+  experimental. Não houve envio externo. Vision histórica foi reaproveitada;
+  isto não comprova descoberta Telegram ou oferta Shopee atuais.
+- **Hub:** o pacote, antes ausente da árvore da PR, foi integrado à composição,
+  empacotamento e CI. Revalida estado SQLite, evento v5, original, resultado e
+  caminhos antes de envio. `ARMORED_HUB_DRY_RUN=1` bloqueia também verificações
+  externas, antes de criar registro de publicação. Falha de preflight sem
+  intenção de envio preserva o render validado para retomada.
+- **Sync:** o adaptador LIVE limitado utiliza o cursor canônico de um candidato.
+  Um adaptador legado não pode truncar um lote e avançar checkpoint sobre
+  mensagens ainda não entregues. Identidades e checkpoints operacionais não
+  foram alterados por estes testes.
+  A redescoberta de itens já publicados utiliza o ID original da mensagem
+  para o cursor, preserva o namespace da fonte no SQLite e não avança sobre
+  uma falha anterior. Esses dois cenários têm regressão específica.
+- **Recuperação:** há ferramenta de sessão Telegram nova e recuperação de uma
+  mensagem exata; credenciais são fornecidas somente no terminal local.
+  Consulte [TARGETED_TELEGRAM_RECOVERY](TARGETED_TELEGRAM_RECOVERY.md).
+  Originais WAITING_VISION ainda não foram recuperados com prova suficiente.
+- **Pendências preservadas:** orçamento Shopee verificável para consultas
+  adicionais, autenticação Telegram, revisão manual dos caminhos restantes,
+  proveniência completa do build Fairseq e liberação operacional. Os lotes
+  aprovados de 14/17 vídeos não foram repetidos.
+
+Os relatórios individuais, cópias SQLite, sessões, URLs históricas, mídias e
+recibos operacionais permanecem locais. Esta versão não promove código nem
+reconciliação para produção e não autoriza publicação real.
+
+---
+
 ## 1. Resumo executivo — estado confirmado
+
+**Referência histórica de 20/10/2026:** os resultados e limites abaixo pertencem
+às versões identificadas nessa seção; o estado mais recente está na seção 0.
 
 ### Decisão atual
 
@@ -357,7 +414,7 @@ Execute os comandos a partir da raiz de ArmoredAudioLab. Estas verificações n�
 ### 9.1 Ambiente e integridade de código
 
 ~~~powershell
-$Root = "C:\Users\Administrador\Downloads\ArmoredAudioLab"
+$Root = "<LAB_ROOT>"
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 
 git -C $Root branch --show-current
@@ -390,7 +447,7 @@ O comando de ownership é somente leitura. Ele verifica referências/estruturas 
 O exemplo seguinte lê os dois relatórios registrados neste manual. Não chama Speech, não renderiza e não altera banco, manifesto ou saída.
 
 ~~~powershell
-$Root = "C:\Users\Administrador\Downloads\ArmoredAudioLab"
+$Root = "<LAB_ROOT>"
 $Reports = @(
     (Join-Path $Root "storage\validation\post_consolidation_corpus17_20261019T234723122Z\studio-report.json"),
     (Join-Path $Root "storage\validation\corpus1_banner_present_20261020T004009599Z\studio-report.json")
@@ -421,7 +478,7 @@ Para o corpus são esperados 17 itens e as contagens de rota registradas na seç
 O runner real requer manifesto aprovado e SQLite experimental correspondente. O destino do relatório e os IDs/paths de trabalho precisam ser novos. Exemplo estrutural — não é para reexecutar agora os cenários já aprovados:
 
 ~~~powershell
-$Root = "C:\Users\Administrador\Downloads\ArmoredAudioLab"
+$Root = "<LAB_ROOT>"
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 $Manifest = Join-Path $Root "storage\validation\<lote_novo>\studio-manifest.json"
 $Database = Join-Path $Root "storage\database\<sqlite_experimental_correspondente>.sqlite3"
@@ -753,7 +810,7 @@ Arquivos sem ia_context_json/campo equivalente podem ter identidade canônica ex
 Primeiro atualize o checkout local para receber scripts/audit_sync_duplicates.py. Não continue se houver alterações locais em arquivos versionados. Não use reset nem clean.
 
 ~~~powershell
-$Root = "C:\Users\Administrador\Downloads\ArmoredAudioLab"
+$Root = "<LAB_ROOT>"
 $Target = "test/armoredstudio-speech-integration-20261015"
 
 if ((git -C $Root branch --show-current).Trim() -ne $Target) {
@@ -780,9 +837,9 @@ Depois de confirmar que a aplicação aponta ao banco correto, execute a auditor
 
 ~~~powershell
 $ErrorActionPreference = "Stop"
-$Root = "C:\Users\Administrador\Downloads\ArmoredAudioLab"
+$Root = "<LAB_ROOT>"
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
-$SourceDb = "C:\Users\Administrador\Downloads\ArmoredCreator-final\storage\database\armoredcreator.db"
+$SourceDb = "<OPERATIONAL_ROOT>\storage\database\armoredcreator.db"
 
 if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
     throw "Python do AudioLab não encontrado: $Python"
@@ -901,7 +958,7 @@ O modo CLI real exige `--approve-real-processing`, credenciais Shopee, Ollama/mo
 Exemplo de invocação após preencher uma cópia local do template `docs/lab-pipeline-input.example.json` com os vídeos que quer testar e URLs Shopee válidas:
 
 ~~~powershell
-$Root = "C:\Users\Administrador\Downloads\ArmoredAudioLab"
+$Root = "<LAB_ROOT>"
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 $Manifest = Join-Path $Root "storage\validation\lab-input-reviewed.json"
 

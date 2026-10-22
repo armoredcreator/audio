@@ -35,7 +35,7 @@ def test_policy_accepts_contextual_caption():
     assert validate_caption(
         "Cores organizadas 🧡\n#unhas #organizacao",
         product_name="Expositor de esmaltes com gavetas",
-    ) == "Cores organizadas 🧡\n#unhas #organizacao"
+    ) == "Cores 🧡 organizadas\n#unhas #organizacao"
 
 
 def test_policy_allows_natural_overlap_with_description():
@@ -43,7 +43,7 @@ def test_policy_allows_natural_overlap_with_description():
         "Cantinho resistente 🧡\n#casa",
         product_name="Bancada Suspensa",
         product_context={"description": "estrutura de aço carbono resistente"},
-    ) == "Cantinho resistente 🧡\n#casa"
+    ) == "Cantinho 🧡 resistente\n#casa"
 
 
 def test_policy_blocks_only_hard_leaks():
@@ -109,7 +109,7 @@ def test_caption_selects_valid_candidate_without_second_gemini_call(monkeypatch)
         "productName": "Batom Matte Vermelho",
     })
 
-    assert caption == "Olha esse charme 🧡\n#beleza"
+    assert caption == "Olha esse 🧡 charme\n#beleza"
     assert provider.calls == 1
 
 
@@ -137,7 +137,7 @@ def test_caption_ranks_all_valid_candidates_and_keeps_one_provider_call(monkeypa
 
     assert provider.calls == 1
     assert result.selection.index == 2
-    assert result.caption == "Cantinho prático 🧡\n#cozinha"
+    assert result.caption == "Cantinho 🧡 prático\n#cozinha"
     assert len(result.evaluations) == 3
     assert all(evaluation.policy_valid for evaluation in result.evaluations)
     assert result.evaluations[1].selected is True
@@ -193,7 +193,7 @@ def test_provider_retries_transport_but_not_policy(monkeypatch):
     })
 
     assert calls["count"] == 3
-    assert caption == "Cantinho profissional 🧡\n#barbearia"
+    assert caption == "Cantinho 🧡 profissional\n#barbearia"
 
 
 
@@ -201,14 +201,14 @@ def test_policy_forces_orange_heart_and_removes_model_emojis():
     assert validate_caption(
         "Mesa organizada 😍✨\n#casa #organizacao",
         product_name="Organizador de mesa",
-    ) == "Mesa organizada 🧡\n#casa #organizacao"
+    ) == "Mesa 🧡 organizada\n#casa #organizacao"
 
 
 def test_policy_adds_orange_heart_when_model_returns_no_emoji():
     assert validate_caption(
         "Cantinho prático\n#cozinha",
         product_name="Bancada suspensa",
-    ) == "Cantinho prático 🧡\n#cozinha"
+    ) == "Cantinho 🧡 prático\n#cozinha"
 
 
 
@@ -216,7 +216,7 @@ def test_policy_deduplicates_hashtags_case_insensitively():
     assert validate_caption(
         "Mesa organizada 😍\n#Casa #casa",
         product_name="Organizador de mesa",
-    ) == "Mesa organizada 🧡\n#Casa"
+    ) == "Mesa 🧡 organizada\n#Casa"
 
 
 
@@ -231,7 +231,7 @@ def test_policy_removes_compound_and_presentation_emojis(emoji):
         f"Mesa bonita {emoji} 🧡\n#casa",
         product_name="Organizador",
     )
-    assert result == "Mesa bonita 🧡\n#casa"
+    assert result == "Mesa 🧡 bonita\n#casa"
 
 
 @pytest.mark.parametrize(
@@ -253,7 +253,7 @@ def test_policy_deduplicates_repeated_candidate_hashtags_and_emoji():
     assert validate_caption(
         "Mesa bonita 🛍️\n#Casa #casa",
         product_name="Organizador",
-    ) == "Mesa bonita 🧡\n#Casa"
+    ) == "Mesa 🧡 bonita\n#Casa"
 
 
 
@@ -276,7 +276,7 @@ def test_ollama_and_gemini_candidates_share_central_caption_policy(monkeypatch):
     caption = CaptionGenerator(provider=provider).generate({
         "productName": "Bancada suspensa",
     })
-    assert caption == "Cantinho prático 🧡\n#cozinha"
+    assert caption == "Cantinho 🧡 prático\n#cozinha"
 
 
 
@@ -304,7 +304,7 @@ def test_gemini_and_ollama_use_the_same_final_policy(monkeypatch):
         provider=GeminiProvider(requester=requester)
     ).generate({"productName": "Bancada suspensa"})
 
-    assert caption == "Cantinho prático 🧡\n#cozinha"
+    assert caption == "Cantinho 🧡 prático\n#cozinha"
     assert len(calls) == 1
 
 
@@ -313,7 +313,7 @@ def test_policy_keeps_exactly_one_orange_heart_when_model_returns_multiple_emoji
         "Mesa bonita 🧡🧡😍✨\n#casa",
         product_name="Organizador de mesa",
     )
-    assert result == "Mesa bonita 🧡\n#casa"
+    assert result == "Mesa 🧡 bonita\n#casa"
     assert result.count("🧡") == 1
 
 

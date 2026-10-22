@@ -72,11 +72,7 @@ class Recovery:
         self.pipeline.run(item_id)
 
     def _has_speech_studio_v5_completion(self, item_id: str) -> bool:
-        row = self.db.conn.execute(
-            "SELECT 1 FROM state_events WHERE content_id=? AND new_state=? AND reason=? LIMIT 1",
-            (str(item_id), State.PUBLISHING.value, "speech-studio-v5-complete"),
-        ).fetchone()
-        return row is not None
+        return self.db.has_speech_studio_v5_completion(item_id)
 
     def _resume_durable_result(self, item_id: str, reason: str) -> None:
         self.db.transition(item_id, State.PUBLISHING, reason)
@@ -140,6 +136,20 @@ class Recovery:
                     raise RuntimeError("confirmed-publication-without-real-message-id")
                 self.db.transition(item_id, State.PUBLISHED, "db-publication-already-confirmed")
                 self.pipeline.cleanup(item_id)
+                return
+
+            if (
+                self.speech_studio_runner is not None
+                and str(pub["verification_status"] or "") == "PENDING"
+                and not pub["published_message_id"]
+                and self._has_speech_studio_v5_completion(item_id)
+                and item.result_path is not None
+                and item.result_path.is_file()
+            ):
+                # The v5 Hub commits SENT_UNVERIFIED before any send. A
+                # preflight-only failure must not destroy a completed render.
+                # The outer Coordinator/Hub still revalidates bytes before send.
+                self._resume_durable_result(item_id, "recovery-v5-hub-preflight-not-sent")
                 return
 
             check = self.pipeline.publisher.check_publication(item)

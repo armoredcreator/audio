@@ -61,6 +61,9 @@ def test_ollama_provider_rejects_malformed_response():
 def test_caption_generator_provider_is_configurable(monkeypatch):
     from ArmoredIA.caption.generator import CaptionGenerator
 
+    monkeypatch.delenv("ARMORED_IA_PROVIDER", raising=False)
+    assert isinstance(CaptionGenerator().provider, OllamaProvider)
+
     monkeypatch.setenv("ARMORED_IA_PROVIDER", "gemini")
     assert isinstance(CaptionGenerator().provider, GeminiProvider)
 
@@ -70,6 +73,13 @@ def test_caption_generator_provider_is_configurable(monkeypatch):
     monkeypatch.setenv("ARMORED_IA_PROVIDER", "unknown")
     with pytest.raises(AIProviderError, match="ARMORED_IA_PROVIDER inválido"):
         CaptionGenerator()
+
+
+def test_structured_model_fields_keep_hashtags_without_inventing_content():
+    result = OllamaProvider._extract_candidates({"response": json.dumps({"captions": [
+        {"text": "Cantinho sereno", "hashtags": ["#decor", "#casa"]}
+    ]})}, 1)
+    assert result == ["Cantinho sereno\n#decor #casa"]
 
 
 
@@ -130,7 +140,7 @@ def test_ollama_provider_passes_corrupted_unicode_to_shared_policy(monkeypatch):
 
 
 
-def test_ollama_default_model_preserves_existing_qwen3_8b(monkeypatch):
+def test_ollama_default_model_uses_validated_local_gemma(monkeypatch):
     monkeypatch.delenv("ARMORED_IA_OLLAMA_MODEL", raising=False)
     monkeypatch.setenv("ARMORED_IA_MAX_ATTEMPTS", "1")
     calls = []
@@ -142,4 +152,4 @@ def test_ollama_default_model_preserves_existing_qwen3_8b(monkeypatch):
         })})
 
     OllamaProvider(requester=requester).generate_candidates("caption", {}, 1)
-    assert calls == ["qwen3:8b"]
+    assert calls == ["gemma3:1b"]
