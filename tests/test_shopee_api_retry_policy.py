@@ -239,3 +239,47 @@ def test_generic_graphql_error_is_not_retried(monkeypatch):
         api.get_exact_product("10", "20")
     assert len(api.session.calls) == 1
     assert sleeps == []
+
+
+@pytest.mark.parametrize(
+    "malformed_response",
+    [
+        [],
+        "invalid-body",
+        {"data": None},
+        {"data": []},
+        {"data": "unparseable"},
+        {"data": {"generateShortLink": None}},
+        {"data": {"generateShortLink": []}},
+        {"data": {"generateShortLink": "not-an-object"}},
+        {"data": {"generateShortLink": {"shortLink": []}}},
+        {"data": {"generateShortLink": {"shortLink": 123}}},
+        {"data": {"generateShortLink": {"shortLink": "  "}}},
+        {"data": {"generateShortLink": {}}},
+    ],
+)
+def test_malformed_mutation_envelope_is_unknown_and_cannot_replay(monkeypatch, malformed_response):
+    api, sleeps = make_api(monkeypatch, [FakeResponse(body=malformed_response)])
+    origin = "https://shopee.com.br/product/10/20"
+
+    with pytest.raises(ShopeeMutationOutcomeUnknownError):
+        api.generate_short_link(origin)
+    with pytest.raises(ShopeeMutationOutcomeUnknownError):
+        api.generate_short_link(origin)
+
+    assert len(api.session.calls) == 1
+    assert sleeps == []
+    assert origin not in api._short_link_cache
+
+
+def test_successful_mutation_response_is_cached_without_second_network_call(monkeypatch):
+    api, sleeps = make_api(
+        monkeypatch,
+        [FakeResponse(body={"data": {"generateShortLink": {"shortLink": " https://s.shopee.example/link "}}})],
+    )
+    origin = "https://shopee.com.br/product/10/20"
+
+    assert api.generate_short_link(origin) == {"short_link": "https://s.shopee.example/link"}
+    assert api.generate_short_link(origin) == {"short_link": "https://s.shopee.example/link"}
+    assert len(api.session.calls) == 1
+    assert sleeps == []
