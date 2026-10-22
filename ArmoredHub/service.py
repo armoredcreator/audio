@@ -43,6 +43,31 @@ class ArmoredHub:
             raise RuntimeError("Destino Hub não configurado")
         return str(chat), int(topic)
 
+    def _assert_test_destination_lock(self, item: Item) -> None:
+        """Fail closed when a test run is restricted to one Telegram destination.
+
+        The lock checks the *effective* route (including any persisted
+        publication destination), not merely the fallback environment values.
+        It does not redirect an operational route to a test topic.
+        """
+        allowed_chat = (os.getenv("ARMORED_HUB_TEST_CHAT_ID") or "").strip()
+        allowed_topic = (os.getenv("ARMORED_HUB_TEST_TOPIC_ID") or "").strip()
+        if not allowed_chat and not allowed_topic:
+            return
+        if not allowed_chat or not allowed_topic:
+            raise RuntimeError("Hub test destination lock requires both chat and topic IDs")
+        try:
+            if int(allowed_chat) == 0 or int(allowed_topic) <= 0:
+                raise ValueError("invalid Telegram destination")
+            expected = (str(int(allowed_chat)), int(allowed_topic))
+        except ValueError as exc:
+            raise RuntimeError("Hub test destination lock has invalid chat/topic IDs") from exc
+        actual = self._destination_for(item)
+        if actual != expected:
+            raise RuntimeError(
+                "Hub test destination lock refused configured route or persisted destination"
+            )
+
     def _publication(self, item: Item):
         publication = getattr(self.db, "publication", None) if self.db is not None else None
         return publication(item.content_id) if callable(publication) else None
@@ -170,6 +195,7 @@ class ArmoredHub:
         if not item.original_sha256 or sha256_file(item.original_path) != item.original_sha256:
             raise RuntimeError("Hub original integrity validation failed")
         self._publication_text(item)
+        self._assert_test_destination_lock(item)
 
     def publish_once(self, item: Item) -> PublicationResult:
         self._validate_publication_input(item)
@@ -625,23 +651,10 @@ class ArmoredHub:
 
     def _publish_telegram(self, item: Item, output: Path) -> PublicationResult:
         token = os.getenv("ARMORED_CREATOR_BOT_TOKEN")
-        record = self._publication(item)
-        route = self._route_for(item)
-        record_topic = self._publication_field(record, "destination_topic_id")
-        topic_id = str(
-            record_topic
-            if record_topic is not None
-            else (route.hub.topic_id if route is not None else (os.getenv("ARMORED_HUB_TOPIC_ID") or ""))
-        ).strip()
-        if not token or not topic_id:
-            raise RuntimeError(
-                "Telegram Hub exige ARMORED_CREATOR_BOT_TOKEN e ARMORED_HUB_TOPIC_ID"
-            )
-        chat_id = (
-            str(self._publication_field(record, "destination_chat_id"))
-            if record and self._publication_field(record, "destination_chat_id")
-            else (str(route.hub.chat_id) if route is not None else self._resolve_destination_chat_id(topic_id))
-        )
+        if not token:
+            raise RuntimeError("Telegram Hub exige ARMORED_CREATOR_BOT_TOKEN")
+        self._assert_test_destination_lock(item)
+        chat_id, topic_id = self._destination_for(item)
         width, height, duration = self._video_metadata(output)
         self.db.publication_started(
             item.item_id,
