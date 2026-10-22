@@ -1,11 +1,11 @@
 from __future__ import annotations
-import hashlib
 import json
 import sqlite3
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from .models import Item, State
+from .integrity import sha256_file
 
 class Database:
     def __init__(self, path: Path, *, initialize: bool = True) -> None:
@@ -921,11 +921,7 @@ class Database:
             ):
                 return False
             try:
-                digest = hashlib.sha256()
-                with path.open("rb") as handle:
-                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                        digest.update(chunk)
-                return digest.hexdigest().lower() == expected.lower()
+                return sha256_file(path).lower() == expected.lower()
             except (OSError, ValueError, RuntimeError):
                 return False
 

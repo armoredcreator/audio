@@ -55,6 +55,15 @@ vinculados ao commit/árvore em que foram executados.
   um CLI global encontrado no PATH. WAVs e recibos existentes são preservados;
   a escrita é exclusiva e os estágios parciais permanecem disponíveis após
   falha. A inferência curta não substitui a validação dessa separação real.
+  Uma amostra audiovisual adicional concluiu separação validada, RVC Melody
+  e Studio com `BANNER_PRESENT` no Python 3.11.9 corrigido (árvore da revisão
+  `56a93d66d471f36e79c5ea316510f9c985564a23`), com decodificação aprovada e
+  original intacto. Não houve publicação nem repetição do lote de 14.
+  Qualidade subjetiva da voz continua sem aprovação humana.
+- **Hash canônico:** a escolha de proprietário histórico no SQLite reutiliza
+  `armored_core.integrity.sha256_file`; a validação de formato e o ranking
+  permanecem iguais. Os 13 testes focais de deduplicação passaram antes e
+  depois da unificação.
 - **Recuperação:** há ferramenta de sessão Telegram nova e recuperação de uma
   mensagem exata; credenciais são fornecidas somente no terminal local.
   Consulte [TARGETED_TELEGRAM_RECOVERY](TARGETED_TELEGRAM_RECOVERY.md).
