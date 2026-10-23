@@ -6,22 +6,32 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 from armored_core.database import Database
 from armored_core.models import Item, PublicationCheck, State
 from armored_core.integrity import sha256_file
 from armored_core.services import PublicationResult, PublicationUnknownError
+from armored_core.republication_ledger import VersionedPublicationLedger
 from armored_core.telegram_session import telegram_session_basename
 
 
 class ArmoredHub:
     """Telegram publication boundary; SQLite is the only durable state."""
 
-    def __init__(self, root: Path, db: Database | None = None, routes=()):
+    def __init__(self, root: Path, db: Database | None = None, routes=(), replay_ledger=None):
         self.root = Path(root)
         self.db = db
         self.routes = tuple(routes)
         self._destination_chat_id: str | None = None
+        self.republication_ledger = replay_ledger
+
+    def _republication_ledger(self):
+        if self.republication_ledger is None:
+            configured = (os.getenv("ARMORED_REPUBLICATION_LEDGER_PATH") or "").strip()
+            path = Path(configured) if configured else self.root / "storage" / "database" / "republication-ledger.sqlite3"
+            self.republication_ledger = VersionedPublicationLedger(path)
+        return self.republication_ledger
 
     def _route_for(self, item: Item):
         for route in self.routes:
@@ -221,6 +231,243 @@ class ArmoredHub:
             raise PublicationUnknownError("Telegram publication outcome is UNKNOWN")
 
         return self.publish(item)
+
+    @staticmethod
+    def _require_local_bot_api() -> tuple[str, str]:
+        """Require the explicitly configured local Bot API endpoints."""
+        base_url = (os.getenv("ARMORED_TELEGRAM_BOT_API_URL") or "").strip()
+        file_url = (os.getenv("ARMORED_TELEGRAM_BOT_API_FILE_URL") or "").strip()
+        if not base_url or not file_url:
+            raise RuntimeError("versioned-republication-requires-local-bot-api-endpoints")
+        for endpoint in (base_url, file_url):
+            parsed = urlparse(endpoint)
+            if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+                raise RuntimeError("versioned-republication-refuses-nonlocal-bot-api")
+        return base_url, file_url
+
+    def prepare_republication(
+        self,
+        *,
+        run_id: str,
+        execution_id: str,
+        execution_version: int,
+        canonical_content_id: str,
+        prior_publication_message_id: str,
+        output_path: Path,
+        output_sha256: str,
+        idempotency_key: str,
+        destination_chat_id: str,
+        destination_topic_id: int,
+    ):
+        """Prepare an additive replay ledger row; the existing receipt is read-only."""
+        if self.db is None:
+            raise RuntimeError("versioned-republication-requires-database")
+        expected_run_id = f"{execution_id}-v{int(execution_version)}:{canonical_content_id}"
+        if run_id != expected_run_id:
+            raise ValueError("versioned-republication-run-id-mismatch")
+        expected_key = (
+            f"armoredcreator:reexecution:{execution_id}:v{int(execution_version)}:"
+            f"{canonical_content_id}"
+        )
+        if idempotency_key != expected_key:
+            raise ValueError("versioned-republication-idempotency-key-mismatch")
+        item = self.db.get(str(canonical_content_id))
+        if item is None or item.state != State.PUBLISHED:
+            raise ValueError("versioned-republication-requires-published-canonical-item")
+        canonical_row = self.db.conn.execute(
+            "SELECT duplicate_of_content_id FROM items WHERE content_id=?",
+            (str(canonical_content_id),),
+        ).fetchone()
+        if canonical_row is None or canonical_row["duplicate_of_content_id"]:
+            raise ValueError("versioned-republication-refuses-duplicate-item")
+        old_receipt = self.db.publication(str(canonical_content_id))
+        if (
+            old_receipt is None
+            or not bool(old_receipt["confirmed"])
+            or str(old_receipt["verification_status"]) != "CONFIRMED"
+            or str(old_receipt["published_message_id"] or "") != str(prior_publication_message_id)
+            or str(old_receipt["destination_chat_id"] or "") != str(destination_chat_id)
+            or int(old_receipt["destination_topic_id"] or 0) != int(destination_topic_id)
+        ):
+            raise ValueError("versioned-republication-prior-receipt-mismatch")
+        result = Path(output_path)
+        if not result.is_file() or result.stat().st_size <= 0:
+            raise ValueError("versioned-republication-output-missing")
+        if sha256_file(result).lower() != str(output_sha256).lower():
+            raise ValueError("versioned-republication-output-hash-mismatch")
+        return self._republication_ledger().prepare(
+            run_id=run_id,
+            execution_id=execution_id,
+            execution_version=execution_version,
+            canonical_content_id=canonical_content_id,
+            prior_publication_message_id=prior_publication_message_id,
+            output_sha256=output_sha256,
+            idempotency_key=idempotency_key,
+            destination_chat_id=destination_chat_id,
+            destination_topic_id=destination_topic_id,
+        )
+
+    def preflight_republication(self, run_id: str, output_path: Path | None = None) -> dict:
+        """Read-only Hub/Bot API check; never invokes a sending method."""
+        if self.db is None:
+            raise RuntimeError("versioned-republication-requires-database")
+        record = self._republication_ledger().get(run_id)
+        if record is None:
+            raise KeyError(f"unknown-publication-run:{run_id}")
+        if record["status"] != "PREPARED":
+            raise RuntimeError("versioned-republication-run-is-not-prepared")
+        if output_path is not None:
+            result = Path(output_path)
+            if not result.is_file() or sha256_file(result).lower() != str(record["output_sha256"]).lower():
+                raise ValueError("versioned-republication-output-hash-mismatch")
+        base_url, file_url = self._require_local_bot_api()
+        token = os.getenv("ARMORED_CREATOR_BOT_TOKEN")
+        if not token:
+            raise RuntimeError("Telegram Hub exige ARMORED_CREATOR_BOT_TOKEN")
+        try:
+            from telegram import Bot
+            from telegram.request import HTTPXRequest
+        except ImportError as exc:
+            raise RuntimeError("Dependência python-telegram-bot ausente") from exc
+
+        async def inspect_destination():
+            request = HTTPXRequest(
+                connection_pool_size=int(os.getenv("ARMORED_TELEGRAM_CONNECTION_POOL_SIZE", "4")),
+                connect_timeout=float(os.getenv("ARMORED_TELEGRAM_CONNECT_TIMEOUT", "15")),
+                read_timeout=float(os.getenv("ARMORED_TELEGRAM_READ_TIMEOUT", "60")),
+                write_timeout=float(os.getenv("ARMORED_TELEGRAM_WRITE_TIMEOUT", "180")),
+                pool_timeout=float(os.getenv("ARMORED_TELEGRAM_POOL_TIMEOUT", "15")),
+            )
+            bot = Bot(token=token, request=request, base_url=base_url, base_file_url=file_url)
+            try:
+                me = await bot.get_me()
+                chat = await bot.get_chat(int(record["destination_chat_id"]))
+                member = await bot.get_chat_member(int(record["destination_chat_id"]), me.id)
+                status = str(getattr(member, "status", "unknown"))
+                if status not in {"administrator", "creator"}:
+                    raise RuntimeError("bot-lacks-administrator-status-in-replay-destination")
+                if int(record["destination_topic_id"]) > 0 and not bool(getattr(chat, "is_forum", False)):
+                    raise RuntimeError("replay-topic-target-is-not-a-forum")
+                return {
+                    "bot_username": getattr(me, "username", None),
+                    "destination_title": getattr(chat, "title", None),
+                    "destination_type": getattr(chat, "type", None),
+                    "is_forum": bool(getattr(chat, "is_forum", False)),
+                    "bot_status": status,
+                    "destination_chat_id": str(record["destination_chat_id"]),
+                    "destination_topic_id": int(record["destination_topic_id"]),
+                    "endpoint": "local-bot-api",
+                    "send_called": False,
+                }
+            finally:
+                await bot.shutdown()
+
+        return self._run_async(inspect_destination())
+
+    def publish_republication(
+        self,
+        run_id: str,
+        output_path: Path,
+        *,
+        explicit_approval: str | None = None,
+    ) -> PublicationResult:
+        """Send one prepared replay only after a run-specific explicit approval.
+
+        A timeout or crash after SEND_STARTED is never retried automatically;
+        the one-shot run must be reconciled externally before any new execution.
+        """
+        if explicit_approval != f"SEND:{run_id}":
+            raise RuntimeError("versioned-republication-requires-explicit-run-approval")
+        if os.getenv("ARMORED_HUB_DRY_RUN", "0") == "1":
+            raise RuntimeError("ARMORED_HUB_DRY_RUN=1: versioned send blocked")
+        if self.db is None:
+            raise RuntimeError("versioned-republication-requires-database")
+        ledger = self._republication_ledger()
+        record = ledger.get(run_id)
+        if record is None or record["status"] != "PREPARED":
+            raise RuntimeError("versioned-republication-run-is-not-retryable")
+        output = Path(output_path)
+        if not output.is_file() or output.stat().st_size <= 0:
+            raise ValueError("versioned-republication-output-missing")
+        if sha256_file(output).lower() != str(record["output_sha256"]).lower():
+            raise ValueError("versioned-republication-output-hash-mismatch")
+        item = self.db.get(str(record["canonical_content_id"]))
+        if item is None or item.state != State.PUBLISHED or not self.db.has_speech_studio_v5_completion(item.content_id):
+            raise RuntimeError("versioned-republication-canonical-item-not-ready")
+        canonical_row = self.db.conn.execute(
+            "SELECT duplicate_of_content_id FROM items WHERE content_id=?",
+            (str(item.content_id),),
+        ).fetchone()
+        old_receipt = self.db.publication(item.content_id)
+        if (
+            canonical_row is None
+            or canonical_row["duplicate_of_content_id"]
+            or old_receipt is None
+            or not bool(old_receipt["confirmed"])
+            or str(old_receipt["verification_status"]) != "CONFIRMED"
+            or str(old_receipt["published_message_id"] or "") != str(record["prior_publication_message_id"])
+            or str(old_receipt["destination_chat_id"] or "") != str(record["destination_chat_id"])
+            or int(old_receipt["destination_topic_id"] or 0) != int(record["destination_topic_id"])
+        ):
+            raise RuntimeError("versioned-republication-prior-receipt-changed")
+        if not item.original_path.is_file() or not item.original_sha256 or sha256_file(item.original_path) != item.original_sha256:
+            raise RuntimeError("versioned-republication-original-integrity-failed")
+        self._assert_test_destination_lock(item)
+        self.preflight_republication(run_id, output)
+        self._require_local_bot_api()
+        token = os.getenv("ARMORED_CREATOR_BOT_TOKEN")
+        base_url, file_url = self._require_local_bot_api()
+        try:
+            from telegram import Bot
+            from telegram.error import NetworkError, TimedOut
+            from telegram.request import HTTPXRequest
+        except ImportError as exc:
+            raise RuntimeError("Dependência python-telegram-bot ausente") from exc
+        width, height, duration = self._video_metadata(output)
+        ledger.mark_send_started(run_id)
+
+        async def send_once():
+            request = HTTPXRequest(
+                connection_pool_size=int(os.getenv("ARMORED_TELEGRAM_CONNECTION_POOL_SIZE", "4")),
+                connect_timeout=float(os.getenv("ARMORED_TELEGRAM_CONNECT_TIMEOUT", "15")),
+                read_timeout=float(os.getenv("ARMORED_TELEGRAM_READ_TIMEOUT", "60")),
+                write_timeout=float(os.getenv("ARMORED_TELEGRAM_WRITE_TIMEOUT", "180")),
+                pool_timeout=float(os.getenv("ARMORED_TELEGRAM_POOL_TIMEOUT", "15")),
+            )
+            bot = Bot(token=token, request=request, base_url=base_url, base_file_url=file_url)
+            try:
+                with output.open("rb") as handle:
+                    return await bot.send_video(
+                        chat_id=int(record["destination_chat_id"]),
+                        message_thread_id=int(record["destination_topic_id"]),
+                        video=handle,
+                        duration=duration,
+                        width=width,
+                        height=height,
+                        caption=self._publication_text(item),
+                        supports_streaming=True,
+                    )
+            finally:
+                await bot.shutdown()
+
+        try:
+            message = self._run_async(send_once())
+        except Exception as exc:
+            ledger.mark_indeterminate(run_id)
+            if isinstance(exc, (NetworkError, TimedOut)):
+                raise PublicationUnknownError("versioned Telegram send outcome is INDETERMINATE") from exc
+            raise PublicationUnknownError("versioned Telegram send started; reconcile before retry") from exc
+        message_id = getattr(message, "message_id", None)
+        if not message_id or int(message_id) <= 0:
+            ledger.mark_indeterminate(run_id)
+            raise PublicationUnknownError("versioned Telegram response lacks message ID")
+        ledger.mark_message_sent(run_id, str(message_id))
+        chat_id = getattr(getattr(message, "chat", None), "id", None)
+        topic_id = getattr(message, "message_thread_id", None)
+        if str(chat_id) != str(record["destination_chat_id"]) or int(topic_id or 0) != int(record["destination_topic_id"]):
+            raise PublicationUnknownError("versioned Telegram message stored SENT_UNVERIFIED; reconcile destination")
+        ledger.mark_confirmed(run_id, str(message_id))
+        return PublicationResult(True, str(message_id))
 
     def _telegram_session_path(self) -> Path:
         return (
