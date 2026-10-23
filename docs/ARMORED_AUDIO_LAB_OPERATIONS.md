@@ -77,15 +77,20 @@ antes de a primeira publicação chegar ao Hub.
 tem `ARMORED_SYNC_CATCHUP_LIMIT=0` (CATCH-UP sem limite) e
 `ARMORED_CERT_CATCHUP_THEN_LIVE=0`. O limite finito existente controla novos
 candidatos descobertos; não limita, por si só, os candidatos Vision nem os
-originais aprovados já pendentes no SQLite. Não há ainda um orçamento de
-consultas Shopee aplicado pelo pipeline normal, e os segredos Shopee estão
-configurados na instalação. Assim, nem `--max-live-cycles` nem a ausência de
-`--publish` constituem limite de CATCH-UP, Vision, downloads ou processamento.
-Não iniciar até haver um limite de lote que cubra também o trabalho persistido
-e um orçamento Shopee durável, explicitamente autorizado. O primeiro teste
-operacional deverá usar esse limite, manter envio fechado, verificar a fila e
-retomar com o cursor durável; a publicação só poderá ser liberada em outro
-passo autorizado.
+originais aprovados já pendentes no SQLite. O candidato agora exige autorização
+explícita e um ledger SQLite durável antes de qualquer consulta do cliente real
+Shopee; a falta de autorização bloqueia a decisão Vision sem iniciar a consulta.
+Isso protege a quota, mas não limita por si só o número de itens, downloads ou
+renders do CATCH-UP. Assim, nem `--max-live-cycles` nem a ausência de
+`--publish` constituem limite de CATCH-UP ou de trabalho persistido. **Não
+iniciar ainda:** falta um limite de lote que cubra o trabalho persistido e
+preserve a retomada/checkpoints sem declarar histórico concluído. A instalação
+operacional ainda não recebeu o novo gate da Vision; ele está apenas no
+candidato da PR até passar CI e a validação de instalação. A configuração de
+quota exige `ARMORED_SHOPEE_QUERIES_AUTHORIZED=1`, identificador de orçamento,
+limite inteiro entre 1 e 1000, evidência de autorização e validade ISO-8601 com
+fuso; o consumo é persistente e a mesma chave não pode ser reconfigurada. A
+publicação segue bloqueada sem autorização separada.
 
 As árvores operacional e da PR foram comparadas por SHA-256 para launcher,
 CLI, Coordinator, Sync, Hub, ledger de republicação, Vision, IA, Stock, Studio,
@@ -93,8 +98,9 @@ Speech e helper do Bot API. Após integrar Hub e ledger, esses arquivos de runti
 estão byte a byte iguais. O ajuste adicionou a validação obrigatória da Policy
 ArmoredIA ao Hub e preservou captions/recibos históricos somente para
 verificação. Os testes afetados foram atualizados para usar legendas canônicas;
-63 testes focais passaram. A regressão completa aceita anteriormente não foi
-repetida.
+63 testes focais passaram. O gate de orçamento acrescentou 27 testes focais
+aprovados, cobrindo falha fechada e consumo durável. A regressão completa aceita
+anteriormente não foi repetida.
 
 Esta seção atualiza a fotografia histórica das seções seguintes. O candidato
 parte de `31a14614dc026ec846d3e64831a36e3971ea688a`; testes devem permanecer
