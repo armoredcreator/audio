@@ -52,6 +52,7 @@ class Coordinator:
 
     def _catch_up_candidate_ids(self) -> list[str]:
         """Stable ordered union of durable rows eligible for this run's stages."""
+        quarantined_ids = self.publication_quarantine.quarantined_ids()
         candidates = {}
         for item in (
             self.db.pending_vision_candidates()
@@ -59,7 +60,7 @@ class Coordinator:
             + self.db.pre_download_recovery_items()
             + self.db.vision_approved_interrupted_items()
         ):
-            if not self.publication_quarantine.contains(str(item.content_id)):
+            if str(item.content_id) not in quarantined_ids:
                 candidates[str(item.content_id)] = item
         failed = self.db.conn.execute(
             "SELECT content_id FROM items WHERE state=? ORDER BY created_at,content_id",
@@ -67,7 +68,7 @@ class Coordinator:
         ).fetchall()
         for row in failed:
             item_id = str(row["content_id"])
-            if not self.publication_quarantine.contains(item_id):
+            if item_id not in quarantined_ids:
                 candidates[item_id] = self.db.get(item_id)
         sources = [
             str(route.source_id)
@@ -746,16 +747,7 @@ class Coordinator:
         from ArmoredStock.service import ArmoredStock
 
         stock = ArmoredStock(self)
-        stock_ids = (
-            tuple(
-                item_id for item_id in allowed_ids
-                if not (
-                    self.publication_quarantine.contains(str(item_id))
-                    and self.db.get(str(item_id)).state == State.RECOVERY
-                )
-            )
-            if allowed_ids is not None else None
-        )
+        stock_ids = tuple(allowed_ids) if allowed_ids is not None else None
         stock_report = (
             await stock.run(content_ids=stock_ids)
             if stock_ids is not None
@@ -841,8 +833,14 @@ class Coordinator:
         ]
         source_rank = {source_id: index for index, source_id in enumerate(configured_sources)}
         production_seen: set[str] = set()
+        production_snapshot = None
         while not checkpoint_blocked:
-            production_items = self.db.catch_up_production_items()
+            if live_task is not None or production_snapshot is None:
+                production_items = self.db.catch_up_production_items()
+                if live_task is None:
+                    production_snapshot = production_items
+            else:
+                production_items = production_snapshot
             if allowed_ids is not None:
                 production_items = [
                     item for item in production_items
@@ -967,6 +965,22 @@ class Coordinator:
                             self.run(batch_item_id)
 
                         current = self.db.get(batch_item_id)
+                        if current.state == State.PUBLISHING:
+                            if (
+                                not self.db.has_speech_studio_v5_completion(batch_item_id)
+                                or current.result_path is None
+                                or not current.result_path.is_file()
+                            ):
+                                raise RuntimeError(
+                                    "hub-deferred-without-durable-v5-result:"
+                                    f"{batch_item_id}"
+                                )
+                            self.log.info(
+                                "[COORDINATOR][CATCH-UP][HUB] item=%s remains "
+                                "PUBLISHING; send deferred and batch is resumable",
+                                batch_item_id,
+                            )
+                            continue
                         if (
                             current.state != State.PUBLISHED
                             or not current.cleanup_completed
@@ -1030,16 +1044,7 @@ class Coordinator:
                 # batch as one Stock batch. Studio will not start for these
                 # candidates until all of their originals exist.
                 stock = ArmoredStock(self)
-                stock_ids = (
-                    tuple(
-                        item_id for item_id in allowed_ids
-                        if not (
-                            self.publication_quarantine.contains(str(item_id))
-                            and self.db.get(str(item_id)).state == State.RECOVERY
-                        )
-                    )
-                    if allowed_ids is not None else None
-                )
+                stock_ids = tuple(allowed_ids) if allowed_ids is not None else None
                 stock_report = (
                     await stock.run(content_ids=stock_ids)
                     if stock_ids is not None
@@ -1063,7 +1068,7 @@ class Coordinator:
                     break
                 ready_unseen = [
                     candidate
-                    for candidate in self.db.catch_up_production_items()
+                    for candidate in production_items
                     if candidate.content_id not in production_seen
                     and (allowed_ids is None or str(candidate.content_id) in allowed_ids)
                     and not (

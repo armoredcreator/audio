@@ -107,6 +107,14 @@ def test_unknown_receipts_are_quarantined_and_assigned_safe_items_reach_dry_run_
     ),)
     hub = ArmoredHub(root, db, routes=routes)
     monkeypatch.setattr(hub, "_video_metadata", lambda _path: (1080, 1920, 2))
+    hub_attempts = []
+    original_publish_once = hub.publish_once
+
+    def tracked_publish_once(item):
+        hub_attempts.append(item.content_id)
+        return original_publish_once(item)
+
+    hub.publish_once = tracked_publish_once
     coordinator = Coordinator(
         db, storage, SimpleNamespace(), SimpleNamespace(), hub,
         source=_ThreeSourceEmpty(), catch_up_budget=budget,
@@ -165,7 +173,7 @@ def test_unknown_receipts_are_quarantined_and_assigned_safe_items_reach_dry_run_
     coordinator._run_speech_studio_batch = speech_studio
 
     async def no_download_stock(_self, *, content_ids=None):
-        assert set(content_ids or ()) == {ids["292"], ids["293"]}
+        assert set(content_ids or ()) == budget.assigned_ids()
         return {
             "errors": [], "processed": 0,
             "outcomes": {"approved_missing_original": 0, "skipped_existing_original": 2},
@@ -179,6 +187,7 @@ def test_unknown_receipts_are_quarantined_and_assigned_safe_items_reach_dry_run_
 
     first = asyncio.run(coordinator._run_staged_catch_up_async())
     assert set(first) == {ids["292"], ids["293"]}
+    assert hub_attempts == [ids["292"], ids["293"]]
     assert db.get(ids["291"]).state is State.RECOVERY
     assert db.get(ids["292"]).state is State.PUBLISHING
     assert db.get(ids["293"]).state is State.PUBLISHING

@@ -35,6 +35,10 @@ class PublicationQuarantine:
                 "CREATE INDEX IF NOT EXISTS idx_quarantine_evidence_content"
                 " ON quarantine_evidence(content_id,evidence_id);"
             )
+            self._ids = {
+                str(row[0])
+                for row in conn.execute("SELECT content_id FROM quarantined_publications")
+            }
         finally:
             conn.close()
 
@@ -45,33 +49,13 @@ class PublicationQuarantine:
         return conn
 
     def contains(self, content_id: str) -> bool:
-        conn = self._connect()
-        try:
-            return conn.execute(
-                "SELECT 1 FROM quarantined_publications WHERE content_id=?",
-                (str(content_id),),
-            ).fetchone() is not None
-        finally:
-            conn.close()
+        return str(content_id) in self._ids
 
     def quarantined_ids(self) -> set[str]:
-        conn = self._connect()
-        try:
-            return {
-                str(row[0])
-                for row in conn.execute("SELECT content_id FROM quarantined_publications")
-            }
-        finally:
-            conn.close()
+        return set(self._ids)
 
     def unresolved_count(self) -> int:
-        conn = self._connect()
-        try:
-            return int(conn.execute(
-                "SELECT COUNT(*) FROM quarantined_publications"
-            ).fetchone()[0])
-        finally:
-            conn.close()
+        return len(self._ids)
 
     def observed_outcomes(self) -> set[str]:
         conn = self._connect()
@@ -144,6 +128,7 @@ class PublicationQuarantine:
                 (content_id, json.dumps(snapshot, ensure_ascii=False, sort_keys=True)),
             )
             conn.commit()
+            self._ids.add(content_id)
         except BaseException:
             conn.rollback()
             raise
