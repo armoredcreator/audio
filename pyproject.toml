@@ -15,6 +15,9 @@ dependencies = [
     "python-telegram-bot>=22,<23",
 ]
 
+[project.scripts]
+armoredcreator = "armored_core.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["ArmoredSpeech*", "ArmoredStudio*", "ArmoredSync*", "ArmoredVision*", "ArmoredStock*", "ArmoredIA*", "ArmoredHub*", "armored_core*"]

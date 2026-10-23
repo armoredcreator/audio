@@ -49,6 +49,7 @@ class Coordinator:
         *,
         acquire_runtime_lock: bool = False,
         staged: bool = False,
+        allow_real_publication: bool | None = None,
     ):
         storage = Storage(root)
         # Project-local credential source of truth.
@@ -64,6 +65,12 @@ class Coordinator:
         project_config = storage.root / ".env"
         if project_config.exists():
             load_dotenv(project_config, override=False)
+
+        # The command-line production lifetime defaults to a closed Hub gate.
+        # Existing programmatic callers retain their environment-controlled
+        # behavior unless they pass this explicit policy argument.
+        if allow_real_publication is not None:
+            os.environ["ARMORED_HUB_DRY_RUN"] = "0" if allow_real_publication else "1"
 
         # The staged historical runner is exclusively a real Telegram
         # operation; never silently fall back to LocalSource because of an

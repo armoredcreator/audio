@@ -27,6 +27,28 @@ transporte simulado e banco isolado; `ARMORED_HUB_DRY_RUN=1` bloqueia envio e
 verificação externa antes de qualquer alteração de publicação. A aprovação
 dos testes não autoriza publicar em canais reais.
 
+### Inicialização do Coordinator no Windows
+
+O pacote instala o comando `armoredcreator` e também fornece `run_coordinator.py`.
+Configure as três fontes e seus três destinos Hub em `.env`; guarde os valores
+de autenticação somente em `credentials/project.env`. A validação abaixo não
+abre SQLite nem conexão Telegram e oculta os valores sensíveis:
+
+```powershell
+& .\.venv\Scripts\python.exe .\run_coordinator.py --root . --validate-config
+```
+
+Para iniciar a esteira, o Coordinator recupera estados, conclui CATCH-UP e só
+então entra em LIVE. Sem `--publish`, o Hub permanece em dry-run como padrão:
+
+```powershell
+& .\.venv\Scripts\python.exe .\run_coordinator.py --root . --run
+```
+
+O envio real exige a opção explícita `--publish`. Não use essa opção para
+validação local; as rotas e as credenciais reais devem ser revisadas pelo
+operador antes de iniciar a operação.
+
 
 Para um envio **real e explicitamente autorizado** em tópico de teste, use
 somente uma cópia isolada da configuração e configure **a rota efetiva** para
