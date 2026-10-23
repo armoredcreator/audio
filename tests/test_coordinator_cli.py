@@ -39,22 +39,32 @@ def test_run_defaults_to_closed_hub_and_requires_explicit_publish_flag(tmp_path:
         def close(self):
             calls.append(("close",))
 
-    def fake_build(root, *, acquire_runtime_lock, allow_real_publication, catch_up_run_id, max_catch_up_items):
-        calls.append(("build", acquire_runtime_lock, allow_real_publication, catch_up_run_id, max_catch_up_items))
+    def fake_build(root, *, acquire_runtime_lock, allow_real_publication, catch_up_run_id, max_catch_up_items,
+                   continuous_operation_id, max_items_per_day, max_items_per_batch):
+        calls.append(("build", acquire_runtime_lock, allow_real_publication, catch_up_run_id, max_catch_up_items,
+                      continuous_operation_id, max_items_per_day, max_items_per_batch))
         return FakeCoordinator()
 
     monkeypatch.setattr(Coordinator, "build", staticmethod(fake_build))
     args = ["--root", str(tmp_path), "--run", "--catch-up-run-id", "batch-1", "--max-catch-up-items", "3"]
     assert main(args) == 0
     assert calls == [
-        ("build", True, False, "batch-1", 3),
+        ("build", True, False, "batch-1", 3, None, None, None),
         ("run", 2.0, None),
         ("close",),
     ]
 
     calls.clear()
     assert main(args + ["--publish"]) == 0
-    assert calls[0] == ("build", True, True, "batch-1", 3)
+    assert calls[0] == ("build", True, True, "batch-1", 3, None, None, None)
+
+    calls.clear()
+    continuous = [
+        "--root", str(tmp_path), "--continuous", "--continuous-operation-id", "production",
+        "--max-items-per-day", "20", "--max-items-per-batch", "3",
+    ]
+    assert main(continuous) == 0
+    assert calls[0] == ("build", True, False, None, None, "production", 20, 3)
 
 
 def test_run_requires_explicit_bounded_budget_and_rejects_live_cycles(tmp_path: Path, monkeypatch):
@@ -70,6 +80,15 @@ def test_run_requires_explicit_bounded_budget_and_rejects_live_cycles(tmp_path: 
             "--max-catch-up-items", "3", "--max-live-cycles", "1",
         ])
     assert live.value.code == 2
+    with pytest.raises(SystemExit) as continuous_missing:
+        main(["--root", str(tmp_path), "--continuous"])
+    assert continuous_missing.value.code == 2
+    with pytest.raises(SystemExit) as continuous_live_limit:
+        main([
+            "--root", str(tmp_path), "--continuous", "--continuous-operation-id", "production",
+            "--max-items-per-day", "20", "--max-items-per-batch", "3", "--max-live-cycles", "1",
+        ])
+    assert continuous_live_limit.value.code == 2
 
 
 def test_validate_config_rejects_duplicate_hub_destination(tmp_path: Path, monkeypatch, capsys):

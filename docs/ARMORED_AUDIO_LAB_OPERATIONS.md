@@ -102,6 +102,19 @@ inclui `--publish`, portanto só prepara/retoma o lote e para na barreira do Hub
 Usar outro ID inicia outro orçamento; para retomar após interrupção, repetir o
 mesmo ID e o mesmo limite.
 
+Para operação contínua após a aprovação e promoção, existe um modo separado:
+`START_ALL.bat --continuous --continuous-operation-id producao-2026 --max-items-per-day 100 --max-items-per-batch 3`.
+O Coordinator executa sucessivos lotes de até 3 itens, termina o CATCH-UP
+somente após a varredura legítima e então permanece em LIVE. Um ledger separado
+e persistente limita itens únicos por dia UTC; a configuração do identificador,
+limite diário e tamanho do lote não pode ser alterada pelo mesmo ledger. Ao
+esgotar o teto, o processo aguarda a próxima janela diária, mantendo o candidato
+reservado e os checkpoints sem avanço. A retomada reabre o lote incompleto.
+Escolha um teto diário compatível com a quota Shopee autorizada e os recursos do
+computador. O modo contínuo não autoriza consultas Shopee nem publicações: sem
+quota Shopee válida, Vision continua bloqueada; sem `--publish`, um resultado
+pronto fica em `PUBLISHING` e segura o lote corrente até autorização de envio.
+
 Consultas reais Shopee permanecem bloqueadas sem
 `ARMORED_SHOPEE_QUERIES_AUTHORIZED=1`, ID de orçamento, limite entre 1 e 1000,
 evidência de autorização e validade ISO-8601 com fuso horário. O ledger de quota

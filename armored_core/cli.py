@@ -35,19 +35,23 @@ def _validate_routes(routes: tuple[RouteConfig, ...]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="armoredcreator",
-        description="Execução bounded do Coordinator com orçamento persistente; LIVE exige outra execução autorizada.",
+        description="Coordinator com lote limitado ou operação contínua CATCH-UP → LIVE sob orçamento diário persistente.",
     )
     parser.add_argument("--root", type=Path, default=project_root(), help="raiz isolada do projeto e do storage")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--validate-config", action="store_true", help="validar configuração sem abrir banco ou Telegram")
     mode.add_argument("--preflight", action="store_true", help="verificar composição real e SQLite clonado sem I/O externo")
     mode.add_argument("--run", action="store_true", help="executar um lote limitado e encerrar sem entrar em LIVE")
+    mode.add_argument("--continuous", action="store_true", help="executar lotes limitados sucessivos, concluir CATCH-UP e monitorar LIVE")
     parser.add_argument("--evidence", type=Path, help="caminho do relatório JSON exigido por --preflight")
     parser.add_argument("--publish", action="store_true", help="abrir publicação real no Hub; sem esta opção o envio fica em dry-run")
     parser.add_argument("--poll-seconds", type=float, default=2.0)
     parser.add_argument("--max-live-cycles", type=int, help="limite opcional de ciclos LIVE após o CATCH-UP")
     parser.add_argument("--catch-up-run-id", help="ID estável para retomar o mesmo lote após interrupção")
     parser.add_argument("--max-catch-up-items", type=int, help="limite global durável de itens do lote; 1 a 1000")
+    parser.add_argument("--continuous-operation-id", help="identidade imutável do orçamento diário contínuo")
+    parser.add_argument("--max-items-per-day", type=int, help="teto persistente de itens únicos por dia UTC; 1 a 10000")
+    parser.add_argument("--max-items-per-batch", type=int, help="teto de cada lote automático; 1 a 1000")
     args = parser.parse_args(argv)
 
     root = args.root.expanduser().resolve()
@@ -60,12 +64,30 @@ def main(argv: list[str] | None = None) -> int:
     if args.run:
         if not args.catch_up_run_id or args.max_catch_up_items is None:
             parser.error("--run exige --catch-up-run-id e --max-catch-up-items; a execução é sempre limitada")
+        if any(value is not None for value in (
+            args.continuous_operation_id, args.max_items_per_day, args.max_items_per_batch,
+        )):
+            parser.error("--run não pode ser combinado com orçamento --continuous")
         if not 1 <= args.max_catch_up_items <= 1000:
             parser.error("--max-catch-up-items deve estar entre 1 e 1000")
         if args.max_live_cycles is not None:
             parser.error("execuções com orçamento durável encerram após o lote e não aceitam --max-live-cycles")
-    elif args.catch_up_run_id is not None or args.max_catch_up_items is not None:
-        parser.error("--catch-up-run-id e --max-catch-up-items só podem ser usados com --run")
+    elif args.continuous:
+        if not args.continuous_operation_id or args.max_items_per_day is None or args.max_items_per_batch is None:
+            parser.error("--continuous exige --continuous-operation-id, --max-items-per-day e --max-items-per-batch")
+        if not 1 <= args.max_items_per_day <= 10000:
+            parser.error("--max-items-per-day deve estar entre 1 e 10000")
+        if not 1 <= args.max_items_per_batch <= min(1000, args.max_items_per_day):
+            parser.error("--max-items-per-batch deve estar entre 1 e min(1000, max-items-per-day)")
+        if args.max_live_cycles is not None:
+            parser.error("--continuous permanece ativo; --max-live-cycles não se aplica")
+        if args.catch_up_run_id is not None or args.max_catch_up_items is not None:
+            parser.error("--continuous usa orçamento diário; não combine com opções --run")
+    elif any(value is not None for value in (
+        args.catch_up_run_id, args.max_catch_up_items,
+        args.continuous_operation_id, args.max_items_per_day, args.max_items_per_batch,
+    )):
+        parser.error("opções de orçamento exigem --run ou --continuous")
     if args.preflight and args.evidence is None:
         parser.error("--evidence é obrigatório com --preflight")
     if args.evidence is not None and not args.preflight:
@@ -103,6 +125,9 @@ def main(argv: list[str] | None = None) -> int:
             allow_real_publication=bool(args.publish),
             catch_up_run_id=args.catch_up_run_id,
             max_catch_up_items=args.max_catch_up_items,
+            continuous_operation_id=args.continuous_operation_id,
+            max_items_per_day=args.max_items_per_day,
+            max_items_per_batch=args.max_items_per_batch,
         )
         try:
             logging.getLogger(__name__).info(

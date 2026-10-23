@@ -12,7 +12,7 @@ from typing import Any
 from dotenv import load_dotenv
 
 from .database import Database
-from .catch_up_budget import DurableCatchUpBudget
+from .catch_up_budget import ContinuousOperationBudget, DurableCatchUpBudget
 from .models import State
 from .pipeline import Pipeline
 from .recovery import Recovery
@@ -25,7 +25,7 @@ from .routing import load_routes
 class Coordinator:
     """Single composition root for the isolated ArmoredCreator pipeline."""
 
-    def __init__(self, db, storage, vision, studio, publisher, source=None, ia=None, catch_up_budget=None):
+    def __init__(self, db, storage, vision, studio, publisher, source=None, ia=None, catch_up_budget=None, continuous_budget=None):
         self.db = db
         self.log = logging.getLogger(__name__)
         self.storage = storage
@@ -40,6 +40,7 @@ class Coordinator:
         self._runtime_lock_held = False
         self._last_catch_up_completed_count = 0
         self.catch_up_budget = catch_up_budget
+        self.continuous_budget = continuous_budget
         self._shutdown_requested = False
         self.pipeline.set_shutdown_checker(lambda: self._shutdown_requested)
 
@@ -94,6 +95,9 @@ class Coordinator:
         allow_real_publication: bool | None = None,
         catch_up_run_id: str | None = None,
         max_catch_up_items: int | None = None,
+        continuous_operation_id: str | None = None,
+        max_items_per_day: int | None = None,
+        max_items_per_batch: int | None = None,
     ):
         storage = Storage(root)
         # Project-local credential source of truth.
@@ -140,6 +144,13 @@ class Coordinator:
 
             if (catch_up_run_id is None) != (max_catch_up_items is None):
                 raise ValueError("catch-up run ID and item limit must be supplied together")
+            continuous_args = (continuous_operation_id, max_items_per_day, max_items_per_batch)
+            if any(value is not None for value in continuous_args) and any(
+                value is None for value in continuous_args
+            ):
+                raise ValueError("continuous operation ID, daily limit, and batch size are required together")
+            if catch_up_run_id is not None and continuous_operation_id is not None:
+                raise ValueError("one-shot and continuous budgets are mutually exclusive")
 
             def make_coordinator(vision, studio, publisher, source, ia=None):
                 budget = None
@@ -149,7 +160,18 @@ class Coordinator:
                         catch_up_run_id,
                         int(max_catch_up_items),
                     )
-                coordinator = cls(db, storage, vision, studio, publisher, source, ia, budget)
+                continuous_budget = None
+                if continuous_operation_id is not None:
+                    continuous_budget = ContinuousOperationBudget(
+                        storage.database / "continuous-work-budget.sqlite3",
+                        continuous_operation_id,
+                        int(max_items_per_day),
+                        int(max_items_per_batch),
+                    )
+                coordinator = cls(
+                    db, storage, vision, studio, publisher, source, ia, budget,
+                    continuous_budget,
+                )
                 coordinator._runtime_lock_held = runtime_lock_acquired
                 return coordinator
 
@@ -1427,6 +1449,23 @@ class Coordinator:
 
         message = messages[0]
         item_id = str(message.telegram_message_id)
+        if self.continuous_budget is not None:
+            reservation = IngestMessage(
+                telegram_message_id=str(message.telegram_message_id),
+                source_id=str(getattr(message, "source_id", "telegram") or "telegram"),
+                topic_id=getattr(message, "topic_id", None),
+                topic_name=getattr(message, "topic_name", None),
+                original_url=getattr(message, "original_url", None),
+                source_path=getattr(message, "source_path", None),
+                materialize=getattr(message, "materialize", None),
+            )
+            item_id = str(self.sync.reserve_message(reservation))
+            if not self.continuous_budget.try_claim(item_id):
+                self.log.info(
+                    "[COORDINATOR][LIVE] orçamento diário esgotado; candidato reservado "
+                    "sem Vision/download e checkpoint mantido"
+                )
+                return []
         materialized = False
         current = None
         try:
@@ -1650,6 +1689,10 @@ class Coordinator:
         That is incompatible with a persistent Telethon session and can
         surface as ``The asyncio event loop must not change after connection``.
         """
+        if self.continuous_budget is not None:
+            await self._run_continuous_async(poll_seconds, max_cycles)
+            return
+
         # Startup is a separate reconciliation phase. It inventories SQLite +
         # canonical storage and reconciles ambiguous publications before Sync
         # opens its Telegram session. It never downloads or publishes.
@@ -1768,6 +1811,107 @@ class Coordinator:
                 cycles += 1
                 if max_cycles is None or cycles < max_cycles:
                     await asyncio.sleep(live_error_backoff)
+
+    def _continuous_batch_has_unfinished_items(self, item_ids: set[str]) -> bool:
+        terminal = {State.WAITING_VISION, State.DUPLICATE}
+        for item_id in item_ids:
+            item = self.db.get(item_id)
+            if item.state in terminal:
+                continue
+            if item.state == State.PUBLISHED and item.cleanup_completed:
+                continue
+            return True
+        return False
+
+    async def _run_continuous_async(
+        self, poll_seconds: float = 2.0, max_live_cycles: int | None = None
+    ) -> None:
+        """Run durable bounded batches, complete CATCH-UP, then stay LIVE.
+
+        A fixed UTC-day ledger caps unique content IDs across all batches and
+        LIVE. Exhaustion waits for the next window without advancing source
+        checkpoints or changing the persistent allowance.
+        """
+        assert self.continuous_budget is not None
+        controller = self.continuous_budget
+        self.startup_reconciler.run()
+        live_cycles = 0
+        backoff = max(0.25, float(poll_seconds))
+        while not self._shutdown_requested:
+            history_complete = (
+                self.source.is_historical_complete()
+                if self.source is not None and hasattr(self.source, "is_historical_complete")
+                else self.db.historical_complete()
+            )
+            pending_work = self._catch_up_candidate_ids()
+            if history_complete and not pending_work:
+                self.catch_up_budget = None
+                if controller.remaining <= 0:
+                    await asyncio.sleep(min(controller.seconds_until_reset(), 60.0))
+                    continue
+                self.db.heartbeat_runtime_lock("coordinator")
+                try:
+                    processed = await self.run_live_once_async()
+                    live_cycles += 1
+                    if max_live_cycles is not None and live_cycles >= max_live_cycles:
+                        return
+                    if not processed:
+                        await asyncio.sleep(backoff)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    self.log.exception("[COORDINATOR][LIVE] erro transitório; checkpoints mantidos")
+                    await asyncio.sleep(backoff)
+                continue
+
+            batch = controller.open_batch()
+            if batch is None:
+                await asyncio.sleep(min(controller.seconds_until_reset(), 60.0))
+                continue
+            run_id, limit = batch
+            budget = DurableCatchUpBudget(
+                self.storage.database / "catch-up-work-budget.sqlite3",
+                run_id,
+                limit,
+                continuous_budget=controller,
+            )
+            previous_budget = self.catch_up_budget
+            self.catch_up_budget = budget
+            try:
+                if callable(getattr(self.source, "reset_historical_scan", None)):
+                    self.source.reset_historical_scan()
+                self._prepare_catch_up_budget()
+                self.recover_pending()
+                await self._run_catch_up_with_recovery_async()
+                assigned = budget.assigned_ids()
+                source_failed = bool(
+                    getattr(self.source, "historical_materialization_failed", False)
+                )
+                history_complete = (
+                    self.source.is_historical_complete()
+                    if self.source is not None and hasattr(self.source, "is_historical_complete")
+                    else self.db.historical_complete()
+                )
+                if source_failed or self._continuous_batch_has_unfinished_items(assigned):
+                    self.log.info(
+                        "[COORDINATOR][CONTINUOUS] lote %s mantido aberto para retomada; itens=%s limit=%s",
+                        run_id, len(assigned), limit,
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+                controller.close_batch(run_id)
+                self.log.info(
+                    "[COORDINATOR][CONTINUOUS] lote %s concluído; histórico_completo=%s "
+                    "itens=%s quota_diária_restante=%s",
+                    run_id, history_complete, len(assigned), controller.remaining,
+                )
+            finally:
+                self.catch_up_budget = previous_budget
+                budget.close()
+            if not history_complete and callable(
+                getattr(self.source, "reset_historical_scan", None)
+            ):
+                self.source.reset_historical_scan()
 
     def run_forever(self, poll_seconds: float = 2.0, max_cycles: int | None = None) -> None:
         """Recover, finish catch-up once, then monitor Telegram continuously.
@@ -2264,8 +2408,12 @@ class Coordinator:
                 if self.catch_up_budget is not None:
                     self.catch_up_budget.close()
             finally:
-                if self._runtime_lock_held:
-                    self.db.release_runtime_lock("coordinator")
+                try:
+                    if self.continuous_budget is not None:
+                        self.continuous_budget.close()
+                finally:
+                    if self._runtime_lock_held:
+                        self.db.release_runtime_lock("coordinator")
         finally:
             self._runtime_lock_held = False
             self.db.close()
