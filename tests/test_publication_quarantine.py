@@ -165,7 +165,7 @@ def test_unknown_receipts_are_quarantined_and_assigned_safe_items_reach_dry_run_
     coordinator._run_speech_studio_batch = speech_studio
 
     async def no_download_stock(_self, *, content_ids=None):
-        assert set(content_ids or ()) == budget.assigned_ids()
+        assert set(content_ids or ()) == {ids["292"], ids["293"]}
         return {
             "errors": [], "processed": 0,
             "outcomes": {"approved_missing_original": 0, "skipped_existing_original": 2},
