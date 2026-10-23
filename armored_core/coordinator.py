@@ -648,13 +648,10 @@ class Coordinator:
                         str(message.telegram_message_id), source_id
                     ))
                     if self.publication_quarantine.contains(item_id):
-                        checkpoint_blocked = True
-                        marker = getattr(source, "mark_materialization_failed", None)
-                        if marker is not None:
-                            marker()
                         self.log.warning(
                             "[COORDINATOR][CATCH-UP][QUARANTINE] item=%s has an "
-                            "unresolved publication; cursor remains before it",
+                            "unresolved publication; cursor remains before it while "
+                            "reserved work continues",
                             item_id,
                         )
                         break
