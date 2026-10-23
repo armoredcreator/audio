@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import armored_core.database as database_module
+from armored_core.coordinator import Coordinator
 from armored_core.database import Database
 
 
@@ -108,3 +109,31 @@ def test_runtime_lock_keeps_live_owner_whose_process_predates_lease(tmp_path, mo
     finally:
         db.release_runtime_lock("coordinator")
         db.close()
+
+
+def test_run_forever_reuses_preacquired_runtime_lease(monkeypatch):
+    class Lease:
+        def __init__(self):
+            self.acquired = 0
+            self.released = 0
+
+        def acquire_runtime_lock(self, _name):
+            self.acquired += 1
+
+        def release_runtime_lock(self, _name):
+            self.released += 1
+
+    coordinator = Coordinator.__new__(Coordinator)
+    coordinator.db = Lease()
+    coordinator._runtime_lock_held = True
+    coordinator._shutdown_requested = False
+
+    async def no_op(**_kwargs):
+        return None
+
+    coordinator._run_forever_async = no_op
+    coordinator.run_forever(poll_seconds=0.01, max_cycles=1)
+
+    assert coordinator.db.acquired == 0
+    assert coordinator.db.released == 1
+    assert coordinator._runtime_lock_held is False

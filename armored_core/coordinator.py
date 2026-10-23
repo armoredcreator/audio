@@ -1666,8 +1666,9 @@ class Coordinator:
         deterministic.
         """
         import asyncio
-        self.db.acquire_runtime_lock("coordinator")
-        self._runtime_lock_held = True
+        if not self._runtime_lock_held:
+            self.db.acquire_runtime_lock("coordinator")
+            self._runtime_lock_held = True
         self._shutdown_requested = False
         previous_sigint = signal.getsignal(signal.SIGINT)
 

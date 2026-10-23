@@ -1,19 +1,64 @@
 <!-- Public copy: local roots and operational source identifiers use placeholders. -->
 # ArmoredAudioLab — manual canônico de arquitetura, operação e evidências
 
-**Versão:** 2.2
-**Revisão:** 22/10/2026 (horário local de São Paulo)
+**Versão:** 2.3
+**Revisão:** 23/10/2026 (horário local de São Paulo)
 **Repositório:** armoredcreator/audio  
 **Branch estável de laboratório:** test/armoredstudio-speech-integration-20261015  
 **Base de código consolidada antes da auditoria Sync:** a2af33c378c12a4599c7fe8bf6de3cb541575d86  
 **Contrato ativo Speech → Studio:** v5  
-**Finalidade:** validar a separação de responsabilidades entre Speech (áudio) e Studio (visual/renderização) antes de uma futura integração operacional.
+**Finalidade:** validar a separação de responsabilidades entre Speech (áudio) e Studio (visual/renderização), com um candidato de integração operacional em revisão.
 
 Este é o documento canônico: reúne arquitetura, fronteiras de responsabilidade, contrato, ordem de execução, ativos, segurança, comandos e evidências verificadas. Os READMEs e documentos técnicos curtos devem apontar para este manual e não manter um segundo estado operacional divergente. Os bancos, vídeos, pacotes, relatórios e saídas citados abaixo são evidências locais do laboratório; não devem ser adicionados ao Git.
 
 ---
 
 ## 0. Continuação autorizada da PR #19 — situação atual
+
+### Estado da campanha de 23/10/2026
+
+Na árvore operacional, a regressão completa terminou com **693 aprovados,
+4 ignorados e 0 falhas**. Na árvore efetivamente integrada à PR #19, antes do
+push final, a regressão terminou com **567 aprovados, 3 ignorados e 0 falhas**.
+Os totais diferem porque as árvores contêm conjuntos de testes diferentes.
+
+O Coordinator verdadeiro foi executado em clones consistentes, com três itens
+históricos de fontes diferentes e originais de mídia verificados. ArmoredIA
+gerou e persistiu as legendas com o provedor configurado; Speech v5 e Studio
+reais produziram saídas novas; Vision e Stock reaproveitaram aprovação e
+original existentes. Em uma quarta amostra histórica aprovada (`391`), Speech
+classificou narração PT-BR como RVC elegível e executou RVC Melody real. O WAV
+de voz, o resultado Speech v5 e o render H.264/AAC 1080×1920 foram produzidos
+no clone; o decode completo passou e o SHA-256 do original permaneceu igual.
+O Bot API local respondeu a `getMe`, `getChat` e `getChatMember` nas três rotas
+e confirmou o bot como administrador. Somente `Bot.send_video` foi interceptado:
+as chamadas simuladas continham vídeo, legenda, link afiliado e tópico corretos
+(228, 1160 e 1327). **Nenhuma publicação real foi enviada e nenhuma consulta
+Shopee foi feita.**
+
+O teste controlado de CATCH-UP usou o Coordinator real e SQLite clonado. Uma
+falha técnica manteve `historical_complete=0` e não avançou checkpoints. Após
+uma interrupção de conexão, a retomada completou os três fluxos históricos;
+com a fonte de teste exaurida e sem falhas pendentes, o Coordinator mudou
+legitimamente para LIVE e processou um item novo. Os 48 checkpoints de entrada
+foram preservados no clone antes da passagem controlada; o SQLite operacional
+não foi modificado.
+
+O launcher `START_ALL.bat` agora exige Python 3.11.9 da `.venv`, executa o
+preflight de áudio e o preflight integrado dos sete módulos sobre uma cópia
+consistente do SQLite, valida as rotas e, somente em `--run`, verifica o Bot
+API em `127.0.0.1:8081`. Reutiliza um serviço já autenticado; se a porta estiver
+ocupada por um serviço que falhe `getMe`, encerra o fluxo sem abrir duplicata.
+O Bot API operacional existente foi autenticado e reutilizado sem iniciar outro
+processo. Os modos sem `--run` foram verificados e não iniciaram o Coordinator.
+
+**O START operacional continua deliberadamente pendente.** Não executamos
+`START_ALL.bat --run`, `--publish`, envio real ou consulta comercial. Uma falha
+de validação de caminho no clone após Speech/Studio validou a retomada pelo
+Coordinator: o novo processo reutilizou o RVC e o render já concluídos, seguiu
+ao Hub simulado e não repetiu a conversão nem o render. A descoberta conectada
+ao Telegram real não fez parte desses testes de Coordinator: o CATCH-UP usou
+uma fonte controlada, sem alterar a sessão ou os checkpoints operacionais.
 
 Esta seção atualiza a fotografia histórica das seções seguintes. O candidato
 parte de `31a14614dc026ec846d3e64831a36e3971ea688a`; testes devem permanecer
@@ -229,7 +274,7 @@ Invariantes obrigatórios:
 8. Não converter avisos em sucesso sem pós-validação; não converter avisos isolados em falha sem verificar status, streams e decodificação.
 9. Não adicionar Redis, RabbitMQ, Celery, Kafka, publish_queue ou outra infraestrutura de fila para esta fronteira.
 10. Não executar git reset, git clean, remoções recursivas genéricas, substituições destrutivas de ativos ou limpeza automática de storage.
-11. Não migrar o código para o repositório operacional até existir plano separado, revisão de interfaces/Coordinator/SQLite e validação em branch isolada.
+11. A promoção operacional é um fluxo separado do AudioLab. A PR #19 continua sujeita à revisão de interfaces/Coordinator/schema SQLite; não integrar mudanças da instalação privada por cópia ou merge cego.
 12. Alterações de documentação precisam refletir evidências efetivamente vistas e identificar como pendente qualquer validação ainda não realizada.
 
 ---
