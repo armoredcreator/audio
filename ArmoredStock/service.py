@@ -59,6 +59,11 @@ class ArmoredStock:
         """
         coordinator = self.coordinator
         source = coordinator.source
+        quarantine = getattr(coordinator, "publication_quarantine", None)
+        if quarantine is not None and quarantine.contains(str(item.content_id)):
+            raise RuntimeError(
+                f"ArmoredStock blocked by publication quarantine: {item.content_id}"
+            )
         if item.state != State.RECEIVED or not str(item.affiliate_url or "").strip():
             raise RuntimeError(
                 f"ArmoredStock recusou item sem aprovação Vision: "
@@ -200,17 +205,22 @@ class ArmoredStock:
             )
 
         allowed = None if content_ids is None else {str(value) for value in content_ids}
+        quarantine = getattr(coordinator, "publication_quarantine", None)
+        is_quarantined = quarantine.contains if quarantine is not None else lambda _item_id: False
         pending_vision = [
             item for item in coordinator.db.pending_vision_candidates()
             if allowed is None or str(item.content_id) in allowed
+            if not is_quarantined(str(getattr(item, "content_id", "")))
         ]
         interrupted_approved = [
             item for item in coordinator.db.vision_approved_interrupted_items()
             if allowed is None or str(item.content_id) in allowed
+            if not is_quarantined(str(getattr(item, "content_id", "")))
         ]
         invalid_recovery = [
             item for item in coordinator.db.pre_download_recovery_items()
             if allowed is None or str(item.content_id) in allowed
+            if not is_quarantined(str(getattr(item, "content_id", "")))
         ]
         if pending_vision or interrupted_approved or invalid_recovery:
             raise RuntimeError(
@@ -226,6 +236,7 @@ class ArmoredStock:
         downloaded = 0
         skipped_existing_original = 0
         candidates = self._ordered(coordinator.db.pending_vision_approved_items())
+        candidates = [item for item in candidates if not is_quarantined(str(item.content_id))]
         if allowed is not None:
             candidates = [item for item in candidates if str(item.content_id) in allowed]
 
@@ -256,6 +267,7 @@ class ArmoredStock:
             1
             for candidate in coordinator.db.pending_vision_approved_items()
             if (allowed is None or str(candidate.content_id) in allowed)
+            and not is_quarantined(str(candidate.content_id))
             and candidate.state == State.RECEIVED
             and str(candidate.affiliate_url or "").strip()
             and not candidate.original_path.is_file()

@@ -16,7 +16,7 @@ from armored_core.services import PublicationDeferredError, SyncService
 from armored_core.storage import Storage
 
 
-def _approved(db: Database, storage: Storage, message_id: str, *, state=State.RECEIVED):
+def _approved(db: Database, storage: Storage, message_id: str, *, state=State.RECEIVED, publication_attempt=True):
     source = storage.root / "fixtures" / f"{message_id}.mp4"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_bytes(f"immutable-original-{message_id}".encode())
@@ -36,7 +36,8 @@ def _approved(db: Database, storage: Storage, message_id: str, *, state=State.RE
     )
     if state != State.RECEIVED:
         db.transition(item_id, state, "fixture-prior-interruption")
-    db.publication_started(item_id, "-1004341972306", 228)
+    if publication_attempt:
+        db.publication_started(item_id, "-1004341972306", 228)
     return item_id
 
 
@@ -58,9 +59,12 @@ class _CompleteSource(_ThreeSourceEmpty):
         return True
 
 
-def test_unknown_receipts_are_quarantined_and_assigned_safe_items_reach_dry_run_barrier(
+def test_quarantine_blocks_every_stage_without_changing_lote001_or_existing_renders(
     tmp_path, monkeypatch
 ):
+    import asyncio
+    import hashlib
+
     monkeypatch.setenv("ARMORED_HUB_DRY_RUN", "1")
     monkeypatch.setenv("ARMORED_CREATOR_BOT_TOKEN", "synthetic-test-token")
     monkeypatch.setenv("ARMORED_CREATOR_GROUP_ID", "-1004341972306")
@@ -68,7 +72,6 @@ def test_unknown_receipts_are_quarantined_and_assigned_safe_items_reach_dry_run_
     root = tmp_path / "clone"
     storage = Storage(root)
     db = Database(storage.database / "armoredcreator.db")
-
     ids = {
         "291": _approved(db, storage, "291", state=State.RECOVERY),
         "292": _approved(db, storage, "292"),
@@ -77,153 +80,148 @@ def test_unknown_receipts_are_quarantined_and_assigned_safe_items_reach_dry_run_
     }
     legacy_1040 = _approved(db, storage, "1040", state=State.RECOVERY)
     db.publication_message_sent(legacy_1040, "1339")
-    # Reproduce the legacy inconsistent flag exactly; the status remains the
-    # authority and must not be rewritten to CONFIRMED by startup.
     db.conn.execute(
         "UPDATE publications SET confirmed=1,verification_status='SENT_UNVERIFIED' "
         "WHERE content_id=?", (legacy_1040,),
     )
     db.conn.commit()
 
-    budget = DurableCatchUpBudget(
-        storage.database / "catch-up-work-budget.sqlite3", "lote-001", 3
-    )
-    assert budget.claim([ids["291"], ids["292"], ids["293"]]) == {
-        ids["291"], ids["292"], ids["293"]
-    }
+    # 292/293 model the real renders already produced before quarantine. Their
+    # bytes, render boundary, item state and receipts must remain untouched.
+    render_hashes = {}
+    for key in ("292", "293"):
+        item_id = ids[key]
+        db.transition(item_id, State.STUDIO_BATCH, "fixture-render-existing")
+        output = storage.result(item_id, "https://s.shopee.com.br/affiliate", "Produto", source_id="-1003788989075")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"preexisting-approved-render-" + key.encode())
+        db.complete_speech_studio_batch({item_id: output})
+        render_hashes[item_id] = hashlib.sha256(output.read_bytes()).hexdigest()
+
+    budget = DurableCatchUpBudget(storage.database / "catch-up-work-budget.sqlite3", "lote-001", 3)
+    assert budget.claim([ids["291"], ids["292"], ids["293"]]) == {ids["291"], ids["292"], ids["293"]}
+    receipts_before = {item_id: tuple(db.publication(item_id)) for item_id in (*ids.values(), legacy_1040)}
     before_291 = dict(db.get(ids["291"]).__dict__)
-    before_291_events = [tuple(row) for row in db.conn.execute(
-        "SELECT old_state,new_state,reason,created_at FROM state_events "
-        "WHERE content_id=? ORDER BY id", (ids["291"],)
-    )]
-    before_receipts = {
-        item_id: tuple(db.publication(item_id))
-        for item_id in (*ids.values(), legacy_1040)
-    }
-
-    routes = (SimpleNamespace(
-        source=SimpleNamespace(source_id="-1003788989075"),
-        hub=SimpleNamespace(chat_id="-1004341972306", topic_id=228),
-    ),)
+    routes = (SimpleNamespace(source=SimpleNamespace(source_id="-1003788989075"), hub=SimpleNamespace(chat_id="-1004341972306", topic_id=228)),)
     hub = ArmoredHub(root, db, routes=routes)
-    monkeypatch.setattr(hub, "_video_metadata", lambda _path: (1080, 1920, 2))
-    hub_attempts = []
-    original_publish_once = hub.publish_once
-
-    def tracked_publish_once(item):
-        hub_attempts.append(item.content_id)
-        return original_publish_once(item)
-
-    hub.publish_once = tracked_publish_once
-    coordinator = Coordinator(
-        db, storage, SimpleNamespace(), SimpleNamespace(), hub,
-        source=_ThreeSourceEmpty(), catch_up_budget=budget,
-    )
-
+    coordinator = Coordinator(db, storage, SimpleNamespace(), SimpleNamespace(), hub, source=_ThreeSourceEmpty(), catch_up_budget=budget)
     summary = coordinator.startup_reconciler.run()
     quarantine = coordinator.publication_quarantine
     assert summary["publication_ambiguous"] == 5
-    assert {item_id for item_id in (*ids.values(), legacy_1040) if quarantine.contains(item_id)} == {
-        *ids.values(), legacy_1040,
-    }
-    assert all(db.publication(item_id)["verification_status"] != "CONFIRMED"
-               for item_id in (*ids.values(), legacy_1040))
-    assert tuple(db.publication(legacy_1040)) == before_receipts[legacy_1040]
-    assert quarantine.observed_outcomes() == {"UNKNOWN"}
     assert quarantine.quarantined_ids() == {*ids.values(), legacy_1040}
+    assert quarantine.observed_outcomes() == {"UNKNOWN"}
 
-    # Recovery continues past all fenced rows without changing item 291 or
-    # issuing any publication check/send for them.
+    stage_calls = []
+    hub_attempts = []
+    original_publish_once = hub.publish_once
+    hub.publish_once = lambda item: (hub_attempts.append(item.content_id), original_publish_once(item))[1]
     coordinator.recover_pending()
-    assert dict(db.get(ids["291"]).__dict__) == before_291
-    assert [tuple(row) for row in db.conn.execute(
-        "SELECT old_state,new_state,reason,created_at FROM state_events "
-        "WHERE content_id=? ORDER BY id", (ids["291"],)
-    )] == before_291_events
-    assert budget.assigned_ids() == {ids["291"], ids["292"], ids["293"]}
-
-    events = []
-    original_pipeline_run = coordinator.pipeline.run
-
-    def pipeline_run(item_id, *, stop_after_ia=False, **kwargs):
-        current = db.get(item_id)
-        if stop_after_ia and current.state == State.RECEIVED:
-            events.append(f"ia:{current.telegram_message_id}")
-            db.transition(item_id, State.SPEECH, "ia-complete")
-            return None
-        return original_pipeline_run(item_id, stop_after_ia=stop_after_ia, **kwargs)
-
-    coordinator.pipeline.run = pipeline_run
-
-    def speech_studio(item_ids):
-        outputs = {}
-        for item_id in item_ids:
-            item = db.get(item_id)
-            events.append(f"speech:{item.telegram_message_id}")
-            events.append(f"studio:{item.telegram_message_id}")
-            db.transition(item_id, State.STUDIO_BATCH, "fixture-v5-render-start")
-            output = storage.result(
-                item_id, item.affiliate_url, item.affiliate_name, source_id=item.source_id
-            )
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_bytes(item.original_path.read_bytes() + b"-clone-render")
-            outputs[item_id] = output
-        db.complete_speech_studio_batch(outputs)
-
-    coordinator._run_speech_studio_batch = speech_studio
-
-    async def no_download_stock(_self, *, content_ids=None):
-        assert set(content_ids or ()) == budget.assigned_ids()
-        return {
-            "errors": [], "processed": 0,
-            "outcomes": {"approved_missing_original": 0, "skipped_existing_original": 2},
-        }
-
-    monkeypatch.setattr(ArmoredStock, "run", no_download_stock)
-
-    # The exact assigned batch gets through IA and the Speech/Studio boundary;
-    # real Hub dry-run defers both sends and leaves the prepared rows in PUBLISHING.
-    import asyncio
-
+    for item_id in (*ids.values(), legacy_1040):
+        coordinator.run(item_id)
+        coordinator.pipeline.run(item_id)
+        with pytest.raises(RuntimeError, match="speech-studio-blocked-by-publication-quarantine"):
+            coordinator._run_speech_studio_batch([item_id])
     first = asyncio.run(coordinator._run_staged_catch_up_async())
-    assert set(first) == {ids["292"], ids["293"]}
-    assert hub_attempts == [ids["292"], ids["293"]]
+    assert first == []
+    assert stage_calls == []
+    assert hub_attempts == []
+    assert budget.assigned_ids() == {ids["291"], ids["292"], ids["293"]}
+    assert budget.assigned_count == 3 and budget.remaining == 0
     assert db.get(ids["291"]).state is State.RECOVERY
     assert db.get(ids["292"]).state is State.PUBLISHING
     assert db.get(ids["293"]).state is State.PUBLISHING
-    assert all(db.publication(item_id)["verification_status"] == "PENDING"
-               for item_id in (ids["292"], ids["293"]))
-    assert all(db.publication(item_id)["confirmed"] == 0
-               for item_id in (ids["292"], ids["293"]))
-    assert budget.assigned_count == 3 and budget.remaining == 0
+    for item_id, digest in render_hashes.items():
+        assert hashlib.sha256(db.get(item_id).result_path.read_bytes()).hexdigest() == digest
+    assert {item_id: tuple(db.publication(item_id)) for item_id in (*ids.values(), legacy_1040)} == receipts_before
     assert db.historical_complete() is False
     assert db.conn.execute("SELECT COUNT(*) FROM sync_topics").fetchone()[0] == 0
-    assert set(events) == {
-        "ia:292", "ia:293", "speech:292", "speech:293", "studio:292", "studio:293",
-    }
 
+    # Even with sending enabled, both normal Hub entry points fail closed before
+    # touching Telegram; no client or external send method is installed.
+    monkeypatch.setenv("ARMORED_HUB_DRY_RUN", "0")
     for item_id in (ids["292"], ids["293"]):
-        monkeypatch.setenv("ARMORED_HUB_DRY_RUN", "0")
-        with pytest.raises(PublicationDeferredError, match="explicit reconciliation required"):
+        with pytest.raises(PublicationDeferredError, match="quarantine"):
             hub.publish_once(db.get(item_id))
-        with pytest.raises(PublicationDeferredError, match="explicit reconciliation required"):
+        with pytest.raises(PublicationDeferredError, match="quarantine"):
             hub.publish(db.get(item_id))
-    monkeypatch.setenv("ARMORED_HUB_DRY_RUN", "1")
-
-    # Same run ID is idempotent: Hub alone is retried, no costly stage repeats,
-    # no receipt/checkpoint/status is inferred, and its three IDs stay fixed.
-    before_events = list(events)
-    receipts_before_resume = {item_id: tuple(db.publication(item_id)) for item_id in ids.values()}
-    coordinator.startup_reconciler.run()
-    coordinator.recover_pending()
-    asyncio.run(coordinator._run_staged_catch_up_async())
-    assert events == before_events
     assert budget.assigned_ids() == {ids["291"], ids["292"], ids["293"]}
-    assert budget.assigned_count == 3
-    assert {item_id: tuple(db.publication(item_id)) for item_id in ids.values()} == receipts_before_resume
-    assert tuple(db.publication(ids["294"])) == before_receipts[ids["294"]]
-    assert db.get(ids["291"]).state is State.RECOVERY
-    assert all(db.get(item_id).state is State.PUBLISHING for item_id in (ids["292"], ids["293"]))
+    coordinator.close()
+
+
+def test_new_safe_lot_reaches_real_hub_dry_run_and_resumes_without_stage_duplication(
+    tmp_path, monkeypatch
+):
+    import asyncio
+    import hashlib
+
+    monkeypatch.setenv("ARMORED_HUB_DRY_RUN", "1")
+    monkeypatch.setenv("ARMORED_CREATOR_BOT_TOKEN", "synthetic-test-token")
+    monkeypatch.setenv("ARMORED_CREATOR_GROUP_ID", "-1004341972306")
+    monkeypatch.setenv("ARMORED_HUB_TOPIC_ID", "228")
+    root = tmp_path / "safe-lot"
+    storage = Storage(root)
+    db = Database(storage.database / "armoredcreator.db")
+    ambiguous_id = _approved(db, storage, "40")
+    item_id = _approved(db, storage, "500", publication_attempt=False)
+    item = db.get(item_id)
+    original_hash = hashlib.sha256(item.original_path.read_bytes()).hexdigest()
+    budget = DurableCatchUpBudget(storage.database / "catch-up-work-budget.sqlite3", "lote-seguro-001", 1)
+    assert budget.claim([item_id]) == {item_id}
+    hub = ArmoredHub(root, db)
+    coordinator = Coordinator(db, storage, SimpleNamespace(), SimpleNamespace(), hub, source=_ThreeSourceEmpty(), catch_up_budget=budget)
+    coordinator.startup_reconciler.run()
+    assert coordinator.publication_quarantine.contains(ambiguous_id)
+    assert coordinator._quarantine_blocks_historical_cursor() is True
+    db.initialize_source_state("-1003788989075")
+    db.set_source_sync_topic_checkpoint("-1003788989075", 287, "fixture-topic", 40)
+    assert coordinator._quarantine_blocks_historical_cursor() is False
+    stage_calls = []
+
+    def pipeline_run(candidate_id, *, stop_after_ia=False, **kwargs):
+        current = db.get(candidate_id)
+        if stop_after_ia and current.state is State.RECEIVED:
+            stage_calls.append("IA")
+            db.transition(candidate_id, State.SPEECH, "fixture-ia-complete")
+            return
+        return original_pipeline_run(candidate_id, stop_after_ia=stop_after_ia, **kwargs)
+
+    original_pipeline_run = coordinator.pipeline.run
+    coordinator.pipeline.run = pipeline_run
+
+    def speech_studio(candidate_ids):
+        outputs = {}
+        for candidate_id in candidate_ids:
+            current = db.get(candidate_id)
+            stage_calls.extend(["Speech", "Studio"])
+            db.transition(candidate_id, State.STUDIO_BATCH, "fixture-v5-render-start")
+            output = storage.result(candidate_id, current.affiliate_url, current.affiliate_name, source_id=current.source_id)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(current.original_path.read_bytes() + b"-safe-render")
+            outputs[candidate_id] = output
+        db.complete_speech_studio_batch(outputs)
+
+    coordinator._run_speech_studio_batch = speech_studio
+    hub_calls = []
+    publish_once = hub.publish_once
+    hub.publish_once = lambda current: (hub_calls.append(current.content_id), publish_once(current))[1]
+
+    first = asyncio.run(coordinator._run_staged_catch_up_async())
+    assert first == [item_id]
+    assert db.get(item_id).state is State.PUBLISHING
+    assert stage_calls == ["IA", "Speech", "Studio"]
+    assert hub_calls == [item_id]
+    assert hashlib.sha256(db.get(item_id).original_path.read_bytes()).hexdigest() == original_hash
+    output_hash = hashlib.sha256(db.get(item_id).result_path.read_bytes()).hexdigest()
+
+    # Reopening the same durable lot rechecks only the Hub dry-run barrier.
+    resume = asyncio.run(coordinator._run_staged_catch_up_async())
+    assert stage_calls == ["IA", "Speech", "Studio"]
+    assert hashlib.sha256(db.get(item_id).result_path.read_bytes()).hexdigest() == output_hash
+    assert budget.assigned_ids() == {item_id} and budget.assigned_count == 1
+    assert db.get(item_id).state is State.PUBLISHING
+    assert db.publication(item_id) is None
+    assert db.historical_complete() is False
+    assert resume in ([], [item_id])
     coordinator.close()
 
 

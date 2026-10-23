@@ -121,22 +121,63 @@ Uma resposta `UNKNOWN` durante verificação de publicação nunca é convertida
 `storage/database/publication-quarantine.sqlite3`, com chave de idempotência,
 destino/tópico, status original, estado do item e evidência da última transição.
 A quarentena não confirma publicação, não autoriza reenvio e não altera o recibo.
-O Hub recusa itens ainda quarantined mesmo quando `--publish` for fornecido.
-Essa cerca não cancela IDs que já pertencem ao orçamento durável: itens
-independentes em `RECEIVED` continuam pelas etapas autorizadas e param em
-`PUBLISHING` na barreira do Hub; itens em `RECOVERY` não são reconstruídos nem
-reenviados. A quarentena impede o corte histórico e a entrada em LIVE até uma
-reconciliação explícita.
+Ela bloqueia todas as etapas daquele item, em qualquer estado SQLite, desde Sync
+e Vision até Stock, IA, Speech, Studio e Hub. `--publish` não remove essa cerca.
+O Coordinator, Pipeline, Recovery, ArmoredStock e Hub verificam o ledger lateral;
+os renders existentes ficam preservados em seus caminhos originais.
 
-No clone consistente do primeiro lote `lote-001`, o ledger preservou os mesmos
-três IDs já reservados. O item interrompido em `RECOVERY` foi isolado; os dois
-itens independentes com originais já presentes alcançaram a barreira do Hub e
-permaneceram `PUBLISHING` em dry-run. A retomada com o mesmo ID reutilizou os
-renders v5, sem repetir IA, Speech, RVC ou Studio. Checkpoints ficaram intactos,
-`historical_complete` permaneceu falso e os recibos `PENDING` não mudaram.
-Quatro recibos históricos `PENDING` foram registrados como `UNKNOWN`; um recibo
-legado `SENT_UNVERIFIED` separado também permanece bloqueado. A revisão desses
-recibos é uma ação explícita e distinta da autorização `--publish`.
+Itens independentes e seguros continuam elegíveis dentro de um orçamento novo
+explicitamente limitado. IDs já atribuídos a `lote-001` nunca são substituídos:
+se todos estiverem em quarentena, esse lote não processa outros itens. A
+quarentena só bloqueia CATCH-UP/LIVE quando o cursor da mesma fonte e tópico
+ainda teria de atravessar a mensagem não reconciliada. O checkpoint permanece
+antes dela; quarentenas já atrás de um cursor comprovado não congelam fontes
+independentes. Falta de identidade ou evidência de cursor é tratada de forma
+conservadora e mantém o bloqueio.
+
+Na validação da correção, o clone manteve inalteradas as atribuições originais de
+`lote-001` (`-1003788989075_291`, `_292`, `_293`). Os cinco recibos ambíguos
+(`291`–`294` e o legado `1040`/`1339`) não entraram em nenhuma etapa; os resultados
+já existentes de 292 e 293 permaneceram byte a byte iguais e sem autorização de
+envio. O limite 3 não foi aumentado. Um lote novo isolado, com item sem recibo
+ambíguo, percorreu IA → Speech → Studio → Hub em dry-run e retomou sem repetir as
+etapas de geração; o original manteve o mesmo SHA-256. O Hub também foi testado
+com envio habilitado e continuou recusando itens em quarentena.
+
+Uma quarentena cujo cursor está antes da mensagem mantém o histórico bloqueado;
+uma quarentena já coberta por cursor persistido não impede a operação contínua
+de itens seguros. A reconciliação da mensagem antiga continua separada da
+autorização de novas publicações. Os recibos históricos nunca são editados por
+essa regra.
+
+### Validação integrada real em clone (2026-10-23)
+
+O Coordinator e SyncService, Vision, Stock, IA, Speech, Studio e Hub foram
+executados com componentes reais em uma cópia consistente do banco e do original
+aprovado `-1003788989075_392`. A aprovação Vision persistida foi reutilizada; a
+consulta Shopee ficou desautorizada. O ArmoredIA local gerou e persistiu
+`Touca com 🧡 regulador` / `#regulador`, aprovada pela Policy. Speech classificou
+`PT_BR_NARRATION_WITH_MUSIC` em `pt-br`, separou a voz com UVR e executou RVC
+Melody; o contrato v5 registrou os hashes do modelo, índice, voz e original.
+Studio renderizou H.264/AAC a 1080×1920, 10 s. O original permaneceu com SHA-256
+`5ae7d1c3565504720ecaf02acccf1e30bd40dc7415be3ff70cc512c2e08d9aec`; o render
+teve SHA-256 `0eb2d4a6019c590b238cbb10c198f6dcfb6ce152b382ca3db53b066eed8c5fb6`.
+
+O Hub real validou o render, legenda e afiliado, resolveu a rota para o grupo
+`-1004341972306`, tópico `228`, e parou no dry-run antes de construir o cliente
+Bot ou enviar. Não houve recibo de publicação. Após reiniciar o Coordinator, o
+item permaneceu `PUBLISHING`, o orçamento continuou em 1/1, os hashes e as
+contagens de IA/Speech não mudaram e somente a barreira Hub foi verificada de
+novo.
+
+Uma leitura Telethon separada usou somente a cópia isolada da sessão configurada
+e leu até 20 mensagens recentes por fonte. Fonte 1: a mensagem de vídeo 2754,
+sem link Shopee, chegou à decisão real Vision `WAITING_VISION`. Fonte 2: nenhum
+vídeo posterior ao cursor apareceu na janela limitada. Fonte 3 (canal sem tópico
+de origem): a mensagem 12239 foi reservada no clone e ficou `RECEIVED` aguardando
+a autorização de Vision; nenhum resolver comercial foi chamado. Os snapshots de
+checkpoints antes/depois foram idênticos. Não houve download, consulta Shopee ou
+envio Telegram.
 
 Consultas reais Shopee permanecem bloqueadas sem
 `ARMORED_SHOPEE_QUERIES_AUTHORIZED=1`, ID de orçamento, limite entre 1 e 1000,

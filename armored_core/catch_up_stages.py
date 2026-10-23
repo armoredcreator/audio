@@ -46,6 +46,8 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
         raise ValueError(f"stage inválido: {stage}; use um de {', '.join(VALID_STAGES)}")
 
     source = coordinator.source
+    quarantine = getattr(coordinator, "publication_quarantine", None)
+    is_quarantined = quarantine.contains if quarantine is not None else lambda _item_id: False
     if source is None:
         raise RuntimeError("Sync source não configurado")
     source_list = tuple(getattr(source, "sources", ()))
@@ -83,6 +85,19 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
                         raise ValueError(f"unconfigured-source-id:{source_id!r}")
                     if not message_id.isdigit() or int(message_id) <= 0:
                         raise ValueError(f"invalid-telegram-message-id:{message_id!r}")
+                    key_builder = getattr(coordinator.db, "content_id_for", None)
+                    content_id = (
+                        str(key_builder(message_id, source_id))
+                        if callable(key_builder)
+                        else (message_id if source_id in {"telegram", "local"} else f"{source_id}_{message_id}")
+                    )
+                    if is_quarantined(content_id):
+                        errors.append(f"sync:{source_id}:{message_id}:publication-quarantine-cursor-blocked")
+                        log.warning(
+                            "[CATCH-UP][SYNC][QUARANTINE] item=%s; cursor left before unresolved item",
+                            content_id,
+                        )
+                        break
                     ingest = IngestMessage(
                         telegram_message_id=message_id,
                         source_id=source_id,
@@ -135,6 +150,8 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
         # Vision decision instead of stranding the candidate.
         pre_download_recovery = coordinator.db.pre_download_recovery_items()
         for item in _ordered(pre_download_recovery, source):
+            if is_quarantined(str(item.content_id)):
+                continue
             target_state = (
                 State.RECEIVED
                 if str(item.affiliate_url or "").strip()
@@ -150,12 +167,17 @@ async def run_catch_up_stage(coordinator: Any, stage: str) -> dict[str, Any]:
         # but before Pipeline transitions VISION -> RECEIVED.
         interrupted_approved = coordinator.db.vision_approved_interrupted_items()
         for item in _ordered(interrupted_approved, source):
+            if is_quarantined(str(item.content_id)):
+                continue
             coordinator.db.transition(
                 item.content_id,
                 State.RECEIVED,
                 "catch-up-recovered-vision-evidence",
             )
-        candidates = _ordered(coordinator.db.pending_vision_candidates(), source)
+        candidates = [
+            item for item in _ordered(coordinator.db.pending_vision_candidates(), source)
+            if not is_quarantined(str(item.content_id))
+        ]
         for item in candidates:
             try:
                 coordinator.pipeline.run(item.content_id, stop_after_vision=True)

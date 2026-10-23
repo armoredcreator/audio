@@ -17,12 +17,16 @@ from .services import (
 )
 from .storage import Storage
 from .trace import PipelineTrace
+from .publication_quarantine import PublicationQuarantine
 
 
 class Pipeline:
-    def __init__(self, db: Database, storage: Storage, vision: VisionService, studio: StudioService, publisher: Publisher, ia: AIService | None = None):
+    def __init__(self, db: Database, storage: Storage, vision: VisionService, studio: StudioService, publisher: Publisher, ia: AIService | None = None, publication_quarantine: PublicationQuarantine | None = None):
         self.db, self.storage = db, storage
         self.vision, self.studio, self.publisher, self.ia = vision, studio, publisher, ia
+        self.publication_quarantine = publication_quarantine or PublicationQuarantine(
+            storage.database / "publication-quarantine.sqlite3"
+        )
         self.log = logging.getLogger(__name__)
         self.trace = PipelineTrace(getattr(storage, "storage_root", None) or getattr(storage, "root"))
         self._shutdown_checker = lambda: False
@@ -46,6 +50,20 @@ class Pipeline:
         retry_waiting_vision: bool = False,
     ) -> None:
         item = self.db.get(item_id)
+        if self.publication_quarantine.contains(item_id):
+            self.trace.emit(
+                item_id,
+                "PIPELINE",
+                "QUARANTINE_BLOCK",
+                state=item.state.value,
+                reason="unresolved-publication-outcome",
+            )
+            self.log.warning(
+                "[PIPELINE][ITEM %s] blocked by unresolved publication quarantine; state=%s",
+                item.content_id,
+                item.state.value,
+            )
+            return
         self.trace.emit(item_id, "PIPELINE", "START", state=item.state.value, attempt=item.attempts + 1)
         self.log.info("[PIPELINE][ITEM %s] início state=%s", item.content_id, item.state.value)
         if item.state == State.DUPLICATE:

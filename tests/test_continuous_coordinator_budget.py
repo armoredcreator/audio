@@ -14,6 +14,7 @@ from armored_core.catch_up_budget import (
 from armored_core.coordinator import Coordinator
 from armored_core.database import Database
 from armored_core.models import State
+from armored_core.publication_quarantine import PublicationQuarantine
 from armored_core.services import SyncService, VisionResult
 from armored_core.storage import Storage
 
@@ -186,6 +187,72 @@ def test_continuous_coordinator_runs_multiple_batches_then_enters_live_in_clone(
         "SELECT status,item_limit FROM continuous_batches ORDER BY sequence"
     ).fetchall()
     assert [(row[0], row[1]) for row in rows] == [("CLOSED", 2), ("CLOSED", 2)]
+    coordinator.close()
+
+
+def test_continuous_safe_items_run_past_quarantine_already_behind_its_cursor(tmp_path):
+    root = tmp_path / "quarantine-continuous-clone"
+    storage = Storage(root)
+    db = Database(storage.database / "armoredcreator.db")
+    old_original = root / "fixtures" / "ambiguous.mp4"
+    old_original.parent.mkdir(parents=True)
+    old_original.write_bytes(b"ambiguous-original")
+    ambiguous_id = SyncService(db, storage).ingest(
+        old_original, "1", source_id="source-2", topic_id=20,
+        original_url="https://shopee.invalid/ambiguous",
+    )
+    db.set_vision(ambiguous_id, "Historical", "https://affiliate.invalid/historical")
+    db.publication_started(ambiguous_id, "-1004341972306", 1160)
+    quarantine = PublicationQuarantine(storage.database / "publication-quarantine.sqlite3")
+    quarantine.quarantine_unknown(ambiguous_id, db.publication(ambiguous_id), evidence={"item_state": "RECEIVED"})
+    quarantine.close()
+    db.initialize_source_state("source-2")
+    db.set_source_sync_topic_checkpoint("source-2", 20, "old-topic", 1)
+
+    messages = [
+        SimpleNamespace(
+            telegram_message_id=str(index), source_id="source-1", topic_id=10,
+            topic_name="topic", original_url=f"https://shopee.invalid/{index}",
+            source_path=Path(f"safe-fixture-{index}.mp4"), materialize=None,
+        )
+        for index in range(1, 3)
+    ]
+    source = _ContinuousSource(db, messages)
+    hub = _Hub(db)
+    coordinator = Coordinator(
+        db, storage, _Vision(), SimpleNamespace(), hub,
+        source=source, ia=_IA(),
+        continuous_budget=ContinuousOperationBudget(
+            storage.database / "continuous.sqlite3", "safe-continuous-op", 3, 2
+        ),
+    )
+    speech_studio_calls = []
+
+    def speech_studio(item_ids):
+        speech_studio_calls.extend(item_ids)
+        for item_id in item_ids:
+            item = db.get(item_id)
+            output = storage.result(item_id, item.affiliate_url, item.affiliate_name, source_id=item.source_id)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(item.original_path.read_bytes() + b"-safe-v5")
+            db.set_result(item_id, output)
+            db.transition(item_id, State.PUBLISHING, "speech-studio-v5-complete")
+
+    coordinator._run_speech_studio_batch = speech_studio
+    coordinator.run_forever(poll_seconds=0.25, max_cycles=1)
+
+    safe_ids = {
+        db.content_id_for("1", "source-1"),
+        db.content_id_for("2", "source-1"),
+    }
+    assert db.historical_complete()
+    assert coordinator.publication_quarantine.contains(ambiguous_id)
+    assert not coordinator._quarantine_blocks_historical_cursor()
+    assert set(speech_studio_calls) == safe_ids
+    assert all(db.get(item_id).state is State.PUBLISHED for item_id in safe_ids)
+    assert db.get(ambiguous_id).state is State.RECEIVED
+    assert not db.publication(ambiguous_id)["confirmed"]
+    assert coordinator.continuous_budget.used_today == 2
     coordinator.close()
 
 

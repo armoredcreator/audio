@@ -8,6 +8,7 @@ from .models import PublicationCheck, State
 from .pipeline import Pipeline
 from .services import AIService, Publisher, StudioService, VisionService
 from .storage import Storage
+from .publication_quarantine import PublicationQuarantine
 
 
 class Recovery:
@@ -23,9 +24,13 @@ class Recovery:
         ia: AIService | None = None,
         *,
         speech_studio_runner: Callable[[str], None] | None = None,
+        publication_quarantine: PublicationQuarantine | None = None,
     ):
         self.db, self.storage = db, storage
-        self.pipeline = Pipeline(db, storage, vision, studio, publisher, ia)
+        self.publication_quarantine = publication_quarantine or PublicationQuarantine(
+            storage.database / "publication-quarantine.sqlite3"
+        )
+        self.pipeline = Pipeline(db, storage, vision, studio, publisher, ia, self.publication_quarantine)
         self.speech_studio_runner = speech_studio_runner
 
     def _preserve_artifacts(self, item_id: str, paths: list[Path], reason: str) -> None:
@@ -91,6 +96,8 @@ class Recovery:
             self.pipeline.run(item_id)
 
     def reconcile(self, item_id: str) -> None:
+        if self.publication_quarantine.contains(item_id):
+            return
         item = self.db.get(item_id)
         starting_state = item.state
 

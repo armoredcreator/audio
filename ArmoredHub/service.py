@@ -100,7 +100,7 @@ class ArmoredHub:
         try:
             if quarantine.contains(item.content_id):
                 raise PublicationDeferredError(
-                    "historical-publication-outcome-unknown; explicit reconciliation required"
+                    "publication-quarantine: historical outcome UNKNOWN; explicit reconciliation required"
                 )
         finally:
             quarantine.close()
@@ -209,6 +209,7 @@ class ArmoredHub:
     def _validate_publication_input(self, item: Item) -> None:
         if self.db is None:
             raise RuntimeError("ArmoredHub exige Database para publicação idempotente")
+        self._assert_not_quarantined(item)
         current = self.db.get(item.content_id)
         if current != item:
             raise RuntimeError("Hub received a stale item; reload SQLite before publication")
@@ -303,6 +304,7 @@ class ArmoredHub:
         item = self.db.get(str(canonical_content_id))
         if item is None or item.state != State.PUBLISHED:
             raise ValueError("versioned-republication-requires-published-canonical-item")
+        self._assert_not_quarantined(item)
         publication_text = self._validated_caption(
             item,
             caption,
@@ -357,6 +359,7 @@ class ArmoredHub:
         item = self.db.get(str(record["canonical_content_id"]))
         if item is None:
             raise RuntimeError("versioned-republication-canonical-item-missing")
+        self._assert_not_quarantined(item)
         publication_text = self._publication_text(item, caption_override=record["caption"])
         base_url, file_url = self._require_local_bot_api()
         token = os.getenv("ARMORED_CREATOR_BOT_TOKEN")
@@ -431,7 +434,10 @@ class ArmoredHub:
         if sha256_file(output).lower() != str(record["output_sha256"]).lower():
             raise ValueError("versioned-republication-output-hash-mismatch")
         item = self.db.get(str(record["canonical_content_id"]))
-        if item is None or item.state != State.PUBLISHED or not self.db.has_speech_studio_v5_completion(item.content_id):
+        if item is None:
+            raise RuntimeError("versioned-republication-canonical-item-not-ready")
+        self._assert_not_quarantined(item)
+        if item.state != State.PUBLISHED or not self.db.has_speech_studio_v5_completion(item.content_id):
             raise RuntimeError("versioned-republication-canonical-item-not-ready")
         canonical_row = self.db.conn.execute(
             "SELECT duplicate_of_content_id FROM items WHERE content_id=?",
