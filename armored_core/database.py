@@ -255,6 +255,14 @@ class Database:
             started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             finished_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS caption_recovery (
+            content_id TEXT PRIMARY KEY,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL CHECK(status IN ('STARTED','SUCCEEDED','BLOCKED')),
+            reason TEXT,
+            previous_caption TEXT,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
         CREATE INDEX IF NOT EXISTS idx_caption_candidates_content
             ON caption_candidates(content_id, created_at);
         CREATE TABLE IF NOT EXISTS runtime_locks (
@@ -1445,6 +1453,69 @@ class Database:
         )
         self.conn.commit()
 
+    def selected_valid_caption(self, item_id: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT caption FROM caption_candidates WHERE content_id=? "
+            "AND policy_valid=1 AND selected=1 ORDER BY id DESC LIMIT 1",
+            (str(item_id),),
+        ).fetchone()
+        return str(row[0]) if row and str(row[0] or "").strip() else None
+
+    def caption_recovery(self, item_id: str):
+        return self.conn.execute(
+            "SELECT * FROM caption_recovery WHERE content_id=?", (str(item_id),)
+        ).fetchone()
+
+    def caption_recovery_blocked(self, item_id: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM caption_recovery WHERE content_id=? AND status='BLOCKED'",
+            (str(item_id),),
+        ).fetchone()
+        return row is not None
+
+    def claim_caption_recovery(self, item_id: str, *, previous_caption: str | None = None) -> str:
+        """Claim the single durable IA recovery call for a missing/invalid caption."""
+        content_id = str(item_id)
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.conn.execute(
+                "SELECT attempts,status FROM caption_recovery WHERE content_id=?",
+                (content_id,),
+            ).fetchone()
+            if row is not None:
+                status = str(row["status"])
+                if status in {"SUCCEEDED", "BLOCKED"}:
+                    self.conn.commit()
+                    return status
+                self.conn.execute(
+                    "UPDATE caption_recovery SET status='BLOCKED',reason=?,updated_at=CURRENT_TIMESTAMP "
+                    "WHERE content_id=?",
+                    ("caption-recovery-interrupted; operator-review-required", content_id),
+                )
+                self.conn.commit()
+                return "BLOCKED"
+            self.conn.execute(
+                "INSERT INTO caption_recovery(content_id,attempts,status,reason,previous_caption) "
+                "VALUES(?,1,'STARTED',NULL,?)",
+                (content_id, previous_caption),
+            )
+            self.conn.commit()
+            return "STARTED"
+        except BaseException:
+            self.conn.rollback()
+            raise
+
+    def finish_caption_recovery(self, item_id: str, *, status: str, reason: str | None = None) -> None:
+        if status not in {"SUCCEEDED", "BLOCKED"}:
+            raise ValueError("invalid-caption-recovery-terminal-status")
+        self.conn.execute(
+            "INSERT INTO caption_recovery(content_id,attempts,status,reason) VALUES(?,0,?,?) "
+            "ON CONFLICT(content_id) DO UPDATE SET status=excluded.status,reason=excluded.reason,"
+            "updated_at=CURRENT_TIMESTAMP",
+            (str(item_id), status, reason),
+        )
+        self.conn.commit()
+
     def caption_candidates(self, item_id: str, batch_id: str | None = None):
         if batch_id is None:
             return self.conn.execute(
@@ -1591,6 +1662,26 @@ class Database:
             "verification_status='CONFIRMED', verified_at=CURRENT_TIMESTAMP, "
             "updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
             (str(message_id), str(item_id)),
+        )
+        self.conn.commit()
+
+    def publication_absent_confirmed(self, item_id: str) -> None:
+        """Persist a trusted, completed absence check without deleting its receipt."""
+        content_id = str(item_id)
+        item = self.get(content_id)
+        row = self.publication(content_id)
+        if row is None:
+            raise RuntimeError("publication-absence-requires-existing-receipt")
+        if bool(row["confirmed"]) or str(row["verification_status"] or "") == "CONFIRMED":
+            raise RuntimeError("confirmed-publication-cannot-be-marked-absent")
+        self.conn.execute(
+            "UPDATE publications SET verification_status='ABSENT_CONFIRMED',confirmed=0,"
+            "verified_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
+            (content_id,),
+        )
+        self.conn.execute(
+            "INSERT INTO state_events(content_id,old_state,new_state,reason) VALUES(?,?,?,?)",
+            (content_id, item.state.value, item.state.value, "publication-absence-confirmed-by-verifier"),
         )
         self.conn.commit()
 

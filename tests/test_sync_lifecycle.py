@@ -142,6 +142,23 @@ class Studio:
         return StudioResult(None, result)
 
 
+def _caption_ia():
+    class IA:
+        def generate_caption_with_evidence(self, context):
+            from ArmoredIA.caption.generator import CaptionGenerator
+
+            class Provider:
+                def generate_candidates(self, _task, _context, _limit):
+                    return ["Cantinho charmoso 🧡 #casa"]
+
+            return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
+
+        def generate_caption(self, context):
+            return self.generate_caption_with_evidence(context).caption
+
+    return IA()
+
+
 class Publisher:
     def __init__(self):
         self.published = []
@@ -605,7 +622,7 @@ class SyncLifecycleTests(unittest.TestCase):
                 SyncMessage("101", source_id="local", source_path=root / "101.mp4",
                             original_url="https://shopee.com.br/test-fixture/fixture-14"),
             ]
-            coordinator = Coordinator(db, storage, Vision(), Studio(storage), Publisher(), source)
+            coordinator = Coordinator(db, storage, Vision(), Studio(storage), Publisher(), source, ia=_caption_ia())
             _install_coordinator_speech_studio_test_seam(coordinator)
 
             processed = coordinator.run_catch_up()
@@ -683,7 +700,7 @@ class SyncLifecycleTests(unittest.TestCase):
 
             source = LiveSource()
             publisher = Publisher()
-            coordinator = Coordinator(db, storage, Vision(), Studio(storage), publisher, source)
+            coordinator = Coordinator(db, storage, Vision(), Studio(storage), publisher, source, ia=_caption_ia())
             _install_coordinator_speech_studio_test_seam(coordinator)
 
             try:
@@ -716,7 +733,7 @@ class SyncLifecycleTests(unittest.TestCase):
             )]
             publisher = Publisher()
             first = Coordinator(
-                db, storage, FailOnceVision(), Studio(storage), publisher, source
+                db, storage, FailOnceVision(), Studio(storage), publisher, source, ia=_caption_ia()
             )
             _install_coordinator_speech_studio_test_seam(first)
 
@@ -739,7 +756,7 @@ class SyncLifecycleTests(unittest.TestCase):
             )]
             second = Coordinator(
                 Database(storage.database / "db.sqlite"), storage,
-                Vision(), Studio(storage), publisher, restarted_source,
+                Vision(), Studio(storage), publisher, restarted_source, ia=_caption_ia(),
             )
             _install_coordinator_speech_studio_test_seam(second)
             retried = second.run_live_once()
@@ -776,7 +793,7 @@ class SyncLifecycleTests(unittest.TestCase):
                             original_url="https://shopee.com.br/test-fixture/fixture-18"),
             ]
             publisher = Publisher()
-            coordinator = Coordinator(db, storage, Vision(), Studio(storage), publisher, source)
+            coordinator = Coordinator(db, storage, Vision(), Studio(storage), publisher, source, ia=_caption_ia())
             _install_coordinator_speech_studio_test_seam(coordinator)
 
             coordinator.run_forever(max_cycles=1, poll_seconds=0)
@@ -891,6 +908,7 @@ class SyncLifecycleTests(unittest.TestCase):
                 Studio(storage),
                 Publisher(),
                 source,
+                ia=_caption_ia(),
             )
             previous = os.environ.get("ARMORED_SYNC_ERROR_BACKOFF")
             os.environ["ARMORED_SYNC_ERROR_BACKOFF"] = "1"
@@ -932,7 +950,8 @@ class SyncLifecycleTests(unittest.TestCase):
             )]
             publisher = Publisher()
             coordinator = Coordinator(
-                db, storage, InterruptingVision(), InterruptingStudio(), publisher, source
+                db, storage, InterruptingVision(), InterruptingStudio(), publisher, source,
+                ia=_caption_ia(),
             )
             _install_coordinator_speech_studio_test_seam(coordinator)
             coordinator.pipeline.set_shutdown_checker(lambda: True)

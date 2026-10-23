@@ -36,6 +36,20 @@ class Publisher:
         self.ids.add(item.item_id)
         return PublicationResult(True, str(self.count))
 
+
+class CaptionIA:
+    def generate_caption_with_evidence(self, context):
+        from ArmoredIA.caption.generator import CaptionGenerator
+
+        class Provider:
+            def generate_candidates(self, _task, _context, _limit):
+                return ["Cantinho charmoso 🧡 #casa"]
+
+        return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
+
+    def generate_caption(self, context):
+        return self.generate_caption_with_evidence(context).caption
+
 class PipelineTests(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
@@ -46,13 +60,14 @@ class PipelineTests(unittest.TestCase):
         src.write_bytes(b"VIDEO")
         self.item = SyncService(self.db, self.storage).ingest(src, "msg-1")
         self.pub = Publisher()
+        self.ia = CaptionIA()
 
     def tearDown(self):
         self.db.close()
         self.td.cleanup()
 
     def test_happy_path_keeps_original_and_published_result(self):
-        Pipeline(self.db, self.storage, Vision(), Studio(self.storage), self.pub).run(self.item)
+        Pipeline(self.db, self.storage, Vision(), Studio(self.storage), self.pub, self.ia).run(self.item)
         row = self.db.get(self.item)
         self.assertEqual(row.state, State.PUBLISHED)
         self.assertEqual(row.original_path.read_bytes(), b"VIDEO")
@@ -78,7 +93,7 @@ class PipelineTests(unittest.TestCase):
                 return PublicationResult(True, "telegram-456")
 
         pub = IdempotentPublisher(self.db)
-        p = Pipeline(self.db, self.storage, Vision(), Studio(self.storage), pub)
+        p = Pipeline(self.db, self.storage, Vision(), Studio(self.storage), pub, self.ia)
         p.run(self.item)
 
         self.assertEqual(pub.calls, 1)
@@ -89,10 +104,19 @@ class PipelineTests(unittest.TestCase):
         class IA:
             def __init__(self):
                 self.calls = 0
-            def generate_caption(self, context):
+            def generate_caption_with_evidence(self, context):
                 self.calls += 1
                 assert context["productName"] == "produto-final"
-                return "Olha esse charme ✨\n#casa"
+                from ArmoredIA.caption.generator import CaptionGenerator
+
+                class Provider:
+                    def generate_candidates(self, _task, _context, _limit):
+                        return ["Olha esse charme 🧡\n#casa"]
+
+                return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
+
+            def generate_caption(self, context):
+                return self.generate_caption_with_evidence(context).caption
 
         ia = IA()
         import os
@@ -121,7 +145,7 @@ class PipelineTests(unittest.TestCase):
             p.run(self.item)
             row = self.db.get(self.item)
             self.assertEqual(row.state, State.PUBLISHED)
-            self.assertEqual(row.publication_caption, "Olha esse charme ✨\n#casa")
+            self.assertEqual(row.publication_caption, "Olha esse 🧡 charme\n#casa")
             self.assertEqual(ia.calls, 1)
         finally:
             if old_enabled is None:
@@ -140,7 +164,7 @@ class PipelineTests(unittest.TestCase):
                 raise PublicationUnknownError("Telegram publication outcome is UNKNOWN")
 
         pub = UnknownPublisher()
-        p = Pipeline(self.db, self.storage, Vision(), Studio(self.storage), pub)
+        p = Pipeline(self.db, self.storage, Vision(), Studio(self.storage), pub, self.ia)
 
         p.run(self.item)
 
@@ -153,7 +177,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(publication["verification_status"], "PENDING")
 
     def test_second_run_does_not_republish(self):
-        p = Pipeline(self.db, self.storage, Vision(), Studio(self.storage), self.pub)
+        p = Pipeline(self.db, self.storage, Vision(), Studio(self.storage), self.pub, self.ia)
         p.run(self.item)
         p.run(self.item)
         self.assertEqual(self.pub.count, 1)
@@ -173,7 +197,7 @@ class PipelineTests(unittest.TestCase):
         self.db.conn.commit()
         self.db.mark_vision_waiting(self.item, "old unresolved result")
         vision = CountingVision()
-        pipeline = Pipeline(self.db, self.storage, vision, Studio(self.storage), self.pub)
+        pipeline = Pipeline(self.db, self.storage, vision, Studio(self.storage), self.pub, self.ia)
 
         # A normal run must preserve WAITING_VISION and not call Vision.
         pipeline.run(self.item, stop_after_vision=True)
@@ -203,7 +227,7 @@ class PipelineTests(unittest.TestCase):
 
         self.db.mark_vision_waiting(self.item, "missing source URL")
         vision = CountingVision()
-        pipeline = Pipeline(self.db, self.storage, vision, Studio(self.storage), self.pub)
+        pipeline = Pipeline(self.db, self.storage, vision, Studio(self.storage), self.pub, self.ia)
         pipeline.run(self.item, stop_after_vision=True, retry_waiting_vision=True)
         self.assertEqual(self.db.get(self.item).state, State.WAITING_VISION)
         self.assertEqual(vision.calls, 0)

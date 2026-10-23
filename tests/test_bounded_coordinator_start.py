@@ -13,6 +13,7 @@ from armored_core.storage import Storage
 from ArmoredSync.service import MultiTelegramSource, TelegramSource
 from armored_core.routing import HubConfig, RouteConfig, SourceConfig
 from ArmoredHub.service import ArmoredHub
+from ArmoredIA.caption.generator import CaptionGenerator
 
 
 class _BoundedSource:
@@ -82,9 +83,16 @@ class _IA:
     def __init__(self, events):
         self.events = events
 
-    def generate_caption(self, _context):
+    def generate_caption_with_evidence(self, context):
         self.events.append("ia")
-        return "Belo produto 🧡 #casa"
+        class Provider:
+            def generate_candidates(self, _task, _context, _limit):
+                return ["Belo produto 🧡 #casa"]
+
+        return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
+
+    def generate_caption(self, context):
+        return self.generate_caption_with_evidence(context).caption
 
 
 class _Publisher:
@@ -180,7 +188,10 @@ def test_real_coordinator_limits_persisted_and_new_work_and_resumes_without_dupl
     new_id = coordinator.db.content_id_for("100", "source-1")
     assert coordinator.db.get(new_id).state is State.PUBLISHED
     assert "vision:100" in events
-    assert events.count("ia") == 1
+    # One generated caption for the fresh item and one bounded repair for the
+    # already-approved historical item whose caption was missing.
+    assert events.count("ia") == 2
+    assert coordinator.db.get(old_id).publication_caption == "Belo 🧡 produto\n#casa"
     assert all(f"{stage}:100" in events for stage in ("speech", "studio", "hub"))
     assert all(f"{stage}:1" in events for stage in ("speech", "studio", "hub"))
     assert len([event for event in events if event.startswith("speech:")]) == 2

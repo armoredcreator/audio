@@ -65,6 +65,20 @@ class Publisher:
         return PublicationResult(True, str(self.count))
 
 
+class CaptionIA:
+    def generate_caption_with_evidence(self, context):
+        from ArmoredIA.caption.generator import CaptionGenerator
+
+        class Provider:
+            def generate_candidates(self, _task, _context, _limit):
+                return ["Olha esse charme 🧡\n#casa"]
+
+        return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
+
+    def generate_caption(self, context):
+        return self.generate_caption_with_evidence(context).caption
+
+
 class RecoveryTests(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.TemporaryDirectory()
@@ -75,6 +89,7 @@ class RecoveryTests(unittest.TestCase):
         src.write_bytes(b"VIDEO")
         self.item = SyncService(self.db, self.storage).ingest(src, "msg")
         self.pub = Publisher()
+        self.ia = CaptionIA()
 
     def tearDown(self):
         self.db.close()
@@ -153,7 +168,16 @@ class RecoveryTests(unittest.TestCase):
                 if self.calls == 1:
                     raise RuntimeError("simulated-ia-crash")
                 self.context_seen = dict(product_context)
-                return "Oferta boa 😊"
+                from ArmoredIA.caption.generator import CaptionGenerator
+
+                class Provider:
+                    def generate_candidates(self, _task, _context, _limit):
+                        return ["Olha esse charme 🧡\n#casa"]
+
+                return CaptionGenerator(provider=Provider()).generate_with_evidence(product_context)
+
+            def generate_caption_with_evidence(self, product_context):
+                return self.generate_caption(product_context)
 
         vision = CountingVision()
         ia = FailOnceIA()
@@ -199,7 +223,7 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(vision.calls, 1)
             self.assertEqual(ia.calls, 2)
             self.assertEqual(ia.context_seen, vision.context)
-            self.assertEqual(recovered.publication_caption, "Oferta boa 😊")
+            self.assertEqual(recovered.publication_caption, "Olha esse 🧡 charme\n#casa")
             self.assertEqual(publisher.count, 1)
         finally:
             if previous_ia is None:
@@ -213,12 +237,12 @@ class RecoveryTests(unittest.TestCase):
 
     def test_recovery_retries_waiting_vision(self):
         vision = VisionWaitThenResolve()
-        pipeline = Pipeline(self.db, self.storage, vision, Studio(self.storage), self.pub)
+        pipeline = Pipeline(self.db, self.storage, vision, Studio(self.storage), self.pub, self.ia)
 
         pipeline.run(self.item)
         self.assertEqual(self.db.get(self.item).state, State.WAITING_VISION)
 
-        Recovery(self.db, self.storage, vision, Studio(self.storage), self.pub).reconcile(self.item)
+        Recovery(self.db, self.storage, vision, Studio(self.storage), self.pub, self.ia).reconcile(self.item)
 
         row = self.db.get(self.item)
         self.assertEqual(row.state, State.PUBLISHED)
@@ -228,7 +252,7 @@ class RecoveryTests(unittest.TestCase):
     def test_rebuilds_after_studio_crash_from_original_not_partial_artifacts(self):
         studio = CrashStudio(self.storage)
         with self.assertRaises(RuntimeError):
-            Pipeline(self.db, self.storage, Vision(), studio, self.pub).run(self.item)
+            Pipeline(self.db, self.storage, Vision(), studio, self.pub, self.ia).run(self.item)
 
         row = self.db.get(self.item)
         self.assertEqual(row.state, State.RECOVERY)
@@ -243,7 +267,7 @@ class RecoveryTests(unittest.TestCase):
 
         clean_studio = Studio(self.storage)
         Recovery(
-            self.db, self.storage, Vision(), clean_studio, self.pub
+            self.db, self.storage, Vision(), clean_studio, self.pub, self.ia
         ).reconcile(self.item)
 
         row = self.db.get(self.item)
@@ -259,24 +283,24 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(self.pub.count, 1)
 
     def test_legacy_failed_item_is_reopened_into_recovery(self):
-        pipeline = Pipeline(self.db, self.storage, Vision(), Studio(self.storage), self.pub)
+        pipeline = Pipeline(self.db, self.storage, Vision(), Studio(self.storage), self.pub, self.ia)
         pipeline.run(self.item)
         self.db.fail(self.item, "legacy failure before universal recovery")
         self.assertEqual(self.db.get(self.item).state, State.FAILED)
 
-        Recovery(self.db, self.storage, Vision(), Studio(self.storage), self.pub).reconcile(self.item)
+        Recovery(self.db, self.storage, Vision(), Studio(self.storage), self.pub, self.ia).reconcile(self.item)
 
         self.assertEqual(self.db.get(self.item).state, State.PUBLISHED)
         self.assertEqual(self.pub.count, 1)
 
     def test_recovery_rebuilds_working_when_result_missing(self):
-        Pipeline(self.db, self.storage, Vision(), Studio(self.storage), self.pub).run(self.item)
+        Pipeline(self.db, self.storage, Vision(), Studio(self.storage), self.pub, self.ia).run(self.item)
         row = self.db.get(self.item)
         self.db.transition(self.item, State.STUDIO, "test-result-missing")
         result = self.storage.result(self.item, row.affiliate_name or "recover-final")
         result.unlink(missing_ok=True)
         self.db.set_result(self.item, result)
-        Recovery(self.db, self.storage, Vision(), Studio(self.storage), self.pub).reconcile(self.item)
+        Recovery(self.db, self.storage, Vision(), Studio(self.storage), self.pub, self.ia).reconcile(self.item)
         self.assertEqual(self.db.get(self.item).state, State.PUBLISHED)
         self.assertEqual(self.pub.count, 1)
 
@@ -284,7 +308,7 @@ class RecoveryTests(unittest.TestCase):
         vision = Vision()
         studio = Studio(self.storage)
         publisher = Publisher()
-        pipeline = Pipeline(self.db, self.storage, vision, studio, publisher)
+        pipeline = Pipeline(self.db, self.storage, vision, studio, publisher, self.ia)
 
         pipeline.run(self.item)
         row = self.db.get(self.item)
@@ -308,7 +332,7 @@ class RecoveryTests(unittest.TestCase):
         publisher.always_absent = True
         studio.calls = 0
         Recovery(
-            self.db, self.storage, vision, studio, publisher
+            self.db, self.storage, vision, studio, publisher, self.ia
         ).reconcile(self.item)
 
         row = self.db.get(self.item)
@@ -330,7 +354,7 @@ class RecoveryTests(unittest.TestCase):
         vision = Vision()
         studio = Studio(self.storage)
 
-        pipeline = Pipeline(self.db, self.storage, vision, studio, publisher)
+        pipeline = Pipeline(self.db, self.storage, vision, studio, publisher, self.ia)
         pipeline.run(self.item)
         row = self.db.get(self.item)
         self.assertEqual(row.state, State.RECOVERY)
@@ -338,14 +362,14 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(publisher.count, 0)
 
         with self.assertRaisesRegex(RuntimeError, "publication-check-uncertain-recovery-stopped"):
-            Recovery(self.db, self.storage, vision, studio, publisher).reconcile(self.item)
+            Recovery(self.db, self.storage, vision, studio, publisher, self.ia).reconcile(self.item)
 
         self.assertEqual(self.db.get(self.item).state, State.RECOVERY)
         self.assertEqual(publisher.count, 0)
 
     def test_cleanup_is_idempotent(self):
-        Pipeline(self.db, self.storage, Vision(), Studio(self.storage), self.pub).run(self.item)
-        Recovery(self.db, self.storage, Vision(), Studio(self.storage), self.pub).reconcile(self.item)
+        Pipeline(self.db, self.storage, Vision(), Studio(self.storage), self.pub, self.ia).run(self.item)
+        Recovery(self.db, self.storage, Vision(), Studio(self.storage), self.pub, self.ia).reconcile(self.item)
         self.assertTrue(self.db.get(self.item).original_path.exists())
 
 

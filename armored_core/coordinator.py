@@ -2522,6 +2522,9 @@ class Coordinator:
                 item_id,
             )
             return
+        if self.db.caption_recovery_blocked(item_id):
+            self.log.debug("[COORDINATOR][CAPTION-BLOCKED] item=%s remains durably blocked", item_id)
+            return
         item = self.db.get(item_id)
 
         if item.state in {State.PUBLISHED, State.WAITING_VISION, State.DUPLICATE, State.STUDIO_COMPLETE}:
@@ -2631,6 +2634,13 @@ class Coordinator:
                 self.log.warning(
                     "[COORDINATOR][RECOVERY][QUARANTINE] item=%s remains fenced; "
                     "ambiguous historical publication is not retried",
+                    item_id,
+                )
+                continue
+            if self.db.caption_recovery_blocked(item_id):
+                self.log.debug(
+                    "[COORDINATOR][RECOVERY][CAPTION-BLOCKED] item=%s remains fenced; "
+                    "manual review required",
                     item_id,
                 )
                 continue

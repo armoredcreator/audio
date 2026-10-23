@@ -126,8 +126,17 @@ class _Vision:
 
 
 class _IA:
-    def generate_caption(self, _context):
-        return "Belo item 🧡 #casa"
+    def generate_caption_with_evidence(self, context):
+        from ArmoredIA.caption.generator import CaptionGenerator
+
+        class Provider:
+            def generate_candidates(self, _task, _context, _limit):
+                return ["Belo item 🧡 #casa"]
+
+        return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
+
+    def generate_caption(self, context):
+        return self.generate_caption_with_evidence(context).caption
 
 
 class _Hub:

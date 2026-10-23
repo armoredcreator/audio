@@ -1,0 +1,23 @@
+{
+  "result": "PASS",
+  "execution": "clone-coordinator-real-armored-ia-real-armored-hub-dry-run",
+  "provider": {
+    "provider": "gemini",
+    "model": "gemini-3.1-flash-lite"
+  },
+  "content_id": "-1003788989075_295",
+  "initial_state": "PUBLISHING",
+  "final_state": "PUBLISHING",
+  "caption_persisted": true,
+  "policy_valid": true,
+  "ia_generation_attempt_delta": 1,
+  "speech_studio_completion_events_before_after": [1, 1],
+  "original_sha256": "ef42a6d9988e8c0afbd98b20a4cb26d1cbb31fe8de7a4b34185b915b8766db7a",
+  "render_v5_sha256": "7fc70ef2331b7cba8e7d1ab415382d4c01282e8cb3fa6c8f9311eee1227c5fe9",
+  "telegram_receipt_created": false,
+  "persisted_budget_unchanged": true,
+  "restart_repeated_ia": false,
+  "restart_repeated_speech_or_studio": false,
+  "operational_database_modified": false,
+  "shopee_queried": false
+}

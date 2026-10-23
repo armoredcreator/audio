@@ -27,9 +27,18 @@ class _IA:
     def __init__(self, events):
         self.events = events
 
-    def generate_caption(self, _context):
+    def generate_caption_with_evidence(self, context):
         self.events.append("ia")
-        return "Produto de teste 🧡 #casa"
+        from ArmoredIA.caption.generator import CaptionGenerator
+
+        class Provider:
+            def generate_candidates(self, _task, _context, _limit):
+                return ["Cantinho charmoso 🧡 #casa"]
+
+        return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
+
+    def generate_caption(self, context):
+        return self.generate_caption_with_evidence(context).caption
 
 
 class _LegacyStudioMustNotRun:
@@ -150,7 +159,7 @@ def test_coordinator_routes_normal_execution_through_speech_v5_before_studio_and
     current = db.get(item_id)
     assert current.state is State.PUBLISHED
     assert current.cleanup_completed is True
-    assert current.publication_caption == "Produto de teste 🧡 #casa"
+    assert current.publication_caption == "Cantinho 🧡 charmoso\n#casa"
     assert events.index("ia") < events.index("speech-analyze") < events.index("speech-prepare")
     assert events.index("speech-prepare") < events.index("studio") < events.index("hub")
     assert db.last_state_event(item_id)["new_state"] == State.PUBLISHED.value
@@ -281,10 +290,19 @@ def test_catch_up_completes_ia_for_entire_batch_before_speech_studio_and_hub(
             db.complete_historical_sync()
 
     class TraceIA:
-        def generate_caption(self, context):
+        def generate_caption_with_evidence(self, context):
             name = str((context or {}).get("productName", "unknown"))
             events.append(f"ia:{name}")
-            return f"{name} bonito 🧡 #casa"
+            from ArmoredIA.caption.generator import CaptionGenerator
+
+            class Provider:
+                def generate_candidates(self, _task, _context, _limit):
+                    return ["Cantinho charmoso 🧡 #casa"]
+
+            return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
+
+        def generate_caption(self, context):
+            return self.generate_caption_with_evidence(context).caption
 
     class TraceSpeech:
         intelligence = SimpleNamespace(preflight=lambda: events.append("speech-preflight"))

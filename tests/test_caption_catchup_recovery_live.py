@@ -94,13 +94,36 @@ class FailingFirstIA:
     def __init__(self):
         self.calls = {}
 
-    def generate_caption(self, context):
+    def generate_caption_with_evidence(self, context):
         item_id = context["productName"].split()[-1]
         self.calls[item_id] = self.calls.get(item_id, 0) + 1
         if item_id == "100" and self.calls[item_id] == 1:
             from ArmoredIA.caption.generator import CaptionGenerationError
             raise CaptionGenerationError("Nenhuma das 10 candidata(s) passou pela Policy")
-        return f"Olha esse charme ✨\n#item{item_id}"
+        from ArmoredIA.caption.generator import CaptionGenerator
+
+        class Provider:
+            def generate_candidates(self, _task, _context, _limit):
+                return [f"Olha esse charme 🧡\n#item{item_id}"]
+
+        return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
+
+    def generate_caption(self, context):
+        return self.generate_caption_with_evidence(context).caption
+
+
+class ValidCaptionIA:
+    def generate_caption_with_evidence(self, context):
+        from ArmoredIA.caption.generator import CaptionGenerator
+
+        class Provider:
+            def generate_candidates(self, _task, _context, _limit):
+                return ["Olha esse charme 🧡\n#casa"]
+
+        return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
+
+    def generate_caption(self, context):
+        return self.generate_caption_with_evidence(context).caption
 
 
 class DeterministicStudio:
@@ -212,7 +235,7 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
                 root,
                 SimpleNamespace(
                     vision=WaitingFirstVision(),
-                    ia=None,
+                    ia=ValidCaptionIA(),
                     studio=DeterministicStudio(),
                     publisher=publisher,
                     source=source,

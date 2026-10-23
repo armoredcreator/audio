@@ -98,6 +98,8 @@ class Recovery:
     def reconcile(self, item_id: str) -> None:
         if self.publication_quarantine.contains(item_id):
             return
+        if self.db.caption_recovery_blocked(item_id):
+            return
         item = self.db.get(item_id)
         starting_state = item.state
 
@@ -184,6 +186,8 @@ class Recovery:
                 self.db.transition(item_id, State.PUBLISHED, "publisher-confirms-existing")
                 self.pipeline.cleanup(item_id)
                 return
+
+            self.db.publication_absent_confirmed(item_id)
 
             # ABSENT means there is no Telegram evidence of a completed
             # publication. Treat the whole derived processing chain as invalid
