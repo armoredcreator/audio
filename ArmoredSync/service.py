@@ -12,6 +12,7 @@ from armored_core.database import Database
 from armored_core.services import IngestMessage, SyncService
 from armored_core.shopee_urls import is_supported_shopee_url
 from armored_core.storage import Storage
+from armored_core.telegram_session import telegram_session_basename
 
 
 @dataclass(frozen=True)
@@ -59,7 +60,9 @@ class TelegramReader:
         except ImportError as exc:
             raise RuntimeError("Dependência Telethon ausente; instale as dependências do Sync.") from exc
 
-        self._session = Path(root) / "credentials" / "telegram" / "session" / "armoredsync"
+        self._session = (
+            Path(root) / "credentials" / "telegram" / "session" / telegram_session_basename()
+        )
         self._api_id = api_id
         self._api_hash = api_hash
         self._TelegramClient = TelegramClient

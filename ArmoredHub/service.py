@@ -11,6 +11,7 @@ from armored_core.database import Database
 from armored_core.models import Item, PublicationCheck, State
 from armored_core.integrity import sha256_file
 from armored_core.services import PublicationResult, PublicationUnknownError
+from armored_core.telegram_session import telegram_session_basename
 
 
 class ArmoredHub:
@@ -222,7 +223,9 @@ class ArmoredHub:
         return self.publish(item)
 
     def _telegram_session_path(self) -> Path:
-        return self.root / "credentials" / "telegram" / "session" / "armoredsync"
+        return (
+            self.root / "credentials" / "telegram" / "session" / telegram_session_basename()
+        )
 
     def _resolve_destination_chat_id(self, topic_id: str | int | None = None) -> str | None:
         configured = (os.getenv("ARMORED_CREATOR_GROUP_ID") or "").strip()
