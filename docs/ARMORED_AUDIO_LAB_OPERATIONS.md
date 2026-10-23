@@ -55,13 +55,20 @@ ocupada por um serviço que falhe `getMe`, encerra o fluxo sem abrir duplicata.
 O Bot API operacional existente foi autenticado e reutilizado sem iniciar outro
 processo. Os modos sem `--run` foram verificados e não iniciaram o Coordinator.
 
+Uma checagem adicional construiu o Coordinator com `ARMORED_REAL_TELEGRAM=1`
+e cópias consistentes tanto do SQLite quanto da sessão Telethon configurada.
+A sessão clone estava autorizada e o reader leu metadados das três fontes.
+Nenhuma mensagem foi lida, nenhum arquivo foi baixado e nenhum checkpoint foi
+alterado. Isso comprova a conexão/autorização e a resolução das entidades, mas
+não substitui um ensaio de ingestão ao vivo dentro do Coordinator.
+
 **O START operacional continua deliberadamente pendente.** Não executamos
 `START_ALL.bat --run`, `--publish`, envio real ou consulta comercial. Uma falha
 de validação de caminho no clone após Speech/Studio validou a retomada pelo
 Coordinator: o novo processo reutilizou o RVC e o render já concluídos, seguiu
 ao Hub simulado e não repetiu a conversão nem o render. A descoberta conectada
-ao Telegram real não fez parte desses testes de Coordinator: o CATCH-UP usou
-uma fonte controlada, sem alterar a sessão ou os checkpoints operacionais.
+de mensagens ao vivo no Coordinator não fez parte desses testes: o CATCH-UP
+usou uma fonte controlada, sem alterar a sessão ou os checkpoints operacionais.
 
 Esta seção atualiza a fotografia histórica das seções seguintes. O candidato
 parte de `31a14614dc026ec846d3e64831a36e3971ea688a`; testes devem permanecer
