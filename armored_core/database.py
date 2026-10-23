@@ -7,6 +7,127 @@ from pathlib import Path
 from .models import Item, State
 from .integrity import sha256_file
 
+
+def _process_started_at_utc(pid: int):
+    """Return a process creation timestamp where the OS exposes one."""
+    import os
+    import sys
+    from datetime import datetime, timezone
+
+    if os.name == "nt":
+        import ctypes
+        import shutil
+        import subprocess
+        from ctypes import wintypes
+
+        class FILETIME(ctypes.Structure):
+            _fields_ = [("dwLowDateTime", wintypes.DWORD), ("dwHighDateTime", wintypes.DWORD)]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetProcessTimes.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(FILETIME),
+            ctypes.POINTER(FILETIME),
+            ctypes.POINTER(FILETIME),
+            ctypes.POINTER(FILETIME),
+        ]
+        kernel32.GetProcessTimes.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        handle = kernel32.OpenProcess(0x1000, False, int(pid))
+        if not handle:
+            shell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
+            if not shell:
+                return None
+            command = (
+                f"$p=Get-CimInstance Win32_Process -Filter 'ProcessId = {int(pid)}'; "
+                "if ($p) { $p.CreationDate.ToUniversalTime().ToString('o') }"
+            )
+            try:
+                result = subprocess.run(
+                    [shell, "-NoProfile", "-NonInteractive", "-Command", command],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=5,
+                )
+                raw = result.stdout.strip()
+                if result.returncode == 0 and raw:
+                    value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+            except (OSError, subprocess.SubprocessError, ValueError):
+                return None
+            return None
+        try:
+            created, exited, kernel, user = FILETIME(), FILETIME(), FILETIME(), FILETIME()
+            if kernel32.GetProcessTimes(
+                handle,
+                ctypes.byref(created),
+                ctypes.byref(exited),
+                ctypes.byref(kernel),
+                ctypes.byref(user),
+            ):
+                ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
+                timestamp = ticks / 10_000_000 - 11_644_473_600
+                return datetime.fromtimestamp(timestamp, timezone.utc)
+        finally:
+            kernel32.CloseHandle(handle)
+
+    if sys.platform.startswith("linux"):
+        try:
+            stat = Path(f"/proc/{int(pid)}/stat").read_text(encoding="ascii")
+            start_ticks = int(stat.rsplit(")", 1)[1].split()[19])
+            boot_time = next(
+                int(line.split()[1])
+                for line in Path("/proc/stat").read_text(encoding="ascii").splitlines()
+                if line.startswith("btime ")
+            )
+            return datetime.fromtimestamp(
+                boot_time + start_ticks / os.sysconf("SC_CLK_TCK"), timezone.utc
+            )
+        except (OSError, StopIteration, ValueError, IndexError):
+            return None
+    return None
+
+
+def _runtime_lock_owner_alive(pid: int, started_at: str) -> bool:
+    """Reject stale leases when the recorded PID has since been reused."""
+    import errno
+    import os
+    from datetime import datetime, timedelta, timezone
+
+    owner_started = _process_started_at_utc(pid)
+    if owner_started is not None:
+        try:
+            lock_started = datetime.fromisoformat(str(started_at))
+            if lock_started.tzinfo is None:
+                lock_started = lock_started.replace(tzinfo=timezone.utc)
+            return owner_started <= lock_started.astimezone(timezone.utc) + timedelta(seconds=2)
+        except ValueError:
+            # An unreadable lease timestamp must fail closed.
+            return True
+
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError as exc:
+        return not (
+            getattr(exc, "errno", None) == errno.ESRCH
+            or getattr(exc, "winerror", None) == 87
+        )
+    except SystemError:
+        # Windows may fail os.kill(pid, 0) for protected processes. Without
+        # a reliable creation timestamp, fail closed rather than steal a lease.
+        return True
+
 class Database:
     def __init__(self, path: Path, *, initialize: bool = True) -> None:
         self.path = path
@@ -1485,7 +1606,6 @@ class Database:
         processes. A crashed process leaves its row behind; a dead PID can be
         replaced, while a live PID blocks a second Coordinator.
         """
-        import errno
         import os
         from datetime import datetime, timezone
 
@@ -1501,30 +1621,16 @@ class Database:
                 )"""
             )
             row = self.conn.execute(
-                "SELECT pid FROM runtime_locks WHERE name=?", (str(name),)
+                "SELECT pid,started_at FROM runtime_locks WHERE name=?", (str(name),)
             ).fetchone()
             current_pid = os.getpid()
             if row is not None:
                 pid = int(row["pid"])
                 # Same-process ownership is still exclusive: a second
                 # Coordinator object must not share this runtime lease.
-                alive = pid == current_pid
-                if not alive:
-                    try:
-                        os.kill(pid, 0)
-                        alive = True
-                    except PermissionError:
-                        alive = True
-                    except ProcessLookupError:
-                        alive = False
-                    except OSError as exc:
-                        # Windows reports an absent process as WinError 87;
-                        # ESRCH is the corresponding POSIX result. Other OS
-                        # errors are treated conservatively as a live process.
-                        alive = not (
-                            getattr(exc, "errno", None) == errno.ESRCH
-                            or getattr(exc, "winerror", None) == 87
-                        )
+                alive = pid == current_pid or _runtime_lock_owner_alive(
+                    pid, row["started_at"]
+                )
                 if alive:
                     raise RuntimeError(
                         f"runtime-lock-active: {name} is already owned by PID {pid}"

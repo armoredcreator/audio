@@ -1,6 +1,11 @@
+import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
+import armored_core.database as database_module
 from armored_core.database import Database
 
 
@@ -38,6 +43,68 @@ def test_deferred_schema_initialization_allows_runtime_lease_first(tmp_path):
         assert db.conn.execute(
             "SELECT pid FROM runtime_locks WHERE name='coordinator'"
         ).fetchone() is not None
+    finally:
+        db.release_runtime_lock("coordinator")
+        db.close()
+
+
+def test_runtime_lock_reclaims_pid_reused_by_newer_process(tmp_path, monkeypatch):
+    db = Database(Path(tmp_path) / "armoredcreator.db", initialize=False)
+    try:
+        db.conn.execute(
+            """CREATE TABLE runtime_locks (
+                name TEXT PRIMARY KEY,
+                pid INTEGER NOT NULL,
+                started_at TEXT NOT NULL,
+                heartbeat_at TEXT NOT NULL
+            )"""
+        )
+        db.conn.execute(
+            "INSERT INTO runtime_locks VALUES(?,?,?,?)",
+            ("coordinator", 424242, "2026-10-14T18:42:59+00:00", "2026-10-14T18:42:59+00:00"),
+        )
+        db.conn.commit()
+        monkeypatch.setattr(
+            database_module,
+            "_process_started_at_utc",
+            lambda pid: datetime(2026, 10, 22, 19, 15, tzinfo=timezone.utc),
+        )
+
+        db.acquire_runtime_lock("coordinator")
+
+        owner = db.conn.execute(
+            "SELECT pid FROM runtime_locks WHERE name='coordinator'"
+        ).fetchone()["pid"]
+        assert owner == os.getpid()
+    finally:
+        db.release_runtime_lock("coordinator")
+        db.close()
+
+
+def test_runtime_lock_keeps_live_owner_whose_process_predates_lease(tmp_path, monkeypatch):
+    db = Database(Path(tmp_path) / "armoredcreator.db", initialize=False)
+    try:
+        db.conn.execute(
+            """CREATE TABLE runtime_locks (
+                name TEXT PRIMARY KEY,
+                pid INTEGER NOT NULL,
+                started_at TEXT NOT NULL,
+                heartbeat_at TEXT NOT NULL
+            )"""
+        )
+        db.conn.execute(
+            "INSERT INTO runtime_locks VALUES(?,?,?,?)",
+            ("coordinator", 424242, "2026-10-22T19:15:00+00:00", "2026-10-22T19:15:00+00:00"),
+        )
+        db.conn.commit()
+        monkeypatch.setattr(
+            database_module,
+            "_process_started_at_utc",
+            lambda pid: datetime(2026, 10, 22, 19, 14, tzinfo=timezone.utc),
+        )
+
+        with pytest.raises(RuntimeError, match="runtime-lock-active"):
+            db.acquire_runtime_lock("coordinator")
     finally:
         db.release_runtime_lock("coordinator")
         db.close()
