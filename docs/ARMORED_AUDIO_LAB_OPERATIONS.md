@@ -1,7 +1,7 @@
 <!-- Public copy: local roots and operational source identifiers use placeholders. -->
 # ArmoredAudioLab — manual canônico de arquitetura, operação e evidências
 
-**Versão:** 2.3
+**Versão:** 2.4
 **Revisão:** 23/10/2026 (horário local de São Paulo)
 **Repositório:** armoredcreator/audio  
 **Branch estável de laboratório:** test/armoredstudio-speech-integration-20261015  
@@ -55,20 +55,46 @@ ocupada por um serviço que falhe `getMe`, encerra o fluxo sem abrir duplicata.
 O Bot API operacional existente foi autenticado e reutilizado sem iniciar outro
 processo. Os modos sem `--run` foram verificados e não iniciaram o Coordinator.
 
-Uma checagem adicional construiu o Coordinator com `ARMORED_REAL_TELEGRAM=1`
-e cópias consistentes tanto do SQLite quanto da sessão Telethon configurada.
-A sessão clone estava autorizada e o reader leu metadados das três fontes.
-Nenhuma mensagem foi lida, nenhum arquivo foi baixado e nenhum checkpoint foi
-alterado. Isso comprova a conexão/autorização e a resolução das entidades, mas
-não substitui um ensaio de ingestão ao vivo dentro do Coordinator.
+Uma checagem adicional usou o Coordinator verdadeiro, Telethon autorizado e
+cópias consistentes do SQLite e da sessão configurada. A leitura limitada
+encontrou a mensagem `12043` da fonte `-1002039708059`, tópico de origem `0`.
+Ela chegou à reserva do Sync e à decisão real da Vision: sem link Shopee,
+persistida em `WAITING_VISION`. Não houve download nem consulta Shopee. O
+cursor `12043` foi gravado somente no clone; a cópia operacional permanece no
+cursor `12042`, com os três `historical_complete=0` e os 48 checkpoints
+preservados.
 
-**O START operacional continua deliberadamente pendente.** Não executamos
-`START_ALL.bat --run`, `--publish`, envio real ou consulta comercial. Uma falha
-de validação de caminho no clone após Speech/Studio validou a retomada pelo
-Coordinator: o novo processo reutilizou o RVC e o render já concluídos, seguiu
-ao Hub simulado e não repetiu a conversão nem o render. A descoberta conectada
-de mensagens ao vivo no Coordinator não fez parte desses testes: o CATCH-UP
-usou uma fonte controlada, sem alterar a sessão ou os checkpoints operacionais.
+A barreira do Hub foi exercitada pelo Coordinator com um item já renderizado em
+clone e `ARMORED_HUB_DRY_RUN=1`. O Bot API não foi chamado, não foi criado recibo
+de publicação, Speech/Studio v5 e arquivos permaneceram intactos e o checkpoint
+ficou parado. O item terminou em `RECOVERY` porque a exceção de bloqueio do Hub
+é tratada como falha recuperável. A barreira interrompe o lote: não confirma o
+item como `PUBLISHED` nem permite avanço do checkpoint. **Esse modo não é uma
+execução completa:** Sync, Vision, Stock, IA, Speech e Studio podem trabalhar
+antes de a primeira publicação chegar ao Hub.
+
+**O START operacional continua bloqueado por segurança.** A configuração atual
+tem `ARMORED_SYNC_CATCHUP_LIMIT=0` (CATCH-UP sem limite) e
+`ARMORED_CERT_CATCHUP_THEN_LIVE=0`. O limite finito existente controla novos
+candidatos descobertos; não limita, por si só, os candidatos Vision nem os
+originais aprovados já pendentes no SQLite. Não há ainda um orçamento de
+consultas Shopee aplicado pelo pipeline normal, e os segredos Shopee estão
+configurados na instalação. Assim, nem `--max-live-cycles` nem a ausência de
+`--publish` constituem limite de CATCH-UP, Vision, downloads ou processamento.
+Não iniciar até haver um limite de lote que cubra também o trabalho persistido
+e um orçamento Shopee durável, explicitamente autorizado. O primeiro teste
+operacional deverá usar esse limite, manter envio fechado, verificar a fila e
+retomar com o cursor durável; a publicação só poderá ser liberada em outro
+passo autorizado.
+
+As árvores operacional e da PR foram comparadas por SHA-256 para launcher,
+CLI, Coordinator, Sync, Hub, ledger de republicação, Vision, IA, Stock, Studio,
+Speech e helper do Bot API. Após integrar Hub e ledger, esses arquivos de runtime
+estão byte a byte iguais. O ajuste adicionou a validação obrigatória da Policy
+ArmoredIA ao Hub e preservou captions/recibos históricos somente para
+verificação. Os testes afetados foram atualizados para usar legendas canônicas;
+63 testes focais passaram. A regressão completa aceita anteriormente não foi
+repetida.
 
 Esta seção atualiza a fotografia histórica das seções seguintes. O candidato
 parte de `31a14614dc026ec846d3e64831a36e3971ea688a`; testes devem permanecer

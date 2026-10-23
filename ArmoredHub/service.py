@@ -14,6 +14,7 @@ from armored_core.integrity import sha256_file
 from armored_core.services import PublicationResult, PublicationUnknownError
 from armored_core.republication_ledger import VersionedPublicationLedger
 from armored_core.telegram_session import telegram_session_basename
+from ArmoredIA.caption.policy import CaptionPolicyError, validate_caption
 
 
 class ArmoredHub:
@@ -258,6 +259,7 @@ class ArmoredHub:
         idempotency_key: str,
         destination_chat_id: str,
         destination_topic_id: int,
+        caption: str,
     ):
         """Prepare an additive replay ledger row; the existing receipt is read-only."""
         if self.db is None:
@@ -274,6 +276,10 @@ class ArmoredHub:
         item = self.db.get(str(canonical_content_id))
         if item is None or item.state != State.PUBLISHED:
             raise ValueError("versioned-republication-requires-published-canonical-item")
+        publication_text = self._validated_caption(
+            item,
+            caption,
+        )
         canonical_row = self.db.conn.execute(
             "SELECT duplicate_of_content_id FROM items WHERE content_id=?",
             (str(canonical_content_id),),
@@ -305,6 +311,7 @@ class ArmoredHub:
             idempotency_key=idempotency_key,
             destination_chat_id=destination_chat_id,
             destination_topic_id=destination_topic_id,
+            caption=publication_text,
         )
 
     def preflight_republication(self, run_id: str, output_path: Path | None = None) -> dict:
@@ -320,6 +327,10 @@ class ArmoredHub:
             result = Path(output_path)
             if not result.is_file() or sha256_file(result).lower() != str(record["output_sha256"]).lower():
                 raise ValueError("versioned-republication-output-hash-mismatch")
+        item = self.db.get(str(record["canonical_content_id"]))
+        if item is None:
+            raise RuntimeError("versioned-republication-canonical-item-missing")
+        publication_text = self._publication_text(item, caption_override=record["caption"])
         base_url, file_url = self._require_local_bot_api()
         token = os.getenv("ARMORED_CREATOR_BOT_TOKEN")
         if not token:
@@ -356,6 +367,7 @@ class ArmoredHub:
                     "bot_status": status,
                     "destination_chat_id": str(record["destination_chat_id"]),
                     "destination_topic_id": int(record["destination_topic_id"]),
+                    "caption_ready": bool(record["caption"]),
                     "endpoint": "local-bot-api",
                     "send_called": False,
                 }
@@ -412,6 +424,7 @@ class ArmoredHub:
             raise RuntimeError("versioned-republication-prior-receipt-changed")
         if not item.original_path.is_file() or not item.original_sha256 or sha256_file(item.original_path) != item.original_sha256:
             raise RuntimeError("versioned-republication-original-integrity-failed")
+        publication_text = self._publication_text(item, caption_override=record["caption"])
         self._assert_test_destination_lock(item)
         self.preflight_republication(run_id, output)
         self._require_local_bot_api()
@@ -444,7 +457,7 @@ class ArmoredHub:
                         duration=duration,
                         width=width,
                         height=height,
-                        caption=self._publication_text(item),
+                        caption=publication_text,
                         supports_streaming=True,
                     )
             finally:
@@ -574,7 +587,50 @@ class ArmoredHub:
             return None
 
     @staticmethod
-    def _publication_text(item: Item) -> str:
+    def _validated_caption(item: Item, caption: str) -> str:
+        raw = str(caption or "").strip()
+        try:
+            canonical = validate_caption(
+                raw,
+                product_name=str(item.affiliate_name or ""),
+                product_context=item.ia_context or {},
+            )
+        except CaptionPolicyError as exc:
+            raise RuntimeError(f"Hub recusou legenda fora da Policy ArmoredIA: {exc}") from exc
+        if canonical != raw:
+            raise RuntimeError("Hub recusou legenda não canonicalizada pela Policy ArmoredIA")
+        return canonical
+
+    @classmethod
+    def _publication_text(cls, item: Item, *, caption_override: str | None = None) -> str:
+        links = list(item.affiliate_urls or ())
+        if not links and item.affiliate_url:
+            links = [str(item.affiliate_url).strip()]
+        links = list(dict.fromkeys(str(link).strip() for link in links if str(link).strip()))[:7]
+        raw_caption = (
+            item.publication_caption
+            if caption_override is None
+            else caption_override
+        )
+        caption = cls._validated_caption(item, str(raw_caption or ""))
+        if not links:
+            raise RuntimeError("Hub exige link afiliado para publicar o item")
+        if caption and links:
+            text = caption + "\n\n" + "\n".join(links)
+        else:
+            text = caption
+        if len(text) > 1024:
+            raise RuntimeError("Hub caption/publication package excede 1024 caracteres")
+        return text
+
+    @staticmethod
+    def _historical_publication_text(item: Item) -> str:
+        """Rebuild the pre-Policy payload only for read-only receipt matching.
+
+        Older confirmed posts can legitimately have link-only or noncanonical
+        captions. Matching those records must preserve their historical
+        identity; the result is never used for a new send.
+        """
         links = list(item.affiliate_urls or ())
         if not links and item.affiliate_url:
             links = [str(item.affiliate_url).strip()]
@@ -586,9 +642,7 @@ class ArmoredHub:
             text = caption
         else:
             text = "\n".join(links)
-        if len(text) > 1024:
-            raise RuntimeError("Hub caption/publication package excede 1024 caracteres")
-        return text
+        return text if len(text) <= 1024 else ""
 
     def _telegram_publication_matches(
         self,
@@ -606,7 +660,8 @@ class ArmoredHub:
             return False
 
         caption = str(getattr(message, "message", "") or "").strip()
-        if caption != self._publication_text(item):
+        historical_text = self._historical_publication_text(item)
+        if not historical_text or caption != historical_text:
             return False
 
         if not getattr(message, "video", None) and not getattr(message, "document", None):

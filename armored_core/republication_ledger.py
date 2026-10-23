@@ -27,6 +27,7 @@ class VersionedPublicationLedger:
                 idempotency_key TEXT NOT NULL UNIQUE,
                 destination_chat_id TEXT NOT NULL,
                 destination_topic_id INTEGER NOT NULL CHECK(destination_topic_id > 0),
+                caption TEXT,
                 status TEXT NOT NULL CHECK(status IN (
                     'PREPARED','SEND_STARTED','SENT_UNVERIFIED','CONFIRMED','INDETERMINATE'
                 )),
@@ -39,6 +40,12 @@ class VersionedPublicationLedger:
                 ON publication_runs(execution_id, execution_version);
             """
         )
+        columns = {
+            str(row[1])
+            for row in self.conn.execute("PRAGMA table_info(publication_runs)")
+        }
+        if "caption" not in columns:
+            self.conn.execute("ALTER TABLE publication_runs ADD COLUMN caption TEXT")
 
     def close(self) -> None:
         self.conn.close()
@@ -55,16 +62,20 @@ class VersionedPublicationLedger:
         idempotency_key: str,
         destination_chat_id: str,
         destination_topic_id: int,
+        caption: str,
     ):
         values = (
             str(run_id).strip(), str(execution_id).strip(), int(execution_version),
             str(canonical_content_id).strip(), str(prior_publication_message_id).strip(),
             str(output_sha256).strip().lower(), str(idempotency_key).strip(),
             str(destination_chat_id).strip(), int(destination_topic_id),
+            str(caption or "").strip(),
         )
-        run_id, execution_id, version, content_id, prior_id, digest, key, chat, topic = values
+        run_id, execution_id, version, content_id, prior_id, digest, key, chat, topic, caption = values
         if not all((run_id, execution_id, content_id, prior_id, key, chat)) or version < 1 or topic < 1:
             raise ValueError("invalid-versioned-publication-run")
+        if not caption:
+            raise ValueError("versioned-publication-caption-required")
         if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
             raise ValueError("invalid-versioned-publication-sha256")
         self.conn.execute("BEGIN IMMEDIATE")
@@ -87,12 +98,23 @@ class VersionedPublicationLedger:
                 )
                 if str(existing["run_id"]) != run_id or actual != immutable:
                     raise ValueError("publication-run-identity-conflict")
+                old_caption = str(existing["caption"] or "").strip()
+                if old_caption and old_caption != caption:
+                    raise ValueError("publication-run-caption-conflict")
+                if not old_caption:
+                    if str(existing["status"]) != "PREPARED":
+                        raise ValueError("publication-run-caption-missing-after-send-start")
+                    self.conn.execute(
+                        "UPDATE publication_runs SET caption=?,updated_at=CURRENT_TIMESTAMP "
+                        "WHERE run_id=? AND status='PREPARED' AND (caption IS NULL OR caption='')",
+                        (caption, run_id),
+                    )
                 self.conn.commit()
-                return existing
+                return self.get(run_id)
             self.conn.execute(
                 "INSERT INTO publication_runs(run_id,execution_id,execution_version,"
                 "canonical_content_id,prior_publication_message_id,output_sha256,idempotency_key,"
-                "destination_chat_id,destination_topic_id,status) VALUES(?,?,?,?,?,?,?,?,?, 'PREPARED')",
+                "destination_chat_id,destination_topic_id,caption,status) VALUES(?,?,?,?,?,?,?,?,?,?, 'PREPARED')",
                 values,
             )
             self.conn.commit()

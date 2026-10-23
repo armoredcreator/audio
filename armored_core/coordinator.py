@@ -1666,6 +1666,9 @@ class Coordinator:
         deterministic.
         """
         import asyncio
+        # The production CLI acquires the SQLite lease before schema/runtime
+        # validation in Coordinator.build(). run_forever() must reuse that
+        # ownership instead of attempting a second same-process acquisition.
         if not self._runtime_lock_held:
             self.db.acquire_runtime_lock("coordinator")
             self._runtime_lock_held = True
