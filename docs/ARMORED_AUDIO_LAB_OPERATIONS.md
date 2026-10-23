@@ -20,6 +20,9 @@ Este é o documento canônico: reúne arquitetura, fronteiras de responsabilidad
 Na árvore operacional, a regressão completa terminou com **693 aprovados,
 4 ignorados e 0 falhas**. Na árvore efetivamente integrada à PR #19, antes do
 push final, a regressão terminou com **567 aprovados, 3 ignorados e 0 falhas**.
+Os dois workflows da PR no commit `fe6f8426a1cdee5dfcdb17550e6ba11c39dd8689`
+passaram: [RVC Windows](https://github.com/armoredcreator/audio/actions/runs/39976747946)
+e [ArmoredSpeech isolado](https://github.com/armoredcreator/audio/actions/runs/39976748034).
 Os totais diferem porque as árvores contêm conjuntos de testes diferentes.
 
 O Coordinator verdadeiro foi executado em clones consistentes, com três itens
