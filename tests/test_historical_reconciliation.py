@@ -224,3 +224,43 @@ def test_speech_v5_proof_preserves_audio_and_routes_only_valid_render_to_hub(
     action = next(row for row in plan["recovery_actions"] if row["content_id"] == item)
     assert action["to_state"] == expected_state
 
+
+def test_missing_originals_are_classified_by_processing_need_and_valid_render_avoids_recovery(tmp_path: Path):
+    db_path = tmp_path / "copy.sqlite3"
+    rendered = tmp_path / "final.mp4"
+    rendered.write_bytes(b"verified render")
+    db = Database(db_path)
+    owner = db.reserve_item("1", "source", original_url="https://shopee.com.br/product/1/2")
+    duplicate = db.reserve_item("2", "source", original_url="https://shopee.com.br/product/1/2")
+    published = db.reserve_item("3", "source", original_url="https://shopee.com.br/published")
+    waiting = db.reserve_item("4", "source", original_url="https://shopee.com.br/waiting")
+    resumable = db.reserve_item("5", "source", original_url="https://shopee.com.br/product/5/6")
+    db.conn.execute(
+        "UPDATE items SET state='DUPLICATE',duplicate_of_content_id=? WHERE content_id=?",
+        (owner, duplicate),
+    )
+    db.conn.execute("UPDATE items SET state='PUBLISHED' WHERE content_id=?", (published,))
+    db.conn.execute("UPDATE items SET state='STUDIO_COMPLETE',affiliate_url=?,publication_caption=?,result_path=? WHERE content_id=?",
+                    ("https://affiliate.invalid/5", "Teste item 🧡 #teste", str(rendered), resumable))
+    db.conn.execute(
+        "INSERT INTO state_events(content_id,old_state,new_state,reason) VALUES(?,?,?,?)",
+        (resumable, "STUDIO", "STUDIO_COMPLETE", "speech-studio-v5-complete"),
+    )
+    db.conn.commit()
+    db.close()
+    manifest = tmp_path / "media.jsonl"
+    manifest.write_text("".join(json.dumps({
+        "content_id": item,
+        "original_exists": False,
+        "sha256_match": "MISSING",
+        "result_path_exists": item == resumable,
+    }) + "\n" for item in (duplicate, published, waiting, resumable)), encoding="utf-8")
+
+    plan = build_plan(db_path, manifest)
+    need = plan["storage_audit"]["missing_or_unverified_originals_by_processing_need"]
+    assert need["NO_RECOVERY_DUPLICATE"]["content_ids"] == [duplicate]
+    assert need["NO_RECOVERY_ALREADY_PUBLISHED"]["content_ids"] == [published]
+    assert need["DEFER_UNTIL_VISION_APPROVAL"]["content_ids"] == [waiting]
+    assert need["NO_ORIGINAL_NEEDED_VALID_RENDER_READY_FOR_HUB"]["content_ids"] == [resumable]
+    assert next(row for row in plan["recovery_actions"] if row["content_id"] == resumable)["to_state"] == State.PUBLISHING.value
+

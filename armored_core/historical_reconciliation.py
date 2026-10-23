@@ -170,15 +170,19 @@ def build_plan(
         rows = db.execute("SELECT * FROM items ORDER BY content_id").fetchall()
         by_id = {str(row["content_id"]): row for row in rows}
         media = _jsonl_manifest(media_manifest)
+        publications = _publication_evidence(db)
         missing_originals: dict[str, int] = defaultdict(int)
         hash_mismatches: dict[str, int] = defaultdict(int)
+        missing_original_ids: set[str] = set()
         for item_id, evidence in media.items():
             row = by_id.get(item_id)
             state = str(row["state"] or "UNKNOWN") if row is not None else "UNKNOWN"
             if evidence.get("original_exists") is not True:
                 missing_originals[state] += 1
+                missing_original_ids.add(item_id)
             elif str(evidence.get("sha256_match") or "").upper() != "MATCH":
                 hash_mismatches[state] += 1
+                missing_original_ids.add(item_id)
         storage_report = None
         if storage_diagnostic is not None:
             try:
@@ -195,7 +199,6 @@ def build_plan(
                     "candidate_content_ids": [str(item.get("content_id") or "") for item in candidates],
                     "decision": "unresolved-no-recorded-original-hash" if candidates else "unreferenced-no-message-match",
                 })
-        publications = _publication_evidence(db)
         identity_groups: dict[str, set[str]] = defaultdict(set)
         url_groups: dict[str, set[str]] = defaultdict(set)
         for item_id, row in by_id.items():
@@ -279,6 +282,49 @@ def build_plan(
                 if state != State.DUPLICATE.value or duplicate_of != owner:
                     actions.append({"kind": "mark-duplicate", "content_id": item_id, "owner_content_id": owner, "from_state": state, "to_state": State.DUPLICATE.value})
 
+        planned_duplicate_ids = {
+            item_id
+            for component in duplicate_components
+            for item_id in component["content_ids"]
+            if item_id != component["canonical_content_id"]
+            and not publications.get(item_id, {}).get("confirmed_evidence")
+            and str(by_id[item_id]["state"]) != State.PUBLISHED.value
+        }
+        missing_by_need: dict[str, list[str]] = defaultdict(list)
+        for item_id in sorted(missing_original_ids):
+            row = by_id.get(item_id)
+            if row is None:
+                missing_by_need["MANUAL_REVIEW_NO_ITEM_ROW"].append(item_id)
+                continue
+            state = str(row["state"] or "UNKNOWN")
+            publication = publications.get(item_id, {})
+            if state == State.PUBLISHED.value or publication.get("confirmed_evidence"):
+                need = "NO_RECOVERY_ALREADY_PUBLISHED"
+            elif state == State.DUPLICATE.value or item_id in planned_duplicate_ids:
+                need = "NO_RECOVERY_DUPLICATE"
+            elif state in {State.RECEIVED.value, State.WAITING_VISION.value, State.VISION.value}:
+                need = "DEFER_UNTIL_VISION_APPROVAL"
+            elif state == State.PUBLISHING.value:
+                need = "BLOCK_UNTIL_TELEGRAM_RECONCILIATION"
+            elif state in {
+                State.IA.value, State.SPEECH.value, State.STUDIO_BATCH.value,
+                State.STUDIO.value, State.STUDIO_COMPLETE.value, State.RECOVERY.value,
+                State.FAILED.value,
+            }:
+                has_caption = bool(str(row["publication_caption"] or "").strip()) if "publication_caption" in columns else False
+                if (
+                    has_caption
+                    and bool(str(row["affiliate_url"] or "").strip())
+                    and _speech_complete(db, item_id)
+                    and _valid_result(item_id, row, media)
+                ):
+                    need = "NO_ORIGINAL_NEEDED_VALID_RENDER_READY_FOR_HUB"
+                else:
+                    need = "RECOVER_ORIGINAL_TO_RESUME_APPROVED_STAGE"
+            else:
+                need = "MANUAL_REVIEW_STATE"
+            missing_by_need[need].append(item_id)
+
         recovery_actions = []
         for item_id, row in by_id.items():
             state = str(row["state"] or "")
@@ -297,6 +343,19 @@ def build_plan(
                 and pub_status not in {"ABSENT", "NOT_FOUND", "FAILED_PRE_SEND"}
             ) or (pub and not pub.get("confirmed_evidence") and pub_status not in {"ABSENT", "NOT_FOUND", "FAILED_PRE_SEND"}):
                 blocked.append({"reason": "publication-outcome-indeterminate", "content_ids": [item_id]})
+                continue
+            has_caption = (
+                bool(str(row["publication_caption"] or "").strip())
+                if "publication_caption" in columns else False
+            )
+            if (
+                has_caption
+                and bool(str(row["affiliate_url"] or "").strip())
+                and _speech_complete(db, item_id)
+                and _valid_result(item_id, row, media)
+            ):
+                if state != State.PUBLISHING.value:
+                    recovery_actions.append({"kind": "recover-stage", "content_id": item_id, "from_state": state, "to_state": State.PUBLISHING.value})
                 continue
             if not _valid_original(item_id, row, media):
                 blocked.append({"reason": "original-not-verified", "content_ids": [item_id]})
@@ -357,6 +416,10 @@ def build_plan(
             "storage_audit": {
                 "manifest_rows": len(media),
                 "missing_originals_by_state": dict(sorted(missing_originals.items())),
+                "missing_or_unverified_originals_by_processing_need": {
+                    key: {"count": len(ids), "content_ids": ids}
+                    for key, ids in sorted(missing_by_need.items())
+                },
                 "original_hash_mismatches_by_state": dict(sorted(hash_mismatches.items())),
                 "unreferenced_mp4_count": len(unreferenced_media),
                 "unreferenced_mp4": unreferenced_media,
