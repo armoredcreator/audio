@@ -4,15 +4,20 @@ import logging
 import os
 
 from .models import State
+from .publication_quarantine import PublicationQuarantine
 
 
 class StartupReconciler:
     """Deterministic startup inventory/reconciliation before Sync."""
 
-    def __init__(self, db, storage, publisher=None):
+    def __init__(self, db, storage, publisher=None, publication_quarantine=None):
         self.db = db
         self.storage = storage
         self.publisher = publisher
+        self._owns_quarantine = publication_quarantine is None
+        self.publication_quarantine = publication_quarantine or PublicationQuarantine(
+            storage.database / "publication-quarantine.sqlite3"
+        )
         self.log = logging.getLogger(__name__)
 
     def _configured_source_roots(self) -> list[tuple[str, object]]:
@@ -66,15 +71,64 @@ class StartupReconciler:
             publication = self.db.publication(item_id)
             publication_check = None
             if publication:
-                if publication["confirmed"] and publication["published_message_id"]:
+                verified_receipt = (
+                    bool(publication["confirmed"])
+                    and str(publication["verification_status"] or "") == "CONFIRMED"
+                    and bool(publication["published_message_id"])
+                )
+                if verified_receipt:
                     pub_state = f"CONFIRMED#{publication['published_message_id']}"
+                elif self.publication_quarantine.contains(item_id):
+                    # Once fenced, a historical UNKNOWN is not silently
+                    # reconciled by ordinary startup. Only the explicit
+                    # reconciliation workflow may clear that ambiguity.
+                    publication_check = "QUARANTINED"
+                    pub_state = "QUARANTINED_UNKNOWN"
+                elif str(publication["verification_status"] or "") == "SENT_UNVERIFIED":
+                    # Preserve legacy rows whose boolean flag was set despite
+                    # the explicit unverified status (including receipt 1339).
+                    # Do not reinterpret that inconsistency as confirmation.
+                    item = self.db.get(item_id)
+                    self.publication_quarantine.quarantine_unknown(
+                        item_id,
+                        publication,
+                        evidence={
+                            "item_state": item.state.value,
+                            "last_state_event": (
+                                dict(self.db.last_state_event(item_id))
+                                if self.db.last_state_event(item_id) else None
+                            ),
+                            "reason": "legacy-confirmed-flag-conflicts-with-SENT_UNVERIFIED",
+                        },
+                    )
+                    publication_check = "UNKNOWN"
+                    pub_state = "QUARANTINED_UNKNOWN"
                 else:
                     publication_check = self._reconcile_publication(item_id)
                     publication = self.db.publication(item_id)
-                    if publication and publication["confirmed"] and publication["published_message_id"]:
+                    if (
+                        publication
+                        and bool(publication["confirmed"])
+                        and str(publication["verification_status"] or "") == "CONFIRMED"
+                        and publication["published_message_id"]
+                    ):
                         pub_state = f"CONFIRMED#{publication['published_message_id']}"
+                    elif publication_check == "UNKNOWN" or publication_check is None:
+                        item = self.db.get(item_id)
+                        self.publication_quarantine.quarantine_unknown(
+                            item_id,
+                            publication,
+                            evidence={
+                                "item_state": item.state.value,
+                                "last_state_event": (
+                                    dict(self.db.last_state_event(item_id))
+                                    if self.db.last_state_event(item_id) else None
+                                ),
+                            },
+                        )
+                        pub_state = "QUARANTINED_UNKNOWN"
                     else:
-                        pub_state = "AMBIGUOUS"
+                        pub_state = str(publication_check)
 
                 if pub_state.startswith("CONFIRMED#"):
                     summary["publication_confirmed"] += 1
@@ -182,6 +236,10 @@ class StartupReconciler:
         )
         return summary
 
+    def close(self) -> None:
+        if self._owns_quarantine:
+            self.publication_quarantine.close()
+
     def _reconcile_publication(self, item_id: str) -> str | None:
         if self.publisher is None:
             return None
@@ -208,5 +266,6 @@ class StartupReconciler:
         elif value == "ABSENT":
             self.log.debug("[STARTUP][PUBLICATION] id=%s ABSENT", item_id)
         else:
-            self.log.warning("[STARTUP][PUBLICATION] id=%s UNKNOWN", item_id)
+            self.log.warning("[STARTUP][PUBLICATION] id=%s UNKNOWN; recording durable quarantine", item_id)
+            return "UNKNOWN"
         return value

@@ -92,11 +92,10 @@ ele não é marcado `PUBLISHED`. A retomada do mesmo lote reutiliza esse resulta
 e volta à barreira do Hub sem repetir IA, Speech, RVC ou Studio. Uma autorização
 independente de publicação é necessária para atravessar a barreira.
 
-**A instalação operacional ainda não está pronta para START:** o ambiente de
-produção permanece em `ARMORED_SYNC_CATCHUP_LIMIT=0` e não contém este controle
-global. O código candidato foi testado e enviado à PR, mas precisa concluir CI e
-ser promovido/verificado no diretório operacional antes do primeiro uso. O
-comando limitado planejado, depois dessa promoção e aprovação, é
+**A primeira execução limitada parou com segurança em recibos históricos
+UNKNOWN.** A correção nesta PR registra essas incertezas em um ledger lateral,
+isola a recuperação item a item e mantém a barreira de envio. Promova e valide
+esta correção antes de retomar o mesmo lote. O comando para retomar é
 `START_ALL.bat --run --catch-up-run-id lote-001 --max-catch-up-items 3`; não
 inclui `--publish`, portanto só prepara/retoma o lote e para na barreira do Hub.
 Usar outro ID inicia outro orçamento; para retomar após interrupção, repetir o
@@ -114,6 +113,25 @@ Escolha um teto diário compatível com a quota Shopee autorizada e os recursos 
 computador. O modo contínuo não autoriza consultas Shopee nem publicações: sem
 quota Shopee válida, Vision continua bloqueada; sem `--publish`, um resultado
 pronto fica em `PUBLISHING` e segura o lote corrente até autorização de envio.
+
+### Quarentena de recibos Telegram incertos
+
+Uma resposta `UNKNOWN` durante verificação de publicação nunca é convertida em
+`ABSENT`. O Coordinator preserva o recibo SQLite e acrescenta a observação a
+`storage/database/publication-quarantine.sqlite3`, com chave de idempotência,
+destino/tópico, status original, estado do item e evidência da última transição.
+A quarentena não confirma publicação, não autoriza reenvio e não altera o recibo.
+O Hub recusa itens ainda quarantined mesmo quando `--publish` for fornecido.
+
+No clone consistente do primeiro lote `lote-001`, o ledger preservou os mesmos
+três IDs já reservados. O item interrompido em `RECOVERY` foi isolado; os dois
+itens independentes com originais já presentes alcançaram a barreira do Hub e
+permaneceram `PUBLISHING` em dry-run. A retomada com o mesmo ID reutilizou os
+renders v5, sem repetir IA, Speech, RVC ou Studio. Checkpoints ficaram intactos,
+`historical_complete` permaneceu falso e os recibos `PENDING` não mudaram.
+Quatro recibos históricos `PENDING` foram registrados como `UNKNOWN`; um recibo
+legado `SENT_UNVERIFIED` separado também permanece bloqueado. A revisão desses
+recibos é uma ação explícita e distinta da autorização `--publish`.
 
 Consultas reais Shopee permanecem bloqueadas sem
 `ARMORED_SHOPEE_QUERIES_AUTHORIZED=1`, ID de orçamento, limite entre 1 e 1000,

@@ -139,7 +139,10 @@ class Recovery:
         # changing processing artifacts whenever a publication attempt exists.
         pub = self.db.publication(item_id)
         if pub:
-            if pub["confirmed"]:
+            if (
+                pub["confirmed"]
+                and str(pub["verification_status"] or "") == "CONFIRMED"
+            ):
                 message_id = pub["published_message_id"]
                 if not message_id:
                     raise RuntimeError("confirmed-publication-without-real-message-id")

@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from .database import Database
 from .catch_up_budget import ContinuousOperationBudget, DurableCatchUpBudget
 from .models import State
+from .publication_quarantine import PublicationQuarantine
 from .pipeline import Pipeline
 from .recovery import Recovery
 from .services import IngestMessage, SyncService
@@ -35,12 +36,17 @@ class Coordinator:
             db, storage, vision, studio, publisher, ia,
             speech_studio_runner=self._run_recovery_speech_studio,
         )
-        self.startup_reconciler = StartupReconciler(db, storage, publisher)
         self.source = source
         self._runtime_lock_held = False
         self._last_catch_up_completed_count = 0
         self.catch_up_budget = catch_up_budget
         self.continuous_budget = continuous_budget
+        self.publication_quarantine = PublicationQuarantine(
+            storage.database / "publication-quarantine.sqlite3"
+        )
+        self.startup_reconciler = StartupReconciler(
+            db, storage, publisher, self.publication_quarantine
+        )
         self._shutdown_requested = False
         self.pipeline.set_shutdown_checker(lambda: self._shutdown_requested)
 
@@ -53,14 +59,16 @@ class Coordinator:
             + self.db.pre_download_recovery_items()
             + self.db.vision_approved_interrupted_items()
         ):
-            candidates[str(item.content_id)] = item
+            if not self.publication_quarantine.contains(str(item.content_id)):
+                candidates[str(item.content_id)] = item
         failed = self.db.conn.execute(
             "SELECT content_id FROM items WHERE state=? ORDER BY created_at,content_id",
             (State.FAILED.value,),
         ).fetchall()
         for row in failed:
             item_id = str(row["content_id"])
-            candidates[item_id] = self.db.get(item_id)
+            if not self.publication_quarantine.contains(item_id):
+                candidates[item_id] = self.db.get(item_id)
         sources = [
             str(route.source_id)
             for route in getattr(self.source, "sources", ())
@@ -447,6 +455,7 @@ class Coordinator:
         from copy import copy
 
         db = Database(self.db.path, initialize=False)
+        private_coordinator = None
         try:
             # Vision's persistent negative-offer cache must use this worker's
             # connection too, never the main-thread SQLite object.
@@ -488,7 +497,10 @@ class Coordinator:
                     private_coordinator.pipeline.set_before_hub_checker(before_hub)
                 private_coordinator.run(item_id)
         finally:
-            db.close()
+            if private_coordinator is not None:
+                private_coordinator.close()
+            else:
+                db.close()
 
     async def _vision_only_async(self, message, *, offload: bool = False):
         """Reserve and classify a candidate without materializing its media."""
@@ -635,6 +647,17 @@ class Coordinator:
                     item_id = str(self.db.content_id_for(
                         str(message.telegram_message_id), source_id
                     ))
+                    if self.publication_quarantine.contains(item_id):
+                        checkpoint_blocked = True
+                        marker = getattr(source, "mark_materialization_failed", None)
+                        if marker is not None:
+                            marker()
+                        self.log.warning(
+                            "[COORDINATOR][CATCH-UP][QUARANTINE] item=%s has an "
+                            "unresolved publication; cursor remains before it",
+                            item_id,
+                        )
+                        break
                     try:
                         ingest = IngestMessage(
                             telegram_message_id=str(message.telegram_message_id),
@@ -677,6 +700,7 @@ class Coordinator:
             vision_candidates = [
                 item for item in vision_candidates
                 if str(item.content_id) in allowed_ids
+                and not self.publication_quarantine.contains(str(item.content_id))
             ]
         for item in vision_candidates:
             try:
@@ -700,6 +724,7 @@ class Coordinator:
             for item in self.db.pending_vision_candidates()
             if item.state != State.WAITING_VISION
             and (allowed_ids is None or str(item.content_id) in allowed_ids)
+            and not self.publication_quarantine.contains(str(item.content_id))
         ]
         if vision_failures:
             checkpoint_blocked = True
@@ -815,6 +840,10 @@ class Coordinator:
                 production_items = [
                     item for item in production_items
                     if str(item.content_id) in allowed_ids
+                    and not (
+                        item.state == State.RECOVERY
+                        and self.publication_quarantine.contains(str(item.content_id))
+                    )
                 ]
             if not configured_sources:
                 configured_sources = sorted(
@@ -1020,6 +1049,10 @@ class Coordinator:
                     for candidate in self.db.catch_up_production_items()
                     if candidate.content_id not in production_seen
                     and (allowed_ids is None or str(candidate.content_id) in allowed_ids)
+                    and not (
+                        candidate.state == State.RECOVERY
+                        and self.publication_quarantine.contains(str(candidate.content_id))
+                    )
                     and candidate.original_path.is_file()
                 ]
                 if ready_unseen:
@@ -1156,8 +1189,10 @@ class Coordinator:
                         item.content_id,
                     )
 
-        failed = checkpoint_blocked or bool(
-            getattr(source, "historical_materialization_failed", False)
+        failed = (
+            checkpoint_blocked
+            or bool(getattr(source, "historical_materialization_failed", False))
+            or self.publication_quarantine.unresolved_count() > 0
         )
         scan_complete = bool(getattr(source, "historical_scan_exhausted", False))
         if scan_complete and not failed:
@@ -1200,8 +1235,10 @@ class Coordinator:
         while True:
             message = await fetch_next()
             if message is None:
-                failed = checkpoint_blocked or bool(
-                    getattr(source, "historical_materialization_failed", False)
+                failed = (
+                    checkpoint_blocked
+                    or bool(getattr(source, "historical_materialization_failed", False))
+                    or self.publication_quarantine.unresolved_count() > 0
                 )
                 scan_complete = bool(
                     getattr(source, "historical_scan_exhausted", True)
@@ -1448,11 +1485,22 @@ class Coordinator:
             return []
 
         message = messages[0]
+        source_id = str(getattr(message, "source_id", "telegram") or "telegram")
+        canonical_id = str(self.db.content_id_for(
+            str(message.telegram_message_id), source_id
+        ))
+        if self.publication_quarantine.contains(canonical_id):
+            self.log.warning(
+                "[COORDINATOR][LIVE][QUARANTINE] item=%s tem publicação "
+                "incerta; checkpoint da fonte não avançou",
+                canonical_id,
+            )
+            return []
         item_id = str(message.telegram_message_id)
         if self.continuous_budget is not None:
             reservation = IngestMessage(
                 telegram_message_id=str(message.telegram_message_id),
-                source_id=str(getattr(message, "source_id", "telegram") or "telegram"),
+                source_id=source_id,
                 topic_id=getattr(message, "topic_id", None),
                 topic_name=getattr(message, "topic_name", None),
                 original_url=getattr(message, "original_url", None),
@@ -1716,6 +1764,11 @@ class Coordinator:
             if self.source is not None and hasattr(self.source, "is_historical_complete")
             else self.db.historical_complete()
         )
+        if source_complete and self.publication_quarantine.unresolved_count():
+            self.log.error(
+                "[COORDINATOR][CATCH-UP] LIVE bloqueado por recibos UNKNOWN em quarentena"
+            )
+            return
         if not source_complete or not self.db.has_sync_checkpoints():
             if (
                 self.source is None or not hasattr(self.source, "is_historical_complete")
@@ -1845,10 +1898,17 @@ class Coordinator:
             )
             pending_work = self._catch_up_candidate_ids()
             if history_complete and not pending_work:
-                self.catch_up_budget = None
                 if controller.remaining <= 0:
                     await asyncio.sleep(min(controller.seconds_until_reset(), 60.0))
                     continue
+                if self.publication_quarantine.unresolved_count():
+                    self.log.error(
+                        "[COORDINATOR][CONTINUOUS] LIVE bloqueado por publicação "
+                        "UNKNOWN em quarentena; aguardando reconciliação explícita"
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+                self.catch_up_budget = None
                 self.db.heartbeat_runtime_lock("coordinator")
                 try:
                     processed = await self.run_live_once_async()
@@ -2357,6 +2417,12 @@ class Coordinator:
             return
 
         if item.state in {State.RECOVERY, State.FAILED}:
+            if self.publication_quarantine.contains(item_id):
+                self.log.warning(
+                    "[COORDINATOR][RECOVERY][QUARANTINE] item=%s remains fenced",
+                    item_id,
+                )
+                return
             if item.state == State.FAILED:
                 self.db.transition(item_id, State.RECOVERY, "legacy-failed-recovery")
             self.recovery.reconcile(item_id)
@@ -2412,8 +2478,11 @@ class Coordinator:
                     if self.continuous_budget is not None:
                         self.continuous_budget.close()
                 finally:
-                    if self._runtime_lock_held:
-                        self.db.release_runtime_lock("coordinator")
+                    try:
+                        self.publication_quarantine.close()
+                    finally:
+                        if self._runtime_lock_held:
+                            self.db.release_runtime_lock("coordinator")
         finally:
             self._runtime_lock_held = False
             self.db.close()
@@ -2443,6 +2512,13 @@ class Coordinator:
         for row in rows:
             item_id = str(row["content_id"])
             if allowed_ids is not None and item_id not in allowed_ids:
+                continue
+            if self.publication_quarantine.contains(item_id):
+                self.log.warning(
+                    "[COORDINATOR][RECOVERY][QUARANTINE] item=%s remains fenced; "
+                    "ambiguous historical publication is not retried",
+                    item_id,
+                )
                 continue
             if (
                 str(row["state"]) == State.PUBLISHING.value

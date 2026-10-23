@@ -17,12 +17,13 @@ from armored_core.services import (
     PublicationUnknownError,
 )
 from armored_core.republication_ledger import VersionedPublicationLedger
+from armored_core.publication_quarantine import PublicationQuarantine
 from armored_core.telegram_session import telegram_session_basename
 from ArmoredIA.caption.policy import CaptionPolicyError, validate_caption
 
 
 class ArmoredHub:
-    """Telegram publication boundary; SQLite is the only durable state."""
+    """Telegram publication boundary with durable uncertainty fences."""
 
     def __init__(self, root: Path, db: Database | None = None, routes=(), replay_ledger=None):
         self.root = Path(root)
@@ -88,6 +89,22 @@ class ArmoredHub:
         publication = getattr(self.db, "publication", None) if self.db is not None else None
         return publication(item.content_id) if callable(publication) else None
 
+    def _assert_not_quarantined(self, item: Item) -> None:
+        if self.db is None:
+            return
+        database_path = getattr(self.db, "path", None)
+        if database_path is None:
+            raise RuntimeError("ArmoredHub database path is required for quarantine enforcement")
+        path = Path(database_path).parent / "publication-quarantine.sqlite3"
+        quarantine = PublicationQuarantine(path)
+        try:
+            if quarantine.contains(item.content_id):
+                raise PublicationDeferredError(
+                    "historical-publication-outcome-unknown; explicit reconciliation required"
+                )
+        finally:
+            quarantine.close()
+
     @staticmethod
     def _publication_field(record, name: str, default=None):
         if record is None:
@@ -116,7 +133,10 @@ class ArmoredHub:
         if record is None:
             return PublicationCheck.UNKNOWN
 
-        if record["confirmed"]:
+        if (
+            record["confirmed"]
+            and str(record["verification_status"] or "") == "CONFIRMED"
+        ):
             message_id = record["published_message_id"]
             if not message_id:
                 return PublicationCheck.UNKNOWN
@@ -215,6 +235,7 @@ class ArmoredHub:
         self._validate_publication_input(item)
         if self.db is None:
             raise RuntimeError("ArmoredHub exige Database para publicação idempotente")
+        self._assert_not_quarantined(item)
         if os.getenv("ARMORED_HUB_DRY_RUN", "0") == "1":
             raise PublicationDeferredError(
                 "ARMORED_HUB_DRY_RUN=1: vídeo validado e publicação adiada sem recibo"
@@ -914,6 +935,7 @@ class ArmoredHub:
         self._validate_publication_input(item)
         if self.db is None:
             raise RuntimeError("ArmoredHub exige Database para publicação idempotente")
+        self._assert_not_quarantined(item)
         if os.getenv("ARMORED_HUB_DRY_RUN", "0") == "1":
             raise PublicationDeferredError(
                 "ARMORED_HUB_DRY_RUN=1: vídeo validado e publicação adiada sem recibo"
