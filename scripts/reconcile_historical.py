@@ -98,7 +98,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"MODE={result['mode']}")
         print(f"DUPLICATE_COMPONENTS={len(plan['duplicate_components'])}")
         print(f"PLANNED_ACTIONS={plan['action_count']}")
-        print(f"APPLIED_ACTIONS={applied['applied_count']}")
+        applied_count = applied.get("applied_count", applied.get("restored_count", 0))
+        print(f"APPLIED_ACTIONS={applied_count}")
+        if args.rollback_run:
+            print(f"ROLLBACK_ALREADY_APPLIED={applied.get('already_rolled_back', False)}")
         print(f"BLOCKED_COMPONENTS={len(plan['blocked'])}")
         print(f"IDEMPOTENT_SECOND_PASS={second_pass['is_noop'] if second_pass else 'not-run'}")
         print(f"REPORT={report}")

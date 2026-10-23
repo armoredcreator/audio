@@ -16,6 +16,7 @@ from armored_core.historical_reconciliation import (
 )
 from armored_core.models import State
 from scripts.audit_sync_duplicates import product_identity_from_direct_url
+from scripts.reconcile_historical import main as reconciliation_cli_main
 
 
 def _media_manifest(path: Path, content_id: str, original: Path) -> Path:
@@ -67,6 +68,36 @@ def test_duplicate_reconciliation_is_reversible_and_second_pass_is_noop(tmp_path
     assert rollback_run(db_path, applied["run_id"], tmp_path)["already_rolled_back"] is True
     conn = sqlite3.connect(db_path)
     assert conn.execute("SELECT state,duplicate_of_content_id FROM items WHERE content_id=?", (duplicate,)).fetchone() == ("RECEIVED", None)
+    conn.close()
+
+
+def test_reconciliation_cli_reports_successful_rollback(tmp_path: Path, capsys):
+    db_path = tmp_path / "copy.sqlite3"
+    db = Database(db_path)
+    db.reserve_item("100", "source-a", original_url="https://shopee.com.br/shared")
+    duplicate = db.reserve_item("200", "source-b", original_url="https://shopee.com.br/other")
+    db.conn.execute("UPDATE items SET original_url='https://shopee.com.br/shared' WHERE content_id=?", (duplicate,))
+    db.conn.commit()
+    db.close()
+
+    plan = build_plan(db_path)
+    applied = apply_plan(db_path, plan, tmp_path)
+    report = tmp_path / "rollback.json"
+    exit_code = reconciliation_cli_main([
+        "--database-copy", str(db_path),
+        "--copy-root", str(tmp_path),
+        "--rollback-run", applied["run_id"],
+        "--report", str(report),
+    ])
+
+    assert exit_code == 0
+    assert "APPLIED_ACTIONS=1" in capsys.readouterr().out
+    result = json.loads(report.read_text(encoding="utf-8"))
+    assert result["applied"]["restored_count"] == 1
+    conn = sqlite3.connect(db_path)
+    assert conn.execute(
+        "SELECT state FROM items WHERE content_id=?", (duplicate,)
+    ).fetchone()[0] != State.DUPLICATE.value
     conn.close()
 
 
