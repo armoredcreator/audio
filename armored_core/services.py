@@ -13,6 +13,14 @@ class VisionUnresolvedError(RuntimeError):
     """Vision V1 could not resolve the product with enough certainty."""
 
 
+class VisionDuplicateError(RuntimeError):
+    """An exact product identity is already approved; skip external lookup."""
+
+    def __init__(self, owner_content_id: str) -> None:
+        self.owner_content_id = str(owner_content_id)
+        super().__init__(f"canonical-product-already-represented:{self.owner_content_id}")
+
+
 class PublicationUnknownError(RuntimeError):
     """Telegram publication outcome is unresolved and must enter recovery.
 

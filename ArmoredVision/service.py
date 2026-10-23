@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from armored_core.models import Item
-from armored_core.services import VisionResult, VisionUnresolvedError
+from armored_core.services import VisionDuplicateError, VisionResult, VisionUnresolvedError
 
 from .modules.v1.shopee_api import (
     ShopeeAffiliateAPI,
@@ -65,6 +65,12 @@ class ArmoredVision:
             ) from exc
 
         product_key = f"{resolved.shop_id}:{resolved.item_id}"
+        if self.db is not None:
+            owner = self.db.find_product_identity_owner(
+                {"shopId": resolved.shop_id, "itemId": resolved.item_id}
+            )
+            if owner:
+                raise VisionDuplicateError(owner)
         if self.db is not None and self.db.has_active_vision_no_offer(product_key):
             raise VisionUnresolvedError(
                 "[VISION:NO_AFFILIATE_OFFER_CACHED] "

@@ -77,6 +77,51 @@ def test_product_claim_is_unique_across_message_and_source_ids(tmp_path: Path):
     db.close()
 
 
+def test_exact_product_url_is_deduplicated_before_shopee_api_lookup(tmp_path: Path):
+    from ArmoredVision.service import ArmoredVision
+    from armored_core.pipeline import Pipeline
+    from armored_core.storage import Storage
+
+    class ApiMustNotBeCalled:
+        calls = 0
+
+        def get_exact_product(self, shop_id, item_id):
+            self.calls += 1
+            raise AssertionError("known exact product must be blocked before Shopee API")
+
+    db = Database(tmp_path / "history.sqlite3")
+    context = {"shopId": "900", "itemId": "111"}
+    owner = _approved(
+        db, "source1", "101", "https://shopee.com.br/product/900/111", context, tmp_path
+    )
+    candidate = db.reserve_item(
+        "202", source_id="source2",
+        original_url="https://shopee.com.br/product/900/111?variant=2",
+        original_path=tmp_path / "candidate.mp4",
+    )
+    (tmp_path / "candidate.mp4").write_bytes(b"original")
+    api = ApiMustNotBeCalled()
+    class NoDownstream:
+        def process(self, item):
+            raise AssertionError("duplicate must not reach Studio")
+
+        def publish(self, item):
+            raise AssertionError("duplicate must not reach Hub")
+
+    Pipeline(
+        db,
+        Storage(tmp_path),
+        ArmoredVision(api=api, db=db),
+        NoDownstream(),
+        NoDownstream(),
+    ).run(candidate)
+
+    assert api.calls == 0
+    assert db.get(candidate).state is State.DUPLICATE
+    assert db.get(candidate).duplicate_of_content_id == owner
+    db.close()
+
+
 def test_product_claim_recognizes_historic_approved_rows_without_rewriting_them(tmp_path: Path):
     db = Database(tmp_path / "history.sqlite3")
     ctx = {"shopId": "123", "itemId": "456"}

@@ -1048,6 +1048,33 @@ class Database:
             self.conn.rollback()
             raise
 
+    def find_product_identity_owner(self, context: dict | None) -> str | None:
+        """Find an already approved exact product without claiming the candidate."""
+        product_key = self._canonical_product_key(context)
+        if not product_key:
+            return None
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._seed_historical_product_claims_locked()
+            claim = self.conn.execute(
+                "SELECT owner_content_id FROM product_identity_claims WHERE product_key=?",
+                (product_key,),
+            ).fetchone()
+            owner = None
+            if claim:
+                owner = self._resolve_valid_product_owner_locked(
+                    product_key, str(claim["owner_content_id"])
+                )
+            if owner is None:
+                owner = self._find_historical_product_owner_locked(
+                    product_key, exclude_content_id=""
+                )
+            self.conn.commit()
+            return owner
+        except BaseException:
+            self.conn.rollback()
+            raise
+
     def has_speech_studio_v5_completion(self, item_id: str) -> bool:
         """Durable render boundary shared by Coordinator and publication."""
         return self.conn.execute(

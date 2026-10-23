@@ -5,7 +5,7 @@ import os
 import shutil
 from .database import Database
 from .models import PublicationCheck, State
-from .services import AIService, Publisher, StudioService, VisionService, VisionUnresolvedError, PublicationUnknownError
+from .services import AIService, Publisher, StudioService, VisionService, VisionDuplicateError, VisionUnresolvedError, PublicationUnknownError
 from .storage import Storage
 from .trace import PipelineTrace
 
@@ -175,6 +175,20 @@ class Pipeline:
                 with self.trace.stage(item_id, "VISION"):
                     try:
                         v = self.vision.identify(item)
+                    except VisionDuplicateError as exc:
+                        self.db.mark_duplicate(
+                            item_id,
+                            exc.owner_content_id,
+                            "canonical-product-known-before-vision-api",
+                        )
+                        self.trace.emit(
+                            item_id,
+                            "VISION",
+                            "DUPLICATE",
+                            duplicate_of=exc.owner_content_id,
+                            reason="canonical-product-known-before-vision-api",
+                        )
+                        return
                     except VisionUnresolvedError as exc:
                         self.db.mark_vision_waiting(item_id, str(exc))
                         self.trace.emit(item_id, "VISION", "WAITING", reason=str(exc))
