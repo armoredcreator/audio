@@ -122,6 +122,11 @@ Uma resposta `UNKNOWN` durante verificação de publicação nunca é convertida
 destino/tópico, status original, estado do item e evidência da última transição.
 A quarentena não confirma publicação, não autoriza reenvio e não altera o recibo.
 O Hub recusa itens ainda quarantined mesmo quando `--publish` for fornecido.
+Essa cerca não cancela IDs que já pertencem ao orçamento durável: itens
+independentes em `RECEIVED` continuam pelas etapas autorizadas e param em
+`PUBLISHING` na barreira do Hub; itens em `RECOVERY` não são reconstruídos nem
+reenviados. A quarentena impede o corte histórico e a entrada em LIVE até uma
+reconciliação explícita.
 
 No clone consistente do primeiro lote `lote-001`, o ledger preservou os mesmos
 três IDs já reservados. O item interrompido em `RECOVERY` foi isolado; os dois

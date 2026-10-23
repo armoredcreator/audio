@@ -749,9 +749,19 @@ class Coordinator:
         from ArmoredStock.service import ArmoredStock
 
         stock = ArmoredStock(self)
+        stock_ids = (
+            tuple(
+                item_id for item_id in allowed_ids
+                if not (
+                    self.publication_quarantine.contains(str(item_id))
+                    and self.db.get(str(item_id)).state == State.RECOVERY
+                )
+            )
+            if allowed_ids is not None else None
+        )
         stock_report = (
-            await stock.run(content_ids=tuple(allowed_ids))
-            if allowed_ids is not None
+            await stock.run(content_ids=stock_ids)
+            if stock_ids is not None
             else await stock.run()
         )
         stock_errors = list(stock_report.get("errors", []))
@@ -1023,9 +1033,19 @@ class Coordinator:
                 # batch as one Stock batch. Studio will not start for these
                 # candidates until all of their originals exist.
                 stock = ArmoredStock(self)
+                stock_ids = (
+                    tuple(
+                        item_id for item_id in allowed_ids
+                        if not (
+                            self.publication_quarantine.contains(str(item_id))
+                            and self.db.get(str(item_id)).state == State.RECOVERY
+                        )
+                    )
+                    if allowed_ids is not None else None
+                )
                 stock_report = (
-                    await stock.run(content_ids=tuple(allowed_ids))
-                    if allowed_ids is not None
+                    await stock.run(content_ids=stock_ids)
+                    if stock_ids is not None
                     else await stock.run()
                 )
                 stock_errors = list(stock_report.get("errors", []))
@@ -1192,10 +1212,9 @@ class Coordinator:
         failed = (
             checkpoint_blocked
             or bool(getattr(source, "historical_materialization_failed", False))
-            or self.publication_quarantine.unresolved_count() > 0
         )
         scan_complete = bool(getattr(source, "historical_scan_exhausted", False))
-        if scan_complete and not failed:
+        if scan_complete and not failed and not self.publication_quarantine.unresolved_count():
             complete = getattr(source, "complete_historical_sync", None)
             if complete is not None:
                 complete()
