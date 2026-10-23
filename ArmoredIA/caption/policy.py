@@ -31,6 +31,11 @@ def _remove_emojis(text: str) -> str:
     return EMOJI_COMPONENT_RE.sub("", value)
 HASHTAG_RE = re.compile(r"(?<!\w)#([\wÀ-ÿ]+)", re.UNICODE)
 WORD_RE = re.compile(r"[A-Za-zÀ-ÿ0-9]+(?:['-][A-Za-zÀ-ÿ0-9]+)?", re.UNICODE)
+PRODUCT_STOP_WORDS = {
+    "a", "as", "ao", "aos", "com", "da", "das", "de", "do", "dos", "e",
+    "em", "para", "por", "sem", "um", "uma", "kit", "conjunto",
+    "original", "novo", "nova",
+}
 
 
 class CaptionPolicyError(ValueError):
@@ -47,12 +52,7 @@ def _tokens(value: str) -> list[str]:
 
 
 def _product_phrases(product_name: str) -> set[str]:
-    stop = {
-        "a", "as", "ao", "aos", "com", "da", "das", "de", "do", "dos", "e",
-        "em", "para", "por", "sem", "um", "uma", "kit", "conjunto",
-        "original", "novo", "nova",
-    }
-    tokens = [token for token in _tokens(product_name) if token not in stop]
+    tokens = [token for token in _tokens(product_name) if token not in PRODUCT_STOP_WORDS]
     phrases: set[str] = set()
     for size in (2, 3):
         for index in range(0, max(0, len(tokens) - size + 1)):
@@ -61,12 +61,7 @@ def _product_phrases(product_name: str) -> set[str]:
 
 
 def _hashtag_sequences(product_name: str) -> set[str]:
-    stop = {
-        "a", "as", "ao", "aos", "com", "da", "das", "de", "do", "dos", "e",
-        "em", "para", "por", "sem", "um", "uma", "kit", "conjunto",
-        "original", "novo", "nova",
-    }
-    tokens = [token for token in _tokens(product_name) if token not in stop]
+    tokens = [token for token in _tokens(product_name) if token not in PRODUCT_STOP_WORDS]
     sequences: set[str] = set()
     for size in range(2, min(3, len(tokens)) + 1):
         for index in range(0, len(tokens) - size + 1):
@@ -159,9 +154,14 @@ def validate_caption(
         raise CaptionPolicyError("legenda revela medida ou especificação técnica")
 
     folded_caption = _fold(_remove_emojis(text))
+    normalized_caption_tokens = [
+        token for token in WORD_RE.findall(folded_caption)
+        if token.casefold() not in PRODUCT_STOP_WORDS
+    ]
+    normalized_caption = " ".join(normalized_caption_tokens)
 
     for phrase in _product_phrases(product_name):
-        if re.search(rf"\b{re.escape(phrase)}\b", folded_caption):
+        if re.search(rf"\b{re.escape(phrase)}\b", normalized_caption):
             raise CaptionPolicyError("legenda copia expressão distintiva do produto")
 
     hashtag_tokens = {_fold(tag) for tag in hashtags}

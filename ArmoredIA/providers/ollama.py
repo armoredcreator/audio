@@ -93,6 +93,16 @@ PARA CADA OPÇÃO:
 
 Retorne SOMENTE um objeto JSON válido com a chave "captions". Cada item é um objeto com "text" (apenas 2 ou 3 palavras, sem emoji e sem hashtag) e "hashtags" (lista obrigatória de 1 ou 2 hashtags começando com #). Gere você mesmo o texto e as hashtags; não deixe campos vazios.
 """.strip()
+        policy_feedback = context.get("__policy_retry_feedback")
+        if isinstance(policy_feedback, list) and policy_feedback:
+            reasons = "; ".join(str(value) for value in policy_feedback[:8])
+            prompt += (
+                "\n\nCORREÇÃO OBRIGATÓRIA DA POLICY: a rodada anterior foi rejeitada. "
+                f"Motivos: {reasons}. Refaça as opções. Conte as palavras do campo text "
+                "antes de responder e use exatamente 2 ou 3 palavras simples no texto "
+                "principal; não coloque frase extra, subtítulo, emoji ou hashtag nesse campo. "
+                "As hashtags ficam somente no campo hashtags."
+            )
         prompt += (
             "\n\nCONTEXTO V1 — identidade já resolvida:\n"
             + _context_text(context)

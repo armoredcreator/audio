@@ -151,6 +151,16 @@ PARA CADA OPÇÃO:
 Retorne SOMENTE JSON:
 {"captions":["opção 1","opção 2","..."]}
 """.strip()
+        policy_feedback = context.get("__policy_retry_feedback")
+        if isinstance(policy_feedback, list) and policy_feedback:
+            reasons = "; ".join(str(value) for value in policy_feedback[:8])
+            prompt += (
+                "\n\nCORREÇÃO OBRIGATÓRIA DA POLICY: a rodada anterior foi rejeitada. "
+                f"Motivos: {reasons}. Refaça as opções. Conte as palavras do texto "
+                "principal antes de responder e use exatamente 2 ou 3 palavras simples; "
+                "não acrescente frase, subtítulo, emoji ou hashtag ao texto principal. "
+                "As hashtags ficam somente conforme a regra da Policy."
+            )
 
         parts: list[dict[str, Any]] = [{
             "text": (

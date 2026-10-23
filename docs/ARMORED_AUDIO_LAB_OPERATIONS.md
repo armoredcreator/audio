@@ -179,6 +179,39 @@ a autorização de Vision; nenhum resolver comercial foi chamado. Os snapshots d
 checkpoints antes/depois foram idênticos. Não houve download, consulta Shopee ou
 envio Telegram.
 
+### Regressão integrada real das três rotas e correções de retomada (2026-10-23)
+
+Uma execução isolada com o Coordinator e módulos reais processou o lote global
+de três itens `-1003788989075_296`, `-1002698134896_30` e
+`-1002039708059_71`, um de cada fonte. Os originais aprovados foram copiados
+para storage isolado e reutilizados; hashes antes/depois foram idênticos. A IA
+real (Ollama local) persistiu legendas aprovadas pela Policy, Speech v5
+classificou narração PT-BR (RVC Melody elegível), fala em espanhol e música
+instrumental; Studio gerou três MP4. O Hub real capturou payloads dry-run para
+os tópicos `228`, `1160` e `1327`, com vídeo, legenda, afiliado e grupo
+`-1004341972306`. Todos terminaram recuperáveis em `PUBLISHING`, sem recibos.
+O limite atribuiu exatamente três IDs. Não houve download, consulta Shopee nem
+envio. A retomada das falhas de preflight de Speech/Studio reutilizou as
+legendas e manteve uma tentativa IA por item.
+
+O ensaio encontrou duas lacunas corrigidas antes da execução final: itens com
+aprovação Vision persistida mas sem `ia_context_json` agora usam um contexto
+mínimo recuperável derivado somente de `affiliate_name`, sem reconsultar Vision
+ou inventar identidade; e a Policy compara frases do produto após remover
+palavras de ligação, impedindo que uma legenda copie o título com “de/para”.
+Quando todas as candidatas são rejeitadas, o ArmoredIA faz uma única tentativa
+adicional por padrão (`ARMORED_IA_POLICY_RETRIES=1`, configurável de 0 a 2),
+inclui os motivos da Policy no pedido real ao provider e persiste as avaliações
+de ambas as rodadas. Se continuar sem legenda válida, o item permanece em
+`RECOVERY` e o Hub não é chamado.
+
+Evidências locais da campanha, não versionadas no Git: `armored-real-three-source-batch-v4-result.json`,
+`armored-real-safe-e2e-392-result.json`, `armored-real-safe-e2e-392-resume.json`,
+`armored-real-telegram-sync-discovery.json` e `operational-preflight-final.json`.
+O preflight operacional passou com Python 3.11.9, imports/assets/rotas e cópia
+SQLite íntegra; registrou explicitamente rede desligada, Telegram desconectado,
+Shopee não consultada e publicação desabilitada.
+
 Consultas reais Shopee permanecem bloqueadas sem
 `ARMORED_SHOPEE_QUERIES_AUTHORIZED=1`, ID de orçamento, limite entre 1 e 1000,
 evidência de autorização e validade ISO-8601 com fuso horário. O ledger de quota

@@ -144,7 +144,7 @@ def test_caption_ranks_all_valid_candidates_and_keeps_one_provider_call(monkeypa
     assert result.evaluations[1].score > result.evaluations[0].score
 
 
-def test_all_policy_rejections_are_one_request_then_recovery(monkeypatch):
+def test_all_policy_rejections_retry_once_then_recovery(monkeypatch):
     monkeypatch.setenv("ARMORED_IA_CAPTION_ENABLED", "1")
 
     class Provider:
@@ -164,11 +164,12 @@ def test_all_policy_rejections_are_one_request_then_recovery(monkeypatch):
             "productName": "Batom Matte Vermelho",
         })
 
-    assert provider.calls == 1
+    assert provider.calls == 2
 
 
 def test_provider_retries_transport_but_not_policy(monkeypatch):
     monkeypatch.setenv("ARMORED_IA_CAPTION_ENABLED", "1")
+    monkeypatch.setenv("ARMORED_IA_POLICY_RETRIES", "0")
     monkeypatch.setenv("GEMINI_API_KEY", "configured")
     monkeypatch.setenv("ARMORED_IA_MAX_ATTEMPTS", "3")
     monkeypatch.setenv("ARMORED_IA_RETRY_DELAY", "0")
@@ -247,6 +248,14 @@ def test_policy_removes_compound_and_presentation_emojis(emoji):
 def test_policy_rejects_malformed_hashtags_extra_text_and_corrupted_unicode(caption):
     with pytest.raises(CaptionPolicyError):
         validate_caption(caption, product_name="Organizador")
+
+
+def test_policy_detects_distinctive_phrase_when_title_stopwords_are_present():
+    with pytest.raises(CaptionPolicyError, match="expressão distintiva"):
+        validate_caption(
+            "Descascador de Legumes\n#cozinha",
+            product_name="Descascador de Legumes Apontador",
+        )
 
 
 def test_policy_deduplicates_repeated_candidate_hashtags_and_emoji():

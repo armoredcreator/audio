@@ -284,7 +284,24 @@ class Pipeline:
                 if self.ia is None:
                     raise RuntimeError("armored-ia-service-not-configured")
                 if not item.ia_context:
-                    raise RuntimeError("armored-ia-context-missing")
+                    # Older, already-approved rows can predate durable Vision
+                    # context persistence. Rebuild only the minimum caption
+                    # context from the stored approval; never rerun Vision or
+                    # resolve a product through Shopee as a recovery shortcut.
+                    approved_name = str(item.affiliate_name or "").strip()
+                    if item.affiliate_url and approved_name:
+                        fallback_context = {"productName": approved_name}
+                        self.db.set_ia_context(item_id, fallback_context)
+                        item = self.db.get(item_id)
+                        self.trace.emit(
+                            item_id,
+                            "IA",
+                            "CONTEXT_RECOVERED",
+                            source="persisted_vision_approval",
+                            fields=sorted(fallback_context),
+                        )
+                    if not item.ia_context:
+                        raise RuntimeError("armored-ia-context-missing")
                 configuration = getattr(self.ia, "provider_configuration", None)
                 provider_metadata = configuration() if callable(configuration) else {"provider": "custom", "model": None}
                 self.trace.emit(item_id, "IA", "CONFIGURED", **provider_metadata)
