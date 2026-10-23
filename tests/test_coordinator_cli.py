@@ -1,9 +1,28 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 from armored_core.cli import main
 from armored_core.coordinator import Coordinator
+
+
+def test_windows_cp1252_help_does_not_crash():
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "cp1252"
+    result = subprocess.run(
+        [sys.executable, "run_coordinator.py", "--help"],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="cp1252",
+        timeout=10,
+    )
+    assert result.returncode == 0
+    assert "CATCH-UP -> LIVE" in result.stdout
 
 
 def _three_routes(monkeypatch):

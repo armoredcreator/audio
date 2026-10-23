@@ -14,10 +14,11 @@ def _expiry() -> str:
 
 def test_query_budget_is_durable_and_stops_at_authorized_limit(tmp_path: Path):
     path = tmp_path / "budget.sqlite3"
+    expiry = _expiry()
     first = ShopeeQueryBudget(path)
     assert first.consume(
         budget_id="first-start", request_limit=1, evidence="operator-approved-quota",
-        valid_until=_expiry(),
+        valid_until=expiry,
     ) == 1
     first.close()
 
@@ -25,7 +26,7 @@ def test_query_budget_is_durable_and_stops_at_authorized_limit(tmp_path: Path):
     with pytest.raises(QueryBudgetError, match="exhausted"):
         resumed.consume(
             budget_id="first-start", request_limit=1, evidence="operator-approved-quota",
-            valid_until=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+            valid_until=expiry,
         )
     resumed.close()
 

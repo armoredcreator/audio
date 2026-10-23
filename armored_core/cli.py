@@ -35,7 +35,7 @@ def _validate_routes(routes: tuple[RouteConfig, ...]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="armoredcreator",
-        description="Coordinator com lote limitado ou operação contínua CATCH-UP → LIVE sob orçamento diário persistente.",
+        description="Coordinator com lote limitado ou operação contínua CATCH-UP -> LIVE sob orçamento diário persistente.",
     )
     parser.add_argument("--root", type=Path, default=project_root(), help="raiz isolada do projeto e do storage")
     mode = parser.add_mutually_exclusive_group(required=True)
