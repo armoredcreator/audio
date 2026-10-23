@@ -47,7 +47,10 @@ if "%~1"=="" (
 )
 
 set "RUN_REQUESTED=0"
-for %%A in (%*) do if /I "%%~A"=="--run" set "RUN_REQUESTED=1"
+for %%A in (%*) do (
+  if /I "%%~A"=="--run" set "RUN_REQUESTED=1"
+  if /I "%%~A"=="--continuous" set "RUN_REQUESTED=1"
+)
 
 if "%RUN_REQUESTED%"=="0" (
   echo [3/4] Validando configuracao sem iniciar o Bot API ou o Coordinator...
