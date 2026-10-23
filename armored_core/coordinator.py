@@ -12,6 +12,7 @@ from typing import Any
 from dotenv import load_dotenv
 
 from .database import Database
+from .catch_up_budget import DurableCatchUpBudget
 from .models import State
 from .pipeline import Pipeline
 from .recovery import Recovery
@@ -24,7 +25,7 @@ from .routing import load_routes
 class Coordinator:
     """Single composition root for the isolated ArmoredCreator pipeline."""
 
-    def __init__(self, db, storage, vision, studio, publisher, source=None, ia=None):
+    def __init__(self, db, storage, vision, studio, publisher, source=None, ia=None, catch_up_budget=None):
         self.db = db
         self.log = logging.getLogger(__name__)
         self.storage = storage
@@ -38,8 +39,49 @@ class Coordinator:
         self.source = source
         self._runtime_lock_held = False
         self._last_catch_up_completed_count = 0
+        self.catch_up_budget = catch_up_budget
         self._shutdown_requested = False
         self.pipeline.set_shutdown_checker(lambda: self._shutdown_requested)
+
+    def _catch_up_candidate_ids(self) -> list[str]:
+        """Stable ordered union of durable rows eligible for this run's stages."""
+        candidates = {}
+        for item in (
+            self.db.pending_vision_candidates()
+            + self.db.catch_up_production_items()
+            + self.db.pre_download_recovery_items()
+            + self.db.vision_approved_interrupted_items()
+        ):
+            candidates[str(item.content_id)] = item
+        failed = self.db.conn.execute(
+            "SELECT content_id FROM items WHERE state=? ORDER BY created_at,content_id",
+            (State.FAILED.value,),
+        ).fetchall()
+        for row in failed:
+            item_id = str(row["content_id"])
+            candidates[item_id] = self.db.get(item_id)
+        sources = [
+            str(route.source_id)
+            for route in getattr(self.source, "sources", ())
+            if getattr(route, "source_id", None) is not None
+        ]
+        rank = {source_id: index for index, source_id in enumerate(sources)}
+        ordered = sorted(
+            candidates.values(),
+            key=lambda item: (
+                rank.get(str(item.source_id), len(rank)),
+                int(item.telegram_message_id)
+                if str(item.telegram_message_id).isdigit() else 0,
+                str(item.content_id),
+            ),
+        )
+        return [str(item.content_id) for item in ordered]
+
+    def _prepare_catch_up_budget(self) -> set[str] | None:
+        if self.catch_up_budget is None:
+            return None
+        self.catch_up_budget.claim(self._catch_up_candidate_ids())
+        return self.catch_up_budget.assigned_ids()
 
     @classmethod
     def build(
@@ -50,6 +92,8 @@ class Coordinator:
         acquire_runtime_lock: bool = False,
         staged: bool = False,
         allow_real_publication: bool | None = None,
+        catch_up_run_id: str | None = None,
+        max_catch_up_items: int | None = None,
     ):
         storage = Storage(root)
         # Project-local credential source of truth.
@@ -94,8 +138,18 @@ class Coordinator:
                 runtime_lock_acquired = True
                 db.initialize()
 
+            if (catch_up_run_id is None) != (max_catch_up_items is None):
+                raise ValueError("catch-up run ID and item limit must be supplied together")
+
             def make_coordinator(vision, studio, publisher, source, ia=None):
-                coordinator = cls(db, storage, vision, studio, publisher, source, ia)
+                budget = None
+                if catch_up_run_id is not None:
+                    budget = DurableCatchUpBudget(
+                        storage.database / "catch-up-work-budget.sqlite3",
+                        catch_up_run_id,
+                        int(max_catch_up_items),
+                    )
+                coordinator = cls(db, storage, vision, studio, publisher, source, ia, budget)
                 coordinator._runtime_lock_held = runtime_lock_acquired
                 return coordinator
 
@@ -515,9 +569,12 @@ class Coordinator:
         source = self.source
         processed: list[str] = []
         checkpoint_blocked = False
+        allowed_ids = self._prepare_catch_up_budget()
 
         # Repair interrupted pre-download state before Vision retries.
         for item in self.db.pre_download_recovery_items():
+            if allowed_ids is not None and str(item.content_id) not in allowed_ids:
+                continue
             target = (
                 State.RECEIVED
                 if str(item.affiliate_url or "").strip()
@@ -529,6 +586,8 @@ class Coordinator:
                 "catch-up-repaired-recovery-without-original",
             )
         for item in self.db.vision_approved_interrupted_items():
+            if allowed_ids is not None and str(item.content_id) not in allowed_ids:
+                continue
             self.db.transition(
                 item.content_id,
                 State.RECEIVED,
@@ -537,46 +596,67 @@ class Coordinator:
 
         # Stage 1: discover/reserve candidates from all configured sources.
         # Do not download media while any source is still scanning.
-        iterator = source.iter_historical_candidates_async()
+        remaining = self.catch_up_budget.remaining if self.catch_up_budget else None
+        if remaining is not None and remaining > 0:
+            limit_setter = getattr(source, "set_run_candidate_limit", None)
+            if callable(limit_setter):
+                limit_setter(remaining)
+        iterator = (
+            source.iter_historical_candidates_async()
+            if remaining is None or remaining > 0
+            else None
+        )
         try:
-            async for message in iterator:
-                source_id = str(getattr(message, "source_id", "telegram") or "telegram")
-                item_id = str(self.db.content_id_for(
-                    str(message.telegram_message_id), source_id
-                ))
-                try:
-                    ingest = IngestMessage(
-                        telegram_message_id=str(message.telegram_message_id),
-                        source_id=source_id,
-                        topic_id=getattr(message, "topic_id", None),
-                        topic_name=getattr(message, "topic_name", None),
-                        original_url=getattr(message, "original_url", None),
-                        source_path=getattr(message, "source_path", None),
-                        materialize=getattr(message, "materialize", None),
-                    )
-                    item_id = str(self.sync.reserve_message(ingest))
-                    marker = getattr(source, "mark_ingested", None)
-                    if marker is not None:
-                        marker(str(message.telegram_message_id))
-                    processed.append(item_id)
-                except Exception as exc:
-                    checkpoint_blocked = True
-                    marker = getattr(source, "mark_materialization_failed", None)
-                    if marker is not None:
-                        marker()
-                    self.log.exception(
-                        "[COORDINATOR][CATCH-UP][RESERVE] %s failed; "
-                        "historical checkpoint remains blocked: %s",
-                        item_id, exc,
-                    )
-                    break
+            if iterator is not None:
+                async for message in iterator:
+                    source_id = str(getattr(message, "source_id", "telegram") or "telegram")
+                    item_id = str(self.db.content_id_for(
+                        str(message.telegram_message_id), source_id
+                    ))
+                    try:
+                        ingest = IngestMessage(
+                            telegram_message_id=str(message.telegram_message_id),
+                            source_id=source_id,
+                            topic_id=getattr(message, "topic_id", None),
+                            topic_name=getattr(message, "topic_name", None),
+                            original_url=getattr(message, "original_url", None),
+                            source_path=getattr(message, "source_path", None),
+                            materialize=getattr(message, "materialize", None),
+                        )
+                        item_id = str(self.sync.reserve_message(ingest))
+                        if self.catch_up_budget is not None:
+                            newly_claimed = self.catch_up_budget.claim((item_id,))
+                            if item_id not in newly_claimed:
+                                raise RuntimeError("catch-up-budget-reservation-exceeded")
+                            allowed_ids.add(item_id)
+                        marker = getattr(source, "mark_ingested", None)
+                        if marker is not None:
+                            marker(str(message.telegram_message_id))
+                        processed.append(item_id)
+                    except Exception as exc:
+                        checkpoint_blocked = True
+                        marker = getattr(source, "mark_materialization_failed", None)
+                        if marker is not None:
+                            marker()
+                        self.log.exception(
+                            "[COORDINATOR][CATCH-UP][RESERVE] %s failed; "
+                            "historical checkpoint remains blocked: %s",
+                            item_id, exc,
+                        )
+                        break
         finally:
             await self._release_source_connection()
 
         # Stage 2: classify all durable candidates that still need Vision.
         # This includes VISION rows left by an interrupted run. WAITING_VISION
         # rows remain durable and are retried only by the explicit retry policy.
-        for item in self.db.pending_vision_candidates():
+        vision_candidates = self.db.pending_vision_candidates()
+        if allowed_ids is not None:
+            vision_candidates = [
+                item for item in vision_candidates
+                if str(item.content_id) in allowed_ids
+            ]
+        for item in vision_candidates:
             try:
                 self.pipeline.run(item.content_id, stop_after_vision=True)
                 current = self.db.get(item.content_id)
@@ -597,6 +677,7 @@ class Coordinator:
             item
             for item in self.db.pending_vision_candidates()
             if item.state != State.WAITING_VISION
+            and (allowed_ids is None or str(item.content_id) in allowed_ids)
         ]
         if vision_failures:
             checkpoint_blocked = True
@@ -620,7 +701,12 @@ class Coordinator:
         # publication from this catch-up run.
         from ArmoredStock.service import ArmoredStock
 
-        stock_report = await ArmoredStock(self).run()
+        stock = ArmoredStock(self)
+        stock_report = (
+            await stock.run(content_ids=tuple(allowed_ids))
+            if allowed_ids is not None
+            else await stock.run()
+        )
         stock_errors = list(stock_report.get("errors", []))
         stock_remaining = int(
             stock_report.get("outcomes", {}).get("approved_missing_original", 0)
@@ -656,6 +742,8 @@ class Coordinator:
         hub_pause_requested = threading.Event()
         hub_paused = threading.Event()
         if (
+            self.catch_up_budget is None
+            and
             callable(live_fetch)
             and callable(live_commit)
             and callable(commit_discovered)
@@ -701,6 +789,11 @@ class Coordinator:
         production_seen: set[str] = set()
         while not checkpoint_blocked:
             production_items = self.db.catch_up_production_items()
+            if allowed_ids is not None:
+                production_items = [
+                    item for item in production_items
+                    if str(item.content_id) in allowed_ids
+                ]
             if not configured_sources:
                 configured_sources = sorted(
                     {item.source_id for item in production_items}
@@ -878,7 +971,12 @@ class Coordinator:
                 # Drain any approvals discovered during the previous production
                 # batch as one Stock batch. Studio will not start for these
                 # candidates until all of their originals exist.
-                stock_report = await ArmoredStock(self).run()
+                stock = ArmoredStock(self)
+                stock_report = (
+                    await stock.run(content_ids=tuple(allowed_ids))
+                    if allowed_ids is not None
+                    else await stock.run()
+                )
                 stock_errors = list(stock_report.get("errors", []))
                 stock_remaining = int(
                     stock_report.get("outcomes", {}).get(
@@ -899,6 +997,7 @@ class Coordinator:
                     candidate
                     for candidate in self.db.catch_up_production_items()
                     if candidate.content_id not in production_seen
+                    and (allowed_ids is None or str(candidate.content_id) in allowed_ids)
                     and candidate.original_path.is_file()
                 ]
                 if ready_unseen:
@@ -1555,7 +1654,19 @@ class Coordinator:
         # canonical storage and reconciles ambiguous publications before Sync
         # opens its Telegram session. It never downloads or publishes.
         self.startup_reconciler.run()
+        self._prepare_catch_up_budget()
         self.recover_pending()
+
+        if self.catch_up_budget is not None:
+            import logging
+            logging.getLogger(__name__).info(
+                "[COORDINATOR][CATCH-UP] execução limitada run_id=%s limit=%s assigned=%s; LIVE fica para uma execução posterior",
+                self.catch_up_budget.run_id,
+                self.catch_up_budget.limit,
+                self.catch_up_budget.assigned_count,
+            )
+            await self._run_catch_up_with_recovery_async()
+            return
 
         source_complete = (
             self.source.is_historical_complete()
@@ -2149,8 +2260,12 @@ class Coordinator:
 
     def close(self) -> None:
         try:
-            if self._runtime_lock_held:
-                self.db.release_runtime_lock("coordinator")
+            try:
+                if self.catch_up_budget is not None:
+                    self.catch_up_budget.close()
+            finally:
+                if self._runtime_lock_held:
+                    self.db.release_runtime_lock("coordinator")
         finally:
             self._runtime_lock_held = False
             self.db.close()
@@ -2163,6 +2278,7 @@ class Coordinator:
         return item_id
 
     def recover_pending(self):
+        allowed_ids = self._prepare_catch_up_budget()
         states = (
             State.RECEIVED.value, State.VISION.value, State.IA.value,
             State.SPEECH.value, State.STUDIO_BATCH.value, State.STUDIO.value,
@@ -2178,6 +2294,17 @@ class Coordinator:
         recovered = []
         for row in rows:
             item_id = str(row["content_id"])
+            if allowed_ids is not None and item_id not in allowed_ids:
+                continue
+            if (
+                str(row["state"]) == State.PUBLISHING.value
+                and self.db.publication(item_id) is None
+                and self._has_speech_studio_v5_completion(item_id)
+            ):
+                # A prior bounded run reached the durable publication barrier.
+                # Preserve the validated payload for a later explicitly
+                # authorized send; do not rebuild Speech/Studio on resume.
+                continue
 
             # FAILED is a legacy terminal state from the previous
             # generic-exception path. Current processing failures are persisted

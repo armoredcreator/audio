@@ -11,7 +11,11 @@ from urllib.parse import urlparse
 from armored_core.database import Database
 from armored_core.models import Item, PublicationCheck, State
 from armored_core.integrity import sha256_file
-from armored_core.services import PublicationResult, PublicationUnknownError
+from armored_core.services import (
+    PublicationDeferredError,
+    PublicationResult,
+    PublicationUnknownError,
+)
 from armored_core.republication_ledger import VersionedPublicationLedger
 from armored_core.telegram_session import telegram_session_basename
 from ArmoredIA.caption.policy import CaptionPolicyError, validate_caption
@@ -183,8 +187,6 @@ class ArmoredHub:
         return PublicationCheck.UNKNOWN
 
     def _validate_publication_input(self, item: Item) -> None:
-        if os.getenv("ARMORED_HUB_DRY_RUN", "0") == "1":
-            raise RuntimeError("ARMORED_HUB_DRY_RUN=1: publication and verification are disabled")
         if self.db is None:
             raise RuntimeError("ArmoredHub exige Database para publicação idempotente")
         current = self.db.get(item.content_id)
@@ -213,6 +215,10 @@ class ArmoredHub:
         self._validate_publication_input(item)
         if self.db is None:
             raise RuntimeError("ArmoredHub exige Database para publicação idempotente")
+        if os.getenv("ARMORED_HUB_DRY_RUN", "0") == "1":
+            raise PublicationDeferredError(
+                "ARMORED_HUB_DRY_RUN=1: vídeo validado e publicação adiada sem recibo"
+            )
 
         existing = self._publication(item)
         if existing is None:
@@ -908,6 +914,10 @@ class ArmoredHub:
         self._validate_publication_input(item)
         if self.db is None:
             raise RuntimeError("ArmoredHub exige Database para publicação idempotente")
+        if os.getenv("ARMORED_HUB_DRY_RUN", "0") == "1":
+            raise PublicationDeferredError(
+                "ARMORED_HUB_DRY_RUN=1: vídeo validado e publicação adiada sem recibo"
+            )
 
         existing = self.db.publication(item.item_id)
         if existing and existing["confirmed"]:
@@ -919,12 +929,6 @@ class ArmoredHub:
         output = Path(item.result_path or "")
         if not output.is_file() or output.stat().st_size <= 0:
             raise RuntimeError("Hub recebeu resultado inexistente/vazio")
-
-        if os.getenv("ARMORED_HUB_DRY_RUN", "0") == "1":
-            raise RuntimeError(
-                "ARMORED_HUB_DRY_RUN=1: publicação real bloqueada; "
-                "nenhum item pode ser marcado como PUBLISHED"
-            )
 
         return self._publish_telegram(item, output)
 

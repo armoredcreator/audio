@@ -186,7 +186,9 @@ class ArmoredStock:
             log.error("[ARMOREDSTOCK] Falha item=%s: %s", item.content_id, exc)
             raise
 
-    async def run(self) -> dict[str, Any]:
+    async def run(
+        self, *, content_ids: tuple[str, ...] | list[str] | None = None
+    ) -> dict[str, Any]:
         """Compatibility entry point: materialize eligible originals sequentially."""
         coordinator = self.coordinator
         source = coordinator.source
@@ -197,9 +199,19 @@ class ArmoredStock:
                 "ArmoredStock exige exatamente três fontes configuradas em credentials/project.env"
             )
 
-        pending_vision = coordinator.db.pending_vision_candidates()
-        interrupted_approved = coordinator.db.vision_approved_interrupted_items()
-        invalid_recovery = coordinator.db.pre_download_recovery_items()
+        allowed = None if content_ids is None else {str(value) for value in content_ids}
+        pending_vision = [
+            item for item in coordinator.db.pending_vision_candidates()
+            if allowed is None or str(item.content_id) in allowed
+        ]
+        interrupted_approved = [
+            item for item in coordinator.db.vision_approved_interrupted_items()
+            if allowed is None or str(item.content_id) in allowed
+        ]
+        invalid_recovery = [
+            item for item in coordinator.db.pre_download_recovery_items()
+            if allowed is None or str(item.content_id) in allowed
+        ]
         if pending_vision or interrupted_approved or invalid_recovery:
             raise RuntimeError(
                 "ArmoredStock bloqueado: Vision ainda tem candidatos sem decisão "
@@ -214,6 +226,8 @@ class ArmoredStock:
         downloaded = 0
         skipped_existing_original = 0
         candidates = self._ordered(coordinator.db.pending_vision_approved_items())
+        if allowed is not None:
+            candidates = [item for item in candidates if str(item.content_id) in allowed]
 
         for item in candidates:
             if item.state != State.RECEIVED or not str(item.affiliate_url or "").strip():
@@ -241,7 +255,8 @@ class ArmoredStock:
         remaining = sum(
             1
             for candidate in coordinator.db.pending_vision_approved_items()
-            if candidate.state == State.RECEIVED
+            if (allowed is None or str(candidate.content_id) in allowed)
+            and candidate.state == State.RECEIVED
             and str(candidate.affiliate_url or "").strip()
             and not candidate.original_path.is_file()
         )

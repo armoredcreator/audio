@@ -35,17 +35,19 @@ def _validate_routes(routes: tuple[RouteConfig, ...]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="armoredcreator",
-        description="Inicialização do Coordinator com CATCH-UP durável seguido de LIVE.",
+        description="Execução bounded do Coordinator com orçamento persistente; LIVE exige outra execução autorizada.",
     )
     parser.add_argument("--root", type=Path, default=project_root(), help="raiz isolada do projeto e do storage")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--validate-config", action="store_true", help="validar configuração sem abrir banco ou Telegram")
     mode.add_argument("--preflight", action="store_true", help="verificar composição real e SQLite clonado sem I/O externo")
-    mode.add_argument("--run", action="store_true", help="iniciar Coordinator e concluir CATCH-UP antes de LIVE")
+    mode.add_argument("--run", action="store_true", help="executar um lote limitado e encerrar sem entrar em LIVE")
     parser.add_argument("--evidence", type=Path, help="caminho do relatório JSON exigido por --preflight")
     parser.add_argument("--publish", action="store_true", help="abrir publicação real no Hub; sem esta opção o envio fica em dry-run")
     parser.add_argument("--poll-seconds", type=float, default=2.0)
     parser.add_argument("--max-live-cycles", type=int, help="limite opcional de ciclos LIVE após o CATCH-UP")
+    parser.add_argument("--catch-up-run-id", help="ID estável para retomar o mesmo lote após interrupção")
+    parser.add_argument("--max-catch-up-items", type=int, help="limite global durável de itens do lote; 1 a 1000")
     args = parser.parse_args(argv)
 
     root = args.root.expanduser().resolve()
@@ -55,6 +57,15 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--poll-seconds deve ser maior que zero")
     if args.max_live_cycles is not None and args.max_live_cycles < 1:
         parser.error("--max-live-cycles deve ser positivo")
+    if args.run:
+        if not args.catch_up_run_id or args.max_catch_up_items is None:
+            parser.error("--run exige --catch-up-run-id e --max-catch-up-items; a execução é sempre limitada")
+        if not 1 <= args.max_catch_up_items <= 1000:
+            parser.error("--max-catch-up-items deve estar entre 1 e 1000")
+        if args.max_live_cycles is not None:
+            parser.error("execuções com orçamento durável encerram após o lote e não aceitam --max-live-cycles")
+    elif args.catch_up_run_id is not None or args.max_catch_up_items is not None:
+        parser.error("--catch-up-run-id e --max-catch-up-items só podem ser usados com --run")
     if args.preflight and args.evidence is None:
         parser.error("--evidence é obrigatório com --preflight")
     if args.evidence is not None and not args.preflight:
@@ -90,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
             root,
             acquire_runtime_lock=True,
             allow_real_publication=bool(args.publish),
+            catch_up_run_id=args.catch_up_run_id,
+            max_catch_up_items=args.max_catch_up_items,
         )
         try:
             logging.getLogger(__name__).info(

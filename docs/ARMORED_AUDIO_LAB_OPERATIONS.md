@@ -64,47 +64,61 @@ cursor `12043` foi gravado somente no clone; a cópia operacional permanece no
 cursor `12042`, com os três `historical_complete=0` e os 48 checkpoints
 preservados.
 
-A barreira do Hub foi exercitada pelo Coordinator com um item já renderizado em
-clone e `ARMORED_HUB_DRY_RUN=1`. O Bot API não foi chamado, não foi criado recibo
-de publicação, Speech/Studio v5 e arquivos permaneceram intactos e o checkpoint
-ficou parado. O item terminou em `RECOVERY` porque a exceção de bloqueio do Hub
-é tratada como falha recuperável. A barreira interrompe o lote: não confirma o
-item como `PUBLISHED` nem permite avanço do checkpoint. **Esse modo não é uma
-execução completa:** Sync, Vision, Stock, IA, Speech e Studio podem trabalhar
-antes de a primeira publicação chegar ao Hub.
+A barreira do Hub foi corrigida no candidato. Em clone, o Coordinator verdadeiro
+processou um lote pequeno, validou o payload no Hub real e, com
+`ARMORED_HUB_DRY_RUN=1`, deixou o item em `PUBLISHING`, sem recibo, sem chamada
+ao Bot API e sem avanço do checkpoint. A retomada com o mesmo ID preservou o
+render v5; com o gate de envio aberto apenas no teste isolado, a execução retomou
+no Hub sem repetir IA/Speech/Studio. Nenhum envio real foi feito.
 
-**O START operacional continua bloqueado por segurança.** A configuração atual
-tem `ARMORED_SYNC_CATCHUP_LIMIT=0` (CATCH-UP sem limite) e
-`ARMORED_CERT_CATCHUP_THEN_LIVE=0`. O limite finito existente controla novos
-candidatos descobertos; não limita, por si só, os candidatos Vision nem os
-originais aprovados já pendentes no SQLite. O candidato agora exige autorização
-explícita e um ledger SQLite durável antes de qualquer consulta do cliente real
-Shopee; a falta de autorização bloqueia a decisão Vision sem iniciar a consulta.
-Isso protege a quota, mas não limita por si só o número de itens, downloads ou
-renders do CATCH-UP. Assim, nem `--max-live-cycles` nem a ausência de
-`--publish` constituem limite de CATCH-UP ou de trabalho persistido. **Não
-iniciar ainda:** falta um limite de lote que cubra o trabalho persistido e
-preserve a retomada/checkpoints sem declarar histórico concluído. A instalação
-operacional ainda não recebeu o novo gate da Vision; ele está apenas no
-candidato da PR até passar CI e a validação de instalação. A configuração de
-quota exige `ARMORED_SHOPEE_QUERIES_AUTHORIZED=1`, identificador de orçamento,
-limite inteiro entre 1 e 1000, evidência de autorização e validade ISO-8601 com
-fuso; o consumo é persistente e a mesma chave não pode ser reconfigurada. A
-publicação segue bloqueada sem autorização separada.
+O `--run` da CLI agora exige `--catch-up-run-id` e `--max-catch-up-items` de 1 a
+1000. Um ledger SQLite separado e durável fixa a allowlist global do lote,
+incluindo itens históricos elegíveis existentes e novas reservas do Sync.
+Cada `content_id` consome no máximo uma vaga na execução inteira; nenhuma etapa
+reinicia o orçamento. Vision, Stock, recuperação, IA, Speech, Studio e Hub
+recebem somente IDs dessa allowlist. Repetir o mesmo ID e limite retoma o mesmo
+lote; um novo ID autoriza o lote seguinte e conta de novo qualquer item que
+continue pendente. A execução limitada encerra ao fim do lote e não entra em
+LIVE. O limite encerra a leitura sem confirmar cursores parciais nem forçar
+`historical_complete`; as mensagens restantes continuam disponíveis para a
+próxima execução. O teste integrado do Coordinator comprovou limite 2 abrangendo
+um aprovado histórico e um novo, terceiro item intocado, reinício idempotente,
+e orçamento não reiniciado entre etapas.
 
-As árvores operacional e da PR foram comparadas por SHA-256 para launcher,
-CLI, Coordinator, Sync, Hub, ledger de republicação, Vision, IA, Stock, Studio,
-Speech e helper do Bot API. Após integrar Hub e ledger, esses arquivos de runtime
-estão byte a byte iguais. O ajuste adicionou a validação obrigatória da Policy
-ArmoredIA ao Hub e preservou captions/recibos históricos somente para
-verificação. Os testes afetados foram atualizados para usar legendas canônicas;
-63 testes focais passaram. O gate de orçamento acrescentou 27 testes focais
-aprovados, cobrindo falha fechada e consumo durável. A regressão completa aceita
-anteriormente não foi repetida.
+Com `--run` sem `--publish`, o Hub real valida integridade, legenda e destino,
+mas adia o envio antes de consultar o Bot API ou criar recibo. O item renderizado
+permanece em `PUBLISHING`, com evidência v5 e arquivo de resultado persistidos;
+ele não é marcado `PUBLISHED`. A retomada do mesmo lote reutiliza esse resultado
+e volta à barreira do Hub sem repetir IA, Speech, RVC ou Studio. Uma autorização
+independente de publicação é necessária para atravessar a barreira.
 
-Esta seção atualiza a fotografia histórica das seções seguintes. O candidato
-parte de `31a14614dc026ec846d3e64831a36e3971ea688a`; testes devem permanecer
-vinculados ao commit/árvore em que foram executados.
+**A instalação operacional ainda não está pronta para START:** o ambiente de
+produção permanece em `ARMORED_SYNC_CATCHUP_LIMIT=0` e não contém este controle
+global. O código candidato foi testado e enviado à PR, mas precisa concluir CI e
+ser promovido/verificado no diretório operacional antes do primeiro uso. O
+comando limitado planejado, depois dessa promoção e aprovação, é
+`START_ALL.bat --run --catch-up-run-id lote-001 --max-catch-up-items 3`; não
+inclui `--publish`, portanto só prepara/retoma o lote e para na barreira do Hub.
+Usar outro ID inicia outro orçamento; para retomar após interrupção, repetir o
+mesmo ID e o mesmo limite.
+
+Consultas reais Shopee permanecem bloqueadas sem
+`ARMORED_SHOPEE_QUERIES_AUTHORIZED=1`, ID de orçamento, limite entre 1 e 1000,
+evidência de autorização e validade ISO-8601 com fuso horário. O ledger de quota
+é persistente, consome a vaga antes da chamada e não permite reconfigurar a
+mesma chave. Publicação real exige `--publish` separadamente. Os 12 vídeos v3 e
+a origem 1040/recibo 1339 seguem excluídos.
+
+As árvores operacional e da PR eram iguais antes desta rodada; o candidato desta
+rodada acrescenta o orçamento de quota Shopee, o orçamento global do Coordinator,
+limites no Sync/Stock e a barreira de deferimento Hub. Não foi copiado para
+produção. Os testes focais e integrados da implementação limitada passaram; o
+CI desta cabeça deve ser confirmado antes da promoção. A regressão integral
+anterior não foi repetida por rotina.
+
+Esta seção atualiza a fotografia histórica das seções seguintes. A fotografia
+de commits abaixo refere-se à rodada anterior; os resultados desta alteração
+devem ser vinculados ao novo commit da branch da PR após a regressão e o CI.
 
 - **Python 3.11.9 unificado:** ambiente isolado corrigido e uma segunda
   instalação limpa passaram em `pip check`, imports e inferência Melody curta.

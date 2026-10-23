@@ -5,7 +5,16 @@ import os
 import shutil
 from .database import Database
 from .models import PublicationCheck, State
-from .services import AIService, Publisher, StudioService, VisionService, VisionDuplicateError, VisionUnresolvedError, PublicationUnknownError
+from .services import (
+    AIService,
+    Publisher,
+    StudioService,
+    VisionService,
+    VisionDuplicateError,
+    VisionUnresolvedError,
+    PublicationDeferredError,
+    PublicationUnknownError,
+)
 from .storage import Storage
 from .trace import PipelineTrace
 
@@ -372,6 +381,12 @@ class Pipeline:
                     if callable(publish_once):
                         try:
                             result = publish_once(item)
+                        except PublicationDeferredError as exc:
+                            self.trace.emit(
+                                item_id, "HUB", "DEFERRED", reason=str(exc),
+                                state=item.state.value,
+                            )
+                            return
                         except PublicationUnknownError as exc:
                             self.db.transition(item_id, State.RECOVERY, str(exc))
                             self.trace.emit(item_id, "HUB", "UNKNOWN", reason=str(exc), new_state=State.RECOVERY.value)

@@ -163,6 +163,7 @@ class TelegramSource:
         self._historical_complete = False
         self._historical_checkpoints: dict[int, int] = {}
         self._historical_limit = self._read_historical_limit()
+        self._configured_historical_limit = self._historical_limit
         self._historical_candidates_emitted = 0
         self._historical_limit_reached = False
         self._historical_materialization_failed = False
@@ -248,6 +249,34 @@ class TelegramSource:
             )
             return True
         return False
+
+    def set_run_candidate_limit(self, limit: int) -> None:
+        """Apply the remaining Coordinator work budget to this source pass."""
+        if limit < 1:
+            raise ValueError("run candidate limit must be positive")
+        configured = getattr(self, "_configured_historical_limit", None)
+        self._historical_limit = min(limit, configured) if configured else limit
+
+    def _is_durably_reserved_without_new_link(
+        self, telegram_message_id: str, source_id: str, incoming_url: str | None
+    ) -> bool:
+        """Avoid spending a new batch slot on an already durable message.
+
+        A late-discovered Shopee URL is the exception: Sync must be allowed to
+        enrich a reservation that had no URL so Vision can make a fresh,
+        authorized decision.
+        """
+        if self.db is None:
+            return False
+        content_id = self.db.content_id_for(str(telegram_message_id), str(source_id))
+        row = self.db.conn.execute(
+            "SELECT original_url FROM items WHERE content_id=?", (content_id,)
+        ).fetchone()
+        if row is None:
+            return False
+        stored_url = str(row["original_url"] or "").strip()
+        candidate_url = str(incoming_url or "").strip()
+        return not (not stored_url and candidate_url)
 
     def mark_historical_complete(self) -> None:
         if self.db is not None:
@@ -954,6 +983,10 @@ class TelegramSource:
                 message_id, topic_id, topic_name, message, original_url = candidate
                 if message_id in self._seen:
                     continue
+                if self._is_durably_reserved_without_new_link(
+                    str(message_id), source_id, original_url
+                ):
+                    continue
                 if self._catchup_limit_before_candidate():
                     return
                 self._historical_candidates_emitted += 1
@@ -1367,6 +1400,7 @@ class MultiTelegramSource:
         self._pending_source: TelegramSource | None = None
         self._pending_message: SyncMessage | None = None
         self._pending_checkpoints: dict[int, int] = {}
+        self._run_candidate_limit: int | None = None
 
     @property
     def mode(self) -> str:
@@ -1404,16 +1438,30 @@ class MultiTelegramSource:
         stream. Each source's topic checkpoints remain pending until the
         Coordinator confirms the complete staged catch-up.
         """
+        remaining = self._run_candidate_limit
         for source in self.sources:
             if source.is_historical_complete():
                 continue
+            if remaining is not None:
+                if remaining <= 0:
+                    return
+                source.set_run_candidate_limit(remaining)
             async for message in source.iter_historical_candidates_async():
                 self._last_source = source
                 yield message
+                if remaining is not None:
+                    remaining -= 1
+                    if remaining <= 0:
+                        return
             # ARMORED_SYNC_CATCHUP_LIMIT is a global certification boundary:
             # do not start the next source after one source reaches that limit.
             if source.historical_limit_reached:
                 return
+
+    def set_run_candidate_limit(self, limit: int) -> None:
+        if limit < 1:
+            raise ValueError("run candidate limit must be positive")
+        self._run_candidate_limit = int(limit)
 
     async def materialize_candidate_async(
         self, source_id: str, telegram_message_id: str, target: Path

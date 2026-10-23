@@ -8,7 +8,7 @@ import pytest
 from ArmoredHub.service import ArmoredHub
 from armored_core.database import Database
 from armored_core.models import PublicationCheck, State
-from armored_core.services import PublicationUnknownError, SyncService
+from armored_core.services import PublicationDeferredError, PublicationUnknownError, SyncService
 from armored_core.storage import Storage
 
 
@@ -76,7 +76,7 @@ def test_disabled_hub_never_reads_telegram_or_creates_publication(prepared, monk
     item = db.get(item_id)
     assert hub.check_publication(item) is PublicationCheck.UNKNOWN
     for method in (hub.publish_once, hub.publish):
-        with pytest.raises(RuntimeError, match="disabled"):
+        with pytest.raises(PublicationDeferredError, match="adiada"):
             method(item)
     assert db.publication(item_id) is None
 

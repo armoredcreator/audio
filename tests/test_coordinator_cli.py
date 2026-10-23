@@ -39,17 +39,37 @@ def test_run_defaults_to_closed_hub_and_requires_explicit_publish_flag(tmp_path:
         def close(self):
             calls.append(("close",))
 
-    def fake_build(root, *, acquire_runtime_lock, allow_real_publication):
-        calls.append(("build", acquire_runtime_lock, allow_real_publication))
+    def fake_build(root, *, acquire_runtime_lock, allow_real_publication, catch_up_run_id, max_catch_up_items):
+        calls.append(("build", acquire_runtime_lock, allow_real_publication, catch_up_run_id, max_catch_up_items))
         return FakeCoordinator()
 
     monkeypatch.setattr(Coordinator, "build", staticmethod(fake_build))
-    assert main(["--root", str(tmp_path), "--run", "--max-live-cycles", "2"]) == 0
-    assert calls == [("build", True, False), ("run", 2.0, 2), ("close",)]
+    args = ["--root", str(tmp_path), "--run", "--catch-up-run-id", "batch-1", "--max-catch-up-items", "3"]
+    assert main(args) == 0
+    assert calls == [
+        ("build", True, False, "batch-1", 3),
+        ("run", 2.0, None),
+        ("close",),
+    ]
 
     calls.clear()
-    assert main(["--root", str(tmp_path), "--run", "--publish"]) == 0
-    assert calls[0] == ("build", True, True)
+    assert main(args + ["--publish"]) == 0
+    assert calls[0] == ("build", True, True, "batch-1", 3)
+
+
+def test_run_requires_explicit_bounded_budget_and_rejects_live_cycles(tmp_path: Path, monkeypatch):
+    _three_routes(monkeypatch)
+    import pytest
+
+    with pytest.raises(SystemExit) as missing:
+        main(["--root", str(tmp_path), "--run"])
+    assert missing.value.code == 2
+    with pytest.raises(SystemExit) as live:
+        main([
+            "--root", str(tmp_path), "--run", "--catch-up-run-id", "batch-1",
+            "--max-catch-up-items", "3", "--max-live-cycles", "1",
+        ])
+    assert live.value.code == 2
 
 
 def test_validate_config_rejects_duplicate_hub_destination(tmp_path: Path, monkeypatch, capsys):

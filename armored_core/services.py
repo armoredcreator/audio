@@ -29,6 +29,10 @@ class PublicationUnknownError(RuntimeError):
     recoverable and must never be treated as a terminal FAILED item.
     """
 
+
+class PublicationDeferredError(RuntimeError):
+    """Publication was intentionally disabled; durable media is ready to resume."""
+
 from .storage import Storage
 
 @dataclass(frozen=True)
