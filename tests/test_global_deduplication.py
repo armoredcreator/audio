@@ -256,6 +256,64 @@ def test_global_raw_url_reservation_preserves_duplicate_message_without_vision_a
     db.close()
 
 
+def test_same_url_across_three_sources_stays_duplicate_after_database_restart(tmp_path: Path):
+    path = tmp_path / "history.sqlite3"
+    url = "https://s.shopee.com.br/one-product-shared-across-three-sources"
+    db = Database(path)
+    owner = db.reserve_item("100", source_id="source1", original_url=url)
+    second = db.reserve_item("200", source_id="source2", original_url=url)
+    third = db.reserve_item("300", source_id="source3", original_url=url)
+
+    assert db.get(second).state is State.DUPLICATE
+    assert db.get(third).state is State.DUPLICATE
+    assert db.get(second).duplicate_of_content_id == owner
+    assert db.get(third).duplicate_of_content_id == owner
+    db.close()
+
+    reopened = Database(path)
+    third_again = reopened.reserve_item("300", source_id="source3", original_url=url)
+    assert third_again == third
+    assert reopened.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 3
+    assert reopened.get(third_again).state is State.DUPLICATE
+    assert reopened.get(third_again).duplicate_of_content_id == owner
+    reopened.close()
+
+
+def test_concurrent_cross_source_reservations_of_same_url_have_one_owner(tmp_path: Path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    path = tmp_path / "history.sqlite3"
+    Database(path).close()
+    barrier = Barrier(2)
+    url = "https://s.shopee.com.br/concurrent-shared-product"
+
+    def reserve(message: str, source: str) -> str:
+        db = Database(path)
+        try:
+            barrier.wait(timeout=5)
+            return db.reserve_item(message, source_id=source, original_url=url)
+        finally:
+            db.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(reserve, "101", "source1"),
+            pool.submit(reserve, "202", "source2"),
+        ]
+        identities = [future.result(timeout=10) for future in futures]
+
+    db = Database(path)
+    rows = [db.get(identity) for identity in identities]
+    assert sum(row.state is State.RECEIVED for row in rows) == 1
+    assert sum(row.state is State.DUPLICATE for row in rows) == 1
+    duplicate = next(row for row in rows if row.state is State.DUPLICATE)
+    owner = next(row for row in rows if row.state is State.RECEIVED)
+    assert duplicate.duplicate_of_content_id == owner.content_id
+    assert db.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 2
+    db.close()
+
+
 def test_canonical_claim_seeds_historical_identity_ledger_only_once(tmp_path: Path):
     db = Database(tmp_path / "history.sqlite3")
     first_context = {"shopId": "1", "itemId": "10"}
