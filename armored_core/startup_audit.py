@@ -156,7 +156,6 @@ class StartupReconciler:
                 current.state == State.FAILED
                 and publication is not None
                 and not publication["confirmed"]
-                and pub_state == "AMBIGUOUS"
                 and publication_check == "ABSENT"
             ):
                 result = current.result_path
