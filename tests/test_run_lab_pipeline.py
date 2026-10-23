@@ -264,6 +264,68 @@ def test_approved_reexecution_rejects_repeated_canonical_product(tmp_path):
         load_fixture_manifest(tmp_path, manifest)
 
 
+def test_approved_reexecution_resumes_only_an_ai_failure_without_repeating_sync_or_vision(tmp_path, monkeypatch):
+    import pytest
+
+    video = tmp_path / "published-original.mp4"
+    video.write_bytes(b"verified-published-original")
+    row = {
+        "source_id": "source1", "telegram_message_id": "12019",
+        "source_path": "published-original.mp4",
+        "expected_original_sha256": hashlib.sha256(video.read_bytes()).hexdigest(),
+        "original_url": "https://shopee.co/approved-origin-12019",
+        "source_content_id": "telegram-source_12019", "prior_publication_receipt": "1338",
+        "approved_vision": {
+            "affiliate_name": "Fixture approved product",
+            "affiliate_url": "https://affiliate.invalid/approved-12019",
+            "affiliate_urls": ["https://affiliate.invalid/approved-12019"],
+            "ia_context": {"shopId": "120", "itemId": "190"},
+        },
+    }
+    manifest = _manifest(tmp_path, [row])
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["reexecution"] = {
+        "kind": "approved_publication_reexecution",
+        "execution_id": "published-batch-resume-20261023", "version": 1,
+    }
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setenv("ARMORED_IA_ENABLED", "1")
+    monkeypatch.setenv("ARMORED_IA_CAPTION_ENABLED", "1")
+
+    class FailOnceIA(FakeIA):
+        calls = 0
+
+        def generate_caption(self, context):
+            self.calls += 1
+            if self.calls == 1:
+                from ArmoredIA.providers.base import AIProviderError
+                raise AIProviderError("temporary local generation failure")
+            return super().generate_caption(context)
+
+    class VisionMustNotRun:
+        calls = 0
+
+        def identify(self, _item):
+            self.calls += 1
+            raise AssertionError("persisted approval must be reused")
+
+    ia = FailOnceIA()
+    vision = VisionMustNotRun()
+    kwargs = dict(
+        ia_provider="ollama", require_live_preflight=False,
+        vision_factory=lambda: vision, ia_factory=lambda: ia,
+        speech_processor=FakeSpeechProcessor(), studio_runner=_studio_runner,
+    )
+    with pytest.raises(LabPipelineError, match="IA não concluiu"):
+        run_lab_pipeline(tmp_path, manifest, **kwargs)
+    report = run_lab_pipeline(tmp_path, manifest, **kwargs)
+    assert report["status"] == "SUCCESS"
+    assert report["resumption_count"] == 1
+    assert vision.calls == 0
+    assert ia.calls == 2
+    assert len(report["outputs"]) == 1
+
+
 def test_project_environment_loader_ignores_production_runtime_and_telegram_settings(tmp_path, monkeypatch):
     credentials = tmp_path / "credentials"
     credentials.mkdir()

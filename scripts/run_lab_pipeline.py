@@ -602,6 +602,25 @@ def run_lab_pipeline(
                     source_id = source_map[row["source_label"]]
                     content_id = db.content_id_for(row["telegram_message_id"], source_id)
                     current = db.get(content_id)
+                    if current.state is State.RECOVERY:
+                        event = db.last_state_event(content_id)
+                        publication = db.publication(content_id)
+                        ai_only_recovery = (
+                            event is not None
+                            and str(event["old_state"] or "") == State.IA.value
+                            and str(event["new_state"] or "") == State.RECOVERY.value
+                            and str(event["reason"] or "").startswith(("AIProviderError:", "Timeout:", "ReadTimeout:"))
+                            and publication is None
+                            and current.result_path is None
+                            and current.original_path.is_file()
+                            and _sha256(current.original_path) == row["source_sha256"]
+                        )
+                        if not ai_only_recovery:
+                            raise LabPipelineError(
+                                f"RECOVERY fora de falha IA recuperável; retomada bloqueada: {content_id}."
+                            )
+                        db.transition(content_id, State.IA, "explicit-versioned-reexecution-retry-ia-only")
+                        current = db.get(content_id)
                     if current.state is State.DUPLICATE:
                         raise LabPipelineError(f"Item da reexecução foi bloqueado como duplicata: {content_id}.")
                     if current.state is State.RECEIVED:
