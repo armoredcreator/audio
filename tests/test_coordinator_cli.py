@@ -58,3 +58,29 @@ def test_validate_config_rejects_duplicate_hub_destination(tmp_path: Path, monke
     monkeypatch.setenv("ARMORED_HUB_3_TOPIC_ID", "1")
     assert main(["--root", str(tmp_path), "--validate-config"]) == 2
     assert "destino Hub próprio" in capsys.readouterr().err
+
+
+def test_preflight_requires_evidence_path(tmp_path: Path, monkeypatch):
+    _three_routes(monkeypatch)
+    import pytest
+
+    with pytest.raises(SystemExit) as error:
+        main(["--root", str(tmp_path), "--preflight"])
+    assert error.value.code == 2
+
+
+def test_preflight_reports_safe_clone_result_without_running(tmp_path: Path, monkeypatch, capsys):
+    _three_routes(monkeypatch)
+    from armored_core.preflight import run_preflight
+
+    calls = []
+
+    def fake_preflight(root, evidence):
+        calls.append((root, evidence))
+        return {"status": "PASS"}
+
+    monkeypatch.setattr("armored_core.preflight.run_preflight", fake_preflight)
+    evidence = tmp_path / "reports" / "preflight.json"
+    assert main(["--root", str(tmp_path), "--preflight", "--evidence", str(evidence)]) == 0
+    assert calls == [(tmp_path.resolve(), evidence)]
+    assert "PREFLIGHT=PASS" in capsys.readouterr().out

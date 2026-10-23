@@ -40,7 +40,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=project_root(), help="raiz isolada do projeto e do storage")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--validate-config", action="store_true", help="validar configuração sem abrir banco ou Telegram")
+    mode.add_argument("--preflight", action="store_true", help="verificar composição real e SQLite clonado sem I/O externo")
     mode.add_argument("--run", action="store_true", help="iniciar Coordinator e concluir CATCH-UP antes de LIVE")
+    parser.add_argument("--evidence", type=Path, help="caminho do relatório JSON exigido por --preflight")
     parser.add_argument("--publish", action="store_true", help="abrir publicação real no Hub; sem esta opção o envio fica em dry-run")
     parser.add_argument("--poll-seconds", type=float, default=2.0)
     parser.add_argument("--max-live-cycles", type=int, help="limite opcional de ciclos LIVE após o CATCH-UP")
@@ -53,6 +55,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--poll-seconds deve ser maior que zero")
     if args.max_live_cycles is not None and args.max_live_cycles < 1:
         parser.error("--max-live-cycles deve ser positivo")
+    if args.preflight and args.evidence is None:
+        parser.error("--evidence é obrigatório com --preflight")
+    if args.evidence is not None and not args.preflight:
+        parser.error("--evidence só pode ser usado com --preflight")
     _load_project_configuration(root)
     try:
         routes = load_routes()
@@ -61,6 +67,13 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError("ARMORED_REAL_TELEGRAM=1 é obrigatório para o Coordinator Telegram")
         if not os.getenv("TELEGRAM_API_ID") or not os.getenv("TELEGRAM_API_HASH"):
             raise RuntimeError("TELEGRAM_API_ID e TELEGRAM_API_HASH precisam estar configurados")
+        if args.preflight:
+            from .preflight import run_preflight
+
+            report = run_preflight(root, args.evidence)
+            print(f"PREFLIGHT={report['status']}")
+            print(f"EVIDENCE={args.evidence.resolve()}")
+            return 0 if report["status"] == "PASS" else 2
         if args.validate_config:
             print("CONFIGURATION=VALID")
             print("SOURCE_COUNT=3")
