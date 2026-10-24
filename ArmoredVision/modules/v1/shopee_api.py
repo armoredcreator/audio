@@ -223,6 +223,7 @@ class ShopeeAffiliateAPI:
         # establish the mutation outcome.
         self._short_link_unknown: set[str] = set()
         self.last_response_metadata: dict[str, Any] = {}
+        self.request_authorizer = None
 
     def close(self) -> None:
         self.session.close()
@@ -285,6 +286,10 @@ class ShopeeAffiliateAPI:
         self.last_response_metadata = {}
 
         for attempt in range(1, max_attempts + 1):
+            # Charge every actual HTTP attempt, including bounded retries and
+            # short-link mutations. A cache hit never reaches this boundary.
+            if self.request_authorizer is not None:
+                self.request_authorizer(operation)
             ts = int(time.time())
             signature = hashlib.sha256(
                 f"{self.app_id}{ts}{payload}{self.secret_key}".encode()

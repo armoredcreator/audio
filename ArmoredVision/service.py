@@ -91,49 +91,55 @@ class ArmoredVision:
 
         # Real Shopee Affiliate API lookups are paid/quota-bearing. Keep the
         # default closed and require an explicit, durable operator budget.
-        # Injected API adapters remain usable for offline tests and controlled
-        # integrations; only the production client crosses this gate.
+        # Charge at the HTTP boundary so lookups, mutations, and every retry
+        # consume a slot. Injected adapters stay offline and do not cross it.
         if isinstance(api, ShopeeAffiliateAPI):
-            if (resolved.shop_id, resolved.item_id) not in getattr(api, "_product_cache", {}):
+            if os.getenv("ARMORED_SHOPEE_QUERIES_AUTHORIZED", "0").strip() != "1":
+                raise VisionUnresolvedError(
+                    "[VISION:SHOPEE_QUERY_BUDGET_BLOCKED] "
+                    "consulta Shopee bloqueada: autorização explícita ausente"
+                )
+            if not os.getenv("ARMORED_SHOPEE_QUERY_BUDGET_ID", "").strip():
+                raise VisionUnresolvedError(
+                    "[VISION:SHOPEE_QUERY_BUDGET_BLOCKED] ID de orçamento persistente ausente"
+                )
+            def authorize_request(operation: str) -> None:
                 if os.getenv("ARMORED_SHOPEE_QUERIES_AUTHORIZED", "0").strip() != "1":
-                    raise VisionUnresolvedError(
-                        "[VISION:SHOPEE_QUERY_BUDGET_BLOCKED] "
-                        "consulta Shopee bloqueada: autorização explícita ausente"
-                    )
+                    raise QueryBudgetError("quota-query-authorization-required")
                 budget_id = os.getenv("ARMORED_SHOPEE_QUERY_BUDGET_ID", "")
                 try:
                     request_limit = int(os.getenv("ARMORED_SHOPEE_QUERY_LIMIT", ""))
                     configured_ledger = os.getenv("ARMORED_SHOPEE_QUERY_LEDGER_PATH", "").strip()
                     database_path = getattr(self.db, "path", None)
                     if not configured_ledger and database_path is None:
-                        raise QueryBudgetError(
-                            "quota-budget-requires-database-or-ledger-path"
-                        )
+                        raise QueryBudgetError("quota-budget-requires-database-or-ledger-path")
                     ledger_path = (
                         Path(configured_ledger)
                         if configured_ledger
                         else Path(database_path).parent / "shopee-query-budget.sqlite3"
                     )
-                    query_budget = ShopeeQueryBudget(
-                        ledger_path
-                    )
+                    ledger = ShopeeQueryBudget(ledger_path)
                     try:
-                        query_budget.consume(
+                        ledger.consume(
                             budget_id=budget_id,
                             request_limit=request_limit,
                             evidence=os.getenv("ARMORED_SHOPEE_QUOTA_EVIDENCE", ""),
                             valid_until=os.getenv("ARMORED_SHOPEE_QUOTA_VALID_UNTIL", ""),
                         )
                     finally:
-                        query_budget.close()
+                        ledger.close()
                 except (ValueError, QueryBudgetError) as exc:
-                    raise VisionUnresolvedError(
-                        "[VISION:SHOPEE_QUERY_BUDGET_BLOCKED] "
-                        f"consulta Shopee bloqueada pelo orçamento autorizado: {exc}"
-                    ) from exc
+                    raise QueryBudgetError(f"quota-budget-blocked:{operation}:{exc}") from exc
+
+            api.request_authorizer = authorize_request
 
         try:
             product = api.get_exact_product(resolved.shop_id, resolved.item_id)
+        except QueryBudgetError as exc:
+            raise VisionUnresolvedError(
+                "[VISION:SHOPEE_QUERY_BUDGET_BLOCKED] "
+                f"consulta Shopee bloqueada pelo orçamento autorizado: {exc}"
+            ) from exc
         except ShopeeProductNotFoundError as exc:
             if self.db is not None:
                 self.db.record_vision_product_lookup(
@@ -162,6 +168,11 @@ class ArmoredVision:
         # third-party affiliate short URL supplied by the source message.
         try:
             affiliate_url = str(api.affiliate_link_for_product(product) or "").strip()
+        except QueryBudgetError as exc:
+            raise VisionUnresolvedError(
+                "[VISION:SHOPEE_QUERY_BUDGET_BLOCKED] "
+                f"geração de link Shopee bloqueada pelo orçamento autorizado: {exc}"
+            ) from exc
         except ShopeeAPIError as exc:
             if "não possui productLink canônico" in str(exc):
                 raise VisionUnresolvedError(
