@@ -23,7 +23,7 @@ class OllamaProvider:
 
     @staticmethod
     def configuration() -> dict[str, str]:
-        return {"provider": "ollama", "model": (os.getenv("ARMORED_IA_OLLAMA_MODEL") or "gemma3:1b").strip()}
+        return {"provider": "ollama", "model": (os.getenv("ARMORED_IA_OLLAMA_MODEL") or "qwen3:4b").strip()}
 
     @staticmethod
     def _extract_candidates(data: dict[str, Any], limit: int) -> list[str]:

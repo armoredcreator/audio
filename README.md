@@ -17,10 +17,14 @@ descrita em [PYTHON311_RUNTIME](docs/PYTHON311_RUNTIME.md). O pacote RVC de
 compatibilidade é um fork explícito; modelos Melody e ambientes existentes
 permanecem preservados.
 
-O provedor padrão de legenda agora é **Ollama local**, modelo `gemma3:1b`,
-configurável por `ARMORED_IA_OLLAMA_MODEL`. Gemini é opcional e só é selecionado
-explicitamente. O adaptador não baixa modelos nem inventa legendas/hashtags:
-campos gerados pelo modelo passam pela política comum. Consulte `.env.example`.
+O provedor padrão de legenda é **Ollama local**, modelo `qwen3:4b`, configurável
+por `ARMORED_IA_OLLAMA_MODEL`. `ARMORED_IA_OLLAMA_THINK=false` reduz a latência
+do Qwen3 sem alterar a Policy. Gemini é opcional e só é selecionado
+explicitamente. Ollama gera o conteúdo; normalização e Policy locais verificam
+frase, coração e hashtags. Uma tentativa corretiva limitada pode usar os motivos
+de rejeição. Se a legenda continuar inválida, o item fica bloqueado sem envio.
+O adaptador não baixa modelos nem inventa legendas ou hashtags. Consulte
+`.env.example`.
 
 O contrato completo separa geração criativa, normalização apenas de formato,
 Policy contextual estrita, persistência de candidatas e recuperação auditável de

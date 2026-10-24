@@ -175,7 +175,7 @@ def test_ollama_provider_passes_corrupted_unicode_to_shared_policy(monkeypatch):
 
 
 
-def test_ollama_default_model_uses_validated_local_gemma(monkeypatch):
+def test_ollama_default_model_uses_validated_local_qwen(monkeypatch):
     monkeypatch.delenv("ARMORED_IA_OLLAMA_MODEL", raising=False)
     monkeypatch.setenv("ARMORED_IA_MAX_ATTEMPTS", "1")
     calls = []
@@ -187,4 +187,17 @@ def test_ollama_default_model_uses_validated_local_gemma(monkeypatch):
         })})
 
     OllamaProvider(requester=requester).generate_candidates("caption", {}, 1)
-    assert calls == ["gemma3:1b"]
+    assert calls == ["qwen3:4b"]
+
+
+def test_ollama_forwards_explicit_thinking_mode(monkeypatch):
+    monkeypatch.setenv("ARMORED_IA_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("ARMORED_IA_OLLAMA_THINK", "false")
+    calls = []
+
+    def requester(_url, **kwargs):
+        calls.append(kwargs["json"])
+        return _Response({"response": json.dumps({"captions": ["Mesa organizada #casa"]})})
+
+    OllamaProvider(requester=requester).generate_candidates("caption", {}, 1)
+    assert calls[0]["think"] is False
