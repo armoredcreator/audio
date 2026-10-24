@@ -11,6 +11,8 @@
 
 O pipeline é composto pelo Coordinator e pelos sete módulos na ordem **ArmoredSync → ArmoredVision → ArmoredStock → ArmoredIA → ArmoredSpeech → ArmoredStudio → ArmoredHub**. A inicialização, recuperação e persistência são coordenadas por `armored_core`; o SQLite operacional é a fonte durável dos itens, estados, evidências e recibos.
 
+**Compatibilidade da instalação:** na promoção, os arquivos operacionais de Hub, Stock e Vision foram atualizados da versão validada. Os arquivos rmored_core/coordinator.py, database.py e pipeline.py da instalação mantêm adaptações locais preexistentes: a tentativa de substituí-los em bloco pela versão do laboratório produziu 13 falhas de contrato na suíte operacional; os arquivos locais foram restaurados integralmente de backup e a regressão final voltou a passar. O backup está em C:\Users\Administrador\Documents\Codex\2026-10-23\s\work\operational-pr-sync-backup-20261024. Logo, instalação e PR foram testadas separadamente; o core da instalação não é byte a byte idêntico ao core da PR. Essas adaptações locais não foram descartadas nem enviadas cegamente ao GitHub.
+
 Nesta campanha foram corrigidos e validados no ArmoredIA o limite local de candidatas Ollama, uma tentativa delimitada de reparo de saída truncada, a incorporação dos motivos de rejeição na nova tentativa e uma rejeição falsa causada por concatenar palavras de hashtags separadas. O provedor padrão é Ollama local (`qwen3:4b`); Gemini é opcional e só é usado quando configurado explicitamente.
 
 O caminho de consulta Vision agora é fechado por padrão. Cada chamada Shopee efetivamente enviada — consulta exata, criação de link afiliado e cada retry permitido — consome uma unidade do orçamento persistente antes do I/O de rede. Sem autorização, evidência, validade, ID e limite válidos, Vision mantém o item pendente com `SHOPEE_QUERY_BUDGET_BLOCKED`; não envia a consulta. O orçamento é imutável ao retomar.
@@ -161,7 +163,7 @@ Evidências verificadas nesta campanha:
 
 - Regressão operacional: **733 aprovados, 4 ignorados, zero falhas**; duração 91,93 s, após integrar o orçamento HTTP por tentativa.
 - Testes focais do orçamento/transport na instalação operacional: **77 aprovados**.
-- PR regression anterior à alteração de contagem por tentativa: **622 aprovados, 3 ignorados, zero falhas**; CI anterior teve sucesso nos workflows Windows/RVC asset migration e Speech isolated.
+- PR regression anterior à alteração de contagem por tentativa: **622 aprovados, 3 ignorados, zero falhas**; CI do commit atual passou nos workflows Windows/RVC asset migration e Speech isolated.
 - Testes focais na alteração do orçamento integrada: **52 aprovados**. A regressão completa da PR passou após a alteração; os workflows deste novo commit devem concluir antes do fechamento do CI.
 - Preflight Windows sem argumentos: runtime Python 3.11.9, runtime de áudio, composição dos sete módulos, configuração e três rotas passaram; não iniciou Coordinator nem enviou mensagens.
 - Ollama local real: recuperação de legenda por Coordinator para três itens, Policy aprovada, candidatas/evidências persistidas, sem nova renderização; originais e renders conservaram seus hashes.
