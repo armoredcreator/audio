@@ -457,6 +457,14 @@ def test_policy_detects_distinctive_phrase_when_title_stopwords_are_present():
         )
 
 
+def test_separate_contextual_hashtags_are_not_recombined_as_title_phrase():
+    assert validate_caption(
+        "Menina 🧡 linda\n#menina #alcinha",
+        product_name="Blusinha regata alça fina infantil menina alcinha algodão",
+        product_context={"category": "infantil"},
+    ) == "Menina 🧡 linda\n#menina #alcinha"
+
+
 def test_policy_deduplicates_repeated_candidate_hashtags_and_emoji():
     assert _normalize_validate(
         "Mesa bonita 🛍️\n#Casa #casa",
@@ -471,6 +479,7 @@ def test_ollama_and_gemini_candidates_share_central_caption_policy(monkeypatch):
     monkeypatch.setenv("ARMORED_IA_PROVIDER", "ollama")
     monkeypatch.setenv("ARMORED_IA_MAX_ATTEMPTS", "1")
     monkeypatch.setenv("ARMORED_IA_MAX_CANDIDATES", "3")
+    monkeypatch.setenv("ARMORED_IA_OLLAMA_MAX_CANDIDATES", "3")
     monkeypatch.setenv("ARMORED_IA_RETRY_DELAY", "0")
 
     class Response:

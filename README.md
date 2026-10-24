@@ -23,6 +23,11 @@ do Qwen3 sem alterar a Policy. Gemini é opcional e só é selecionado
 explicitamente. Ollama gera o conteúdo; normalização e Policy locais verificam
 frase, coração e hashtags. Uma tentativa corretiva limitada pode usar os motivos
 de rejeição. Se a legenda continuar inválida, o item fica bloqueado sem envio.
+O Ollama mantém uma candidata por chamada mesmo quando `ARMORED_IA_MAX_CANDIDATES`
+está configurado para outro provedor; `ARMORED_IA_OLLAMA_FORMAT_RETRIES=1` permite
+uma única correção de JSON malformado. Termos de um trecho do título rejeitado são
+retirados da lista permitida na tentativa corretiva, e a quantidade de chamadas
+fica registrada. Esses limites evitam truncamento local sem flexibilizar a Policy.
 O adaptador não baixa modelos nem inventa legendas ou hashtags. Consulte
 `.env.example`.
 

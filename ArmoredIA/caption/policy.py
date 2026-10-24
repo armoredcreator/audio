@@ -488,7 +488,11 @@ def validate_caption(
     if _technical_leak(text):
         raise CaptionPolicyError("legenda revela medida ou especificação técnica")
 
-    folded_caption = _fold(_remove_emojis(text))
+    # Check copied title phrases only against the main sentence. Separate
+    # contextual hashtags can appear next to one another and must not be
+    # accidentally recombined into a product-title phrase.
+    main_only = HASHTAG_RE.sub("", text)
+    folded_caption = _fold(_remove_emojis(main_only))
     normalized_caption_tokens = [
         token for token in WORD_RE.findall(folded_caption)
         if token.casefold() not in PRODUCT_STOP_WORDS

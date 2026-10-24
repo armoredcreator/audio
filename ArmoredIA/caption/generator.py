@@ -53,11 +53,20 @@ class CaptionGenerator:
         if os.getenv("ARMORED_IA_CAPTION_ENABLED", "1") != "1":
             raise CaptionGenerationError("gerador de legenda desativado")
 
-        default_candidate_limit = "1" if isinstance(self.provider, OllamaProvider) else "3"
-        model_limit = max(
-            1,
-            int(os.getenv("ARMORED_IA_MAX_CANDIDATES", default_candidate_limit)),
+        provider_configuration = getattr(self.provider, "configuration", None)
+        provider_name = ""
+        if callable(provider_configuration):
+            try:
+                provider_name = str((provider_configuration() or {}).get("provider") or "").casefold()
+            except Exception:
+                provider_name = ""
+        candidate_setting = (
+            "ARMORED_IA_OLLAMA_MAX_CANDIDATES"
+            if provider_name == "ollama"
+            else "ARMORED_IA_MAX_CANDIDATES"
         )
+        default_candidate_limit = "1" if provider_name == "ollama" else "3"
+        model_limit = max(1, int(os.getenv(candidate_setting, default_candidate_limit)))
         try:
             policy_retries = int(os.getenv("ARMORED_IA_POLICY_RETRIES", "1"))
         except ValueError as exc:
@@ -91,6 +100,7 @@ class CaptionGenerator:
                     if isinstance(receipt, dict)
                 ]
                 exc.provider_requests = provider_requests + 1
+                exc.request_count = max(0, int(getattr(self.provider, "last_request_count", 0) or 0))
                 exc.feedback_rounds = tuple(feedback_rounds)
                 exc.provider_attempts = tuple((*provider_attempts, *attempts))
                 raise

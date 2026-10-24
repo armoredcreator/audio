@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 from typing import Any
 
 import requests
@@ -20,6 +21,7 @@ class OllamaProvider:
     def __init__(self, requester=None):
         self.requester = requester or requests.post
         self.last_attempts: list[dict[str, Any]] = []
+        self.last_request_count = 0
 
     @staticmethod
     def configuration() -> dict[str, str]:
@@ -137,6 +139,41 @@ Retorne SOMENTE um objeto JSON válido com a chave "captions". Cada item é um o
         )
 
         grounded_text_words, grounded_hashtags = caption_generation_vocabulary(context)
+        rejected_title_terms: set[str] = set()
+        title_tokens = [
+            "".join(ch for ch in unicodedata.normalize("NFKD", token.casefold()) if not unicodedata.combining(ch))
+            for token in re.findall(r"[A-Za-zÀ-ÿ0-9]+", str(context.get("productName") or ""))
+        ]
+        previous_candidates = context.get("__policy_retry_previous_candidates")
+        if isinstance(previous_candidates, list):
+            for candidate in previous_candidates:
+                visible = re.sub(r"#[A-Za-zÀ-ÿ0-9_]+", " ", str(candidate or ""))
+                tokens = [
+                    "".join(ch for ch in unicodedata.normalize("NFKD", token.casefold()) if not unicodedata.combining(ch))
+                    for token in re.findall(r"[A-Za-zÀ-ÿ0-9]+", visible)
+                ]
+                if not tokens or not title_tokens:
+                    continue
+                if any(
+                    title_tokens[index:index + len(tokens)] == tokens
+                    for index in range(0, len(title_tokens) - len(tokens) + 1)
+                ):
+                    rejected_title_terms.update(tokens)
+        if rejected_title_terms:
+            grounded_text_words = tuple(
+                word for word in grounded_text_words
+                if "".join(
+                    ch for ch in unicodedata.normalize("NFKD", word.casefold()) if not unicodedata.combining(ch)
+                ) not in rejected_title_terms
+            )
+            grounded_hashtags = tuple(
+                tag for tag in grounded_hashtags
+                if "".join(
+                    ch for ch in unicodedata.normalize("NFKD", tag.casefold().lstrip("#"))
+                    if not unicodedata.combining(ch)
+                ) not in rejected_title_terms
+            )
+            prompt += "\nTermos bloqueados após rejeição da Policy (não use no texto nem hashtags): " + ", ".join(sorted(rejected_title_terms))
         if grounded_text_words:
             prompt += "\nPalavras permitidas no campo text: " + ", ".join(grounded_text_words)
             prompt += ". Use apenas palavras dessa lista, mantenha concordância natural e não transforme reação em benefício; a validação final continua obrigatória."
@@ -220,9 +257,17 @@ Retorne SOMENTE um objeto JSON válido com a chave "captions". Cada item é um o
             payload["think"] = think.strip().casefold() in {"1", "true"}
 
         self.last_attempts = []
-        for attempt in range(1, attempts + 1):
+        self.last_request_count = 0
+        format_retries = bounded_number("ARMORED_IA_OLLAMA_FORMAT_RETRIES", 1, 0, 2)
+        if not format_retries.is_integer():
+            raise AIProviderError("ARMORED_IA_OLLAMA_FORMAT_RETRIES deve ser inteiro")
+        format_retry_count = 0
+        transport_attempt = 0
+        while True:
+            transport_attempt += 1
             response = None
             try:
+                self.last_request_count += 1
                 response = self.requester(
                     f"{base_url}/api/generate",
                     json=payload,
@@ -230,9 +275,16 @@ Retorne SOMENTE um objeto JSON válido com a chave "captions". Cada item é um o
                 )
                 response.raise_for_status()
                 try:
-                    candidates = self._extract_candidates(response.json(), min(max(1, limit), 10))
+                    payload_data = response.json()
+                    if str(payload_data.get("done_reason") or "").casefold() == "length":
+                        raise AIProviderError(
+                            "Ollama truncou a resposta estruturada; reduza candidatas ou aumente o limite de tokens",
+                            category="MALFORMED_RESPONSE",
+                        )
+                    candidates = self._extract_candidates(payload_data, min(max(1, limit), 10))
                     self.last_attempts.append({
-                        "attempt": attempt,
+                        "attempt": transport_attempt,
+                        "format_round": format_retry_count + 1,
                         "status": "SUCCESS",
                         "http_status": getattr(response, "status_code", 200),
                     })
@@ -249,9 +301,10 @@ Retorne SOMENTE um objeto JSON válido com a chave "captions". Cada item é um o
                     else "TRANSIENT_UNAVAILABLE" if retryable_failure(exc)
                     else "REQUEST_REJECTED"
                 )
-                if retryable_failure(exc) and attempt < attempts:
+                if retryable_failure(exc) and transport_attempt < attempts:
                     self.last_attempts.append({
-                        "attempt": attempt,
+                        "attempt": transport_attempt,
+                        "format_round": format_retry_count + 1,
                         "status": category,
                         "http_status": status,
                     })
@@ -260,12 +313,13 @@ Retorne SOMENTE um objeto JSON válido com a chave "captions". Cada item é um o
                     time.sleep(retry_delay)
                     continue
                 self.last_attempts.append({
-                    "attempt": attempt,
+                    "attempt": transport_attempt,
+                    "format_round": format_retry_count + 1,
                     "status": category,
                     "http_status": status,
                 })
                 raise AIProviderError(
-                    f"Ollama indisponível após {attempt} tentativa(s): "
+                    f"Ollama indisponível após {transport_attempt} tentativa(s): "
                     + (f"HTTP {status}" if status is not None else type(exc).__name__),
                     category=category,
                     status_code=status,
@@ -274,14 +328,22 @@ Retorne SOMENTE um objeto JSON válido com a chave "captions". Cada item é um o
                 if not getattr(exc, "category", None) or exc.category == "PROVIDER_ERROR":
                     exc.category = "MALFORMED_RESPONSE"
                 self.last_attempts.append({
-                    "attempt": attempt,
+                    "attempt": transport_attempt,
+                    "format_round": format_retry_count + 1,
                     "status": exc.category,
                     "http_status": getattr(response, "status_code", None),
                 })
-                if attempt < attempts:
+                if exc.category == "MALFORMED_RESPONSE" and format_retry_count < int(format_retries):
+                    format_retry_count += 1
+                    payload["prompt"] = (
+                        prompt
+                        + "\n\nCORREÇÃO DE FORMATO: a resposta anterior não era JSON completo. "
+                        "Responda somente com um objeto JSON completo que siga exatamente o schema; "
+                        "não inclua raciocínio, markdown ou texto antes/depois. Gere a quantidade solicitada."
+                    )
+                    transport_attempt = 0
                     close_response(response)
                     response = None
-                    time.sleep(retry_delay)
                     continue
                 raise
             finally:

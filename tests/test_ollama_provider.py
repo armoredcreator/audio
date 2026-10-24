@@ -81,7 +81,8 @@ def test_ollama_generator_defaults_to_one_grounded_candidate(monkeypatch):
     from ArmoredIA.caption.generator import CaptionGenerator
 
     monkeypatch.setenv("ARMORED_IA_PROVIDER", "ollama")
-    monkeypatch.delenv("ARMORED_IA_MAX_CANDIDATES", raising=False)
+    monkeypatch.setenv("ARMORED_IA_MAX_CANDIDATES", "10")
+    monkeypatch.delenv("ARMORED_IA_OLLAMA_MAX_CANDIDATES", raising=False)
     calls = []
     response_body = json.dumps({"captions": [
         {"text": "Chinelo casual", "hashtags": ["#chinelo"]}
@@ -108,6 +109,62 @@ def test_ollama_generator_defaults_to_one_grounded_candidate(monkeypatch):
     assert not re.fullmatch(text_pattern, "Chinelo charmoso para o dia a dia.")
     assert re.fullmatch(hashtag_pattern, "#chinelo")
     assert not re.fullmatch(hashtag_pattern, "#viral")
+
+
+def test_ollama_format_retry_is_bounded_and_explains_the_repair(monkeypatch):
+    from ArmoredIA.caption.generator import CaptionGenerator
+
+    monkeypatch.setenv("ARMORED_IA_OLLAMA_FORMAT_RETRIES", "1")
+    monkeypatch.setenv("ARMORED_IA_OLLAMA_MAX_ATTEMPTS", "1")
+    calls = []
+    responses = iter([
+        _Response({"response": "not-json"}),
+        _Response({"response": json.dumps({"captions": [
+            {"text": "Sala bonita", "hashtags": ["#sala"]}
+        ]})}),
+    ])
+
+    def requester(_url, *, json, timeout):
+        calls.append(json)
+        return next(responses)
+
+    generator = CaptionGenerator(provider=OllamaProvider(requester=requester))
+    result = generator.generate_with_evidence({"productName": "Produto para casa", "description": "sala"})
+    assert result.caption == "Sala 🧡 bonita\n#sala"
+    assert len(calls) == 2
+    assert "CORREÇÃO DE FORMATO" in calls[1]["prompt"]
+
+
+def test_ollama_policy_feedback_excludes_rejected_title_phrase_on_retry(monkeypatch):
+    from ArmoredIA.caption.generator import CaptionGenerator
+
+    monkeypatch.setenv("ARMORED_IA_POLICY_RETRIES", "1")
+    monkeypatch.setenv("ARMORED_IA_OLLAMA_MAX_CANDIDATES", "1")
+    calls = []
+    bodies = iter([
+        {"response": json.dumps({"captions": [
+            {"text": "Alça fina", "hashtags": ["#alca"]}
+        ]})},
+        {"response": json.dumps({"captions": [
+            {"text": "Menina bonita", "hashtags": ["#menina"]}
+        ]})},
+    ])
+
+    def requester(_url, *, json, timeout):
+        calls.append(json)
+        return _Response(next(bodies))
+
+    generator = CaptionGenerator(provider=OllamaProvider(requester=requester))
+    result = generator.generate_with_evidence({
+        "productName": "Blusinha regata alça fina infantil menina algodão Malwee Kids",
+        "category": "infantil",
+    })
+    assert result.caption == "Menina 🧡 bonita\n#menina"
+    assert len(calls) == 2
+    assert "alca, fina" in calls[1]["prompt"] or "fina, alca" in calls[1]["prompt"]
+    text_pattern = calls[1]["format"]["properties"]["captions"]["items"]["properties"]["text"]["pattern"]
+    assert "alca" not in text_pattern.casefold()
+    assert "fina" not in text_pattern.casefold()
 
 
 def test_structured_model_fields_keep_hashtags_without_inventing_content():
