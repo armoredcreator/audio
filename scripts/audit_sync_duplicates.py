@@ -11,23 +11,19 @@ import argparse
 import csv
 import hashlib
 import json
-import re
 import sqlite3
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-PRODUCT_URL_PATTERNS = (
-    re.compile(r"-i\.(\d+)\.(\d+)(?:/|$)", re.IGNORECASE),
-    re.compile(r"/opaanlp/(\d+)/(\d+)", re.IGNORECASE),
-    re.compile(r"/product/(\d+)/(\d+)", re.IGNORECASE),
-    re.compile(r"/(\d+)/(\d+)(?:[/?#]|$)", re.IGNORECASE),
-)
-SHOPEE_HOST_SUFFIXES = ("shopee.com.br", "shopee.co", "shopee.ee")
+from armored_core.shopee_urls import extract_shopee_product_identity
+
 
 GROUP_FIELDS = (
     "match_type",
@@ -156,23 +152,7 @@ def _product_identity_from_context(context: dict[str, Any] | None) -> str | None
 
 def product_identity_from_direct_url(url: str | None) -> str | None:
     """Extract product IDs from an explicit Shopee product URL without network I/O."""
-    value = _clean_text(url)
-    if not value:
-        return None
-    try:
-        parsed = urlsplit(value)
-        host = (parsed.hostname or "").casefold()
-    except ValueError:
-        return None
-
-    if not any(host == suffix or host.endswith("." + suffix) for suffix in SHOPEE_HOST_SUFFIXES):
-        return None
-    path = parsed.path or ""
-    for pattern in PRODUCT_URL_PATTERNS:
-        match = pattern.search(path)
-        if match:
-            return f"{match.group(1)}:{match.group(2)}"
-    return None
+    return extract_shopee_product_identity(url)
 
 
 def _canonical_product_identity(

@@ -68,7 +68,7 @@ def test_pipeline_persists_every_caption_candidate_and_selected_score(monkeypatc
             self.calls += 1
             return [
                 "Compre agora 🔥\n#oferta",
-                "Tudo bonito ✨\n#legal",
+                "Cozinha bonita ✨\n#cozinha",
                 "Cantinho prático ✨\n#cozinha",
             ]
 
@@ -92,7 +92,7 @@ def test_pipeline_persists_every_caption_candidate_and_selected_score(monkeypatc
         assert rows[2]["policy_valid"] == 1
         assert rows[2]["selected"] == 1
         assert rows[2]["score"] > rows[1]["score"]
-        assert db.get(item_id).publication_caption == "Cantinho prático 🧡\n#cozinha"
+        assert db.get(item_id).publication_caption == "Cantinho 🧡 prático\n#cozinha"
         assert db.get(item_id).state == State.PUBLISHED
         db.close()
 
@@ -129,10 +129,35 @@ def test_pipeline_persists_all_rejections_before_entering_recovery(monkeypatch):
             raise AssertionError("pipeline should fail when all caption candidates are rejected")
 
         rows = db.caption_candidates(item_id)
-        assert provider.calls == 1
-        assert len(rows) == 3
+        assert provider.calls == 2
+        assert len(rows) == 6
         assert all(row["policy_valid"] == 0 for row in rows)
         assert all(row["rejection_reason"] for row in rows)
         assert all(row["selected"] == 0 for row in rows)
         assert db.get(item_id).state == State.RECOVERY
         db.close()
+
+
+def test_caption_generator_retries_with_policy_feedback_and_persists_selection():
+    class Provider:
+        def __init__(self):
+            self.contexts = []
+
+        def generate_candidates(self, _task, context, _limit):
+            self.contexts.append(dict(context))
+            if len(self.contexts) == 1:
+                return ["Luminária muito compacta elegante #casa"]
+            return ["Mesa bonita #casa"]
+
+    provider = Provider()
+    result = CaptionGenerator(provider=provider).generate_with_evidence(
+        {"productName": "Abajur de mesa", "category": "iluminação", "usage": "luz"}
+    )
+
+    assert len(provider.contexts) == 2
+    assert provider.contexts[1]["__policy_retry_feedback"]
+    assert result.caption == "Mesa 🧡 bonita\n#casa"
+    assert len(result.evaluations) == 2
+    assert result.evaluations[0].policy_valid is False
+    assert result.evaluations[1].policy_valid is True
+    assert result.evaluations[1].selected is True

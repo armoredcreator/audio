@@ -1,0 +1,270 @@
+{
+  "run_id": "caption-provider-validation-20261023-v9",
+  "created_at": "2026-10-23T23:45:31.596738+00:00",
+  "policy": "current shared ArmoredIA Policy; natural-phrase prompt; bounded Gemini calls",
+  "results": [
+    {
+      "content_id": "-1003788989075_295",
+      "provider": "gemini",
+      "context": {
+        "productName": "Tênis Feminino Casual Camurça Detalhe Lateral Listra Dupla Moderno Break GiGiL"
+      },
+      "status": "SUCCESS",
+      "provider_requests": 2,
+      "feedback_rounds": [
+        [
+          "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "texto principal contém termo sem suporte no contexto Vision",
+          "Use hashtags únicas e relacionadas ao contexto persistido do produto.",
+          "Remova palavras descritivas ausentes do nome, categoria, uso ou descrição Vision; não invente atributo, benefício ou cenário.",
+          "Prefira uma hashtag simples que esteja literalmente no contexto aprovado; não concatene palavras com sufixos genéricos nem use marca/modelo.",
+          "O contexto Vision contém apenas o nome do produto: escolha duas ou três palavras não técnicas que já apareçam nesse nome, sem marca/modelo e sem usar os dois primeiros termos do título, que podem ser marca/linha/modelo; não repita uma sequência consecutiva distintiva. Use somente as palavras seguras listadas abaixo; combine palavras que não sejam adjacentes no título para não copiar uma expressão do produto. Escolha uma hashtag de uma palavra dessa mesma lista, sem repetir marca, linha, modelo ou medida. Palavras seguras posteriores do título: Casual, Camurça, Detalhe, Lateral, Listra, Dupla, Moderno, Break."
+        ]
+      ],
+      "provider_attempts": [
+        {
+          "policy_round": 1,
+          "attempt": 1,
+          "status": "SUCCESS",
+          "http_status": 200
+        },
+        {
+          "policy_round": 2,
+          "attempt": 1,
+          "status": "SUCCESS",
+          "http_status": 200
+        }
+      ],
+      "suggestions": [
+        {
+          "raw": "Tênis camurça casual #estilocasual",
+          "normalized": "Tênis camurça 🧡 casual",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "selected": false
+        },
+        {
+          "raw": "Casual camurça moderno #tenisfeminino #estilobrasil",
+          "normalized": "Casual camurça 🧡 moderno",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "selected": false
+        },
+        {
+          "raw": "Tênis listra dupla #lookcasual #giGiL",
+          "normalized": "Tênis listra 🧡 dupla\n#giGiL",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "selected": false
+        },
+        {
+          "raw": "Camurça casual moderno #tenis",
+          "normalized": "Camurça casual 🧡 moderno",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "selected": false
+        },
+        {
+          "raw": "Design lateral autêntico #estilobrasil #tenisfeminino",
+          "normalized": "Design lateral 🧡 autêntico",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "selected": false
+        },
+        {
+          "raw": "Visual casual moderno #lookdia",
+          "normalized": "Visual casual 🧡 moderno",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "selected": false
+        },
+        {
+          "raw": "Moderno detalhe lateral #casual",
+          "normalized": "Moderno detalhe 🧡 lateral\n#casual",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "legenda copia expressão distintiva do produto",
+          "selected": false
+        },
+        {
+          "raw": "Camurça listra dupla #moderno",
+          "normalized": "Camurça listra 🧡 dupla\n#moderno",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "legenda copia expressão distintiva do produto",
+          "selected": false
+        },
+        {
+          "raw": "Detalhe casual moderno #camurça",
+          "normalized": "Detalhe casual 🧡 moderno\n#camurça",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": true,
+          "rejection_reason": null,
+          "selected": true
+        },
+        {
+          "raw": "Listra lateral dupla #detalhe",
+          "normalized": "Listra lateral 🧡 dupla\n#detalhe",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": true,
+          "rejection_reason": null,
+          "selected": false
+        },
+        {
+          "raw": "Casual detalhe camurça #listra",
+          "normalized": "Casual detalhe 🧡 camurça\n#listra",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": true,
+          "rejection_reason": null,
+          "selected": false
+        }
+      ],
+      "write_scope": "generation only; no operational database or state changes; no Shopee, media, Telegram, or publication",
+      "selected_caption": "Detalhe casual 🧡 moderno\n#camurça"
+    },
+    {
+      "content_id": "-1003788989075_296",
+      "provider": "gemini",
+      "context": {
+        "productName": "Amend Essencial Acidificante Máscara Equilíbrio do PH - 250g"
+      },
+      "status": "SUCCESS",
+      "provider_requests": 2,
+      "feedback_rounds": [
+        [
+          "texto principal contém termo sem suporte no contexto Vision",
+          "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "Use hashtags únicas e relacionadas ao contexto persistido do produto.",
+          "Remova palavras descritivas ausentes do nome, categoria, uso ou descrição Vision; não invente atributo, benefício ou cenário.",
+          "Prefira uma hashtag simples que esteja literalmente no contexto aprovado; não concatene palavras com sufixos genéricos nem use marca/modelo.",
+          "O contexto Vision contém apenas o nome do produto: escolha duas ou três palavras não técnicas que já apareçam nesse nome, sem marca/modelo e sem usar os dois primeiros termos do título, que podem ser marca/linha/modelo; não repita uma sequência consecutiva distintiva. Use somente as palavras seguras listadas abaixo; combine palavras que não sejam adjacentes no título para não copiar uma expressão do produto. Escolha uma hashtag de uma palavra dessa mesma lista, sem repetir marca, linha, modelo ou medida. Palavras seguras posteriores do título: Acidificante, Máscara, Equilíbrio, g."
+        ]
+      ],
+      "provider_attempts": [
+        {
+          "policy_round": 1,
+          "attempt": 1,
+          "status": "SUCCESS",
+          "http_status": 200
+        },
+        {
+          "policy_round": 2,
+          "attempt": 1,
+          "status": "SUCCESS",
+          "http_status": 200
+        }
+      ],
+      "suggestions": [
+        {
+          "raw": "Equilibra o pH #acidificante",
+          "normalized": "Equilibra o 🧡 pH\n#acidificante",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "selected": false
+        },
+        {
+          "raw": "Selagem dos fios #amend",
+          "normalized": "Selagem dos 🧡 fios",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "selected": false
+        },
+        {
+          "raw": "Cabelo mais alinhado #cabelosbrilhantes",
+          "normalized": "Cabelo mais 🧡 alinhado",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "selected": false
+        },
+        {
+          "raw": "Tratamento capilar intensivo #acidificacaocapilar",
+          "normalized": "Tratamento capilar 🧡 intensivo",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "selected": false
+        },
+        {
+          "raw": "Sela as cutículas #acidificante",
+          "normalized": "Sela as 🧡 cutículas\n#acidificante",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "selected": false
+        },
+        {
+          "raw": "Equilíbrio da máscara #acidificante",
+          "normalized": "Equilíbrio da 🧡 máscara\n#acidificante",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": true,
+          "rejection_reason": null,
+          "selected": true
+        },
+        {
+          "raw": "Máscara de equilíbrio #equilíbrio",
+          "normalized": "Máscara de 🧡 equilíbrio\n#equilíbrio",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "legenda copia expressão distintiva do produto",
+          "selected": false
+        }
+      ],
+      "write_scope": "generation only; no operational database or state changes; no Shopee, media, Telegram, or publication",
+      "selected_caption": "Equilíbrio da 🧡 máscara\n#acidificante"
+    }
+  ]
+}

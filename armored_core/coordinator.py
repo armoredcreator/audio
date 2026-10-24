@@ -12,7 +12,9 @@ from typing import Any
 from dotenv import load_dotenv
 
 from .database import Database
+from .catch_up_budget import ContinuousOperationBudget, DurableCatchUpBudget
 from .models import State
+from .publication_quarantine import PublicationQuarantine
 from .pipeline import Pipeline
 from .recovery import Recovery
 from .services import IngestMessage, SyncService
@@ -24,19 +26,96 @@ from .routing import load_routes
 class Coordinator:
     """Single composition root for the isolated ArmoredCreator pipeline."""
 
-    def __init__(self, db, storage, vision, studio, publisher, source=None, ia=None):
+    def __init__(self, db, storage, vision, studio, publisher, source=None, ia=None, catch_up_budget=None, continuous_budget=None):
         self.db = db
         self.log = logging.getLogger(__name__)
         self.storage = storage
         self.sync = SyncService(db, storage)
-        self.pipeline = Pipeline(db, storage, vision, studio, publisher, ia)
-        self.recovery = Recovery(db, storage, vision, studio, publisher, ia)
-        self.startup_reconciler = StartupReconciler(db, storage, publisher)
+        self.publication_quarantine = PublicationQuarantine(
+            storage.database / "publication-quarantine.sqlite3"
+        )
+        self.pipeline = Pipeline(db, storage, vision, studio, publisher, ia, self.publication_quarantine)
+        self.recovery = Recovery(
+            db, storage, vision, studio, publisher, ia,
+            speech_studio_runner=self._run_recovery_speech_studio,
+            publication_quarantine=self.publication_quarantine,
+        )
         self.source = source
         self._runtime_lock_held = False
         self._last_catch_up_completed_count = 0
+        self.catch_up_budget = catch_up_budget
+        self.continuous_budget = continuous_budget
+        self.startup_reconciler = StartupReconciler(
+            db, storage, publisher, self.publication_quarantine
+        )
         self._shutdown_requested = False
         self.pipeline.set_shutdown_checker(lambda: self._shutdown_requested)
+
+    def _catch_up_candidate_ids(self) -> list[str]:
+        """Stable ordered union of durable rows eligible for this run's stages."""
+        quarantined_ids = self.publication_quarantine.quarantined_ids()
+        candidates = {}
+        for item in (
+            self.db.pending_vision_candidates()
+            + self.db.catch_up_production_items()
+            + self.db.pre_download_recovery_items()
+            + self.db.vision_approved_interrupted_items()
+        ):
+            if str(item.content_id) not in quarantined_ids:
+                candidates[str(item.content_id)] = item
+        failed = self.db.conn.execute(
+            "SELECT content_id FROM items WHERE state=? ORDER BY created_at,content_id",
+            (State.FAILED.value,),
+        ).fetchall()
+        for row in failed:
+            item_id = str(row["content_id"])
+            if item_id not in quarantined_ids:
+                candidates[item_id] = self.db.get(item_id)
+        sources = [
+            str(route.source_id)
+            for route in getattr(self.source, "sources", ())
+            if getattr(route, "source_id", None) is not None
+        ]
+        rank = {source_id: index for index, source_id in enumerate(sources)}
+        ordered = sorted(
+            candidates.values(),
+            key=lambda item: (
+                rank.get(str(item.source_id), len(rank)),
+                int(item.telegram_message_id)
+                if str(item.telegram_message_id).isdigit() else 0,
+                str(item.content_id),
+            ),
+        )
+        return [str(item.content_id) for item in ordered]
+
+    def _prepare_catch_up_budget(self) -> set[str] | None:
+        if self.catch_up_budget is None:
+            return None
+        self.catch_up_budget.claim(self._catch_up_candidate_ids())
+        return self.catch_up_budget.assigned_ids()
+
+    def _quarantine_blocks_historical_cursor(self) -> bool:
+        """Only unresolved items still ahead of their source/topic cursor block LIVE."""
+        for item_id in self.publication_quarantine.quarantined_ids():
+            try:
+                item = self.db.get(item_id)
+                if not str(item.telegram_message_id).isdigit():
+                    return True
+                topic_id = int(item.topic_id or 0)
+                source_row = self.db.conn.execute(
+                    "SELECT 1 FROM sync_sources WHERE source_id=?",
+                    (str(item.source_id),),
+                ).fetchone()
+                checkpoint = (
+                    self.db.source_sync_topic_checkpoint(item.source_id, topic_id)
+                    if source_row
+                    else self.db.sync_topic_checkpoint(topic_id)
+                )
+                if int(item.telegram_message_id) > checkpoint:
+                    return True
+            except (KeyError, TypeError, ValueError):
+                return True
+        return False
 
     @classmethod
     def build(
@@ -46,6 +125,12 @@ class Coordinator:
         *,
         acquire_runtime_lock: bool = False,
         staged: bool = False,
+        allow_real_publication: bool | None = None,
+        catch_up_run_id: str | None = None,
+        max_catch_up_items: int | None = None,
+        continuous_operation_id: str | None = None,
+        max_items_per_day: int | None = None,
+        max_items_per_batch: int | None = None,
     ):
         storage = Storage(root)
         # Project-local credential source of truth.
@@ -61,6 +146,12 @@ class Coordinator:
         project_config = storage.root / ".env"
         if project_config.exists():
             load_dotenv(project_config, override=False)
+
+        # The command-line production lifetime defaults to a closed Hub gate.
+        # Existing programmatic callers retain their environment-controlled
+        # behavior unless they pass this explicit policy argument.
+        if allow_real_publication is not None:
+            os.environ["ARMORED_HUB_DRY_RUN"] = "0" if allow_real_publication else "1"
 
         # The staged historical runner is exclusively a real Telegram
         # operation; never silently fall back to LocalSource because of an
@@ -84,8 +175,36 @@ class Coordinator:
                 runtime_lock_acquired = True
                 db.initialize()
 
+            if (catch_up_run_id is None) != (max_catch_up_items is None):
+                raise ValueError("catch-up run ID and item limit must be supplied together")
+            continuous_args = (continuous_operation_id, max_items_per_day, max_items_per_batch)
+            if any(value is not None for value in continuous_args) and any(
+                value is None for value in continuous_args
+            ):
+                raise ValueError("continuous operation ID, daily limit, and batch size are required together")
+            if catch_up_run_id is not None and continuous_operation_id is not None:
+                raise ValueError("one-shot and continuous budgets are mutually exclusive")
+
             def make_coordinator(vision, studio, publisher, source, ia=None):
-                coordinator = cls(db, storage, vision, studio, publisher, source, ia)
+                budget = None
+                if catch_up_run_id is not None:
+                    budget = DurableCatchUpBudget(
+                        storage.database / "catch-up-work-budget.sqlite3",
+                        catch_up_run_id,
+                        int(max_catch_up_items),
+                    )
+                continuous_budget = None
+                if continuous_operation_id is not None:
+                    continuous_budget = ContinuousOperationBudget(
+                        storage.database / "continuous-work-budget.sqlite3",
+                        continuous_operation_id,
+                        int(max_items_per_day),
+                        int(max_items_per_batch),
+                    )
+                coordinator = cls(
+                    db, storage, vision, studio, publisher, source, ia, budget,
+                    continuous_budget,
+                )
                 coordinator._runtime_lock_held = runtime_lock_acquired
                 return coordinator
 
@@ -93,7 +212,7 @@ class Coordinator:
                 from ArmoredVision.service import ArmoredVision
                 from ArmoredSync.service import LocalSource, TelegramReader, TelegramSource, MultiTelegramSource
 
-                vision = ArmoredVision()
+                vision = ArmoredVision(db=db)
                 routes = load_routes()
                 if staged and len(routes) != 3:
                     raise RuntimeError(
@@ -223,15 +342,23 @@ class Coordinator:
         if message is None:
             await self._release_source_connection()
             return None
+        source_id = str(getattr(message, "source_id", "telegram") or "telegram")
+        canonical_id = str(self.db.content_id_for(str(message.telegram_message_id), source_id))
+        if self.publication_quarantine.contains(canonical_id):
+            await self._release_source_connection()
+            return canonical_id
         item_id = await self.sync.ingest_message_async(IngestMessage(
             telegram_message_id=str(message.telegram_message_id),
-            source_id=getattr(message, "source_id", "telegram"),
+            source_id=source_id,
             topic_id=getattr(message, "topic_id", None),
             topic_name=getattr(message, "topic_name", None),
             original_url=getattr(message, "original_url", None),
             source_path=getattr(message, "source_path", None),
             materialize=getattr(message, "materialize", None),
         ))
+        if self.publication_quarantine.contains(str(item_id)):
+            await self._release_source_connection()
+            return item_id
         marker = getattr(self.source, "mark_ingested", None)
         if marker is not None:
             marker(str(message.telegram_message_id))
@@ -247,15 +374,28 @@ class Coordinator:
         message = self.source.fetch_next()
         if message is None:
             return None
+        source_id = str(getattr(message, "source_id", "telegram") or "telegram")
+        canonical_id = str(self.db.content_id_for(str(message.telegram_message_id), source_id))
+        if self.publication_quarantine.contains(canonical_id):
+            reader = getattr(self.source, "reader", None)
+            disconnect = getattr(reader, "disconnect", None)
+            if disconnect is not None:
+                import asyncio
+                asyncio.run(disconnect())
+            return canonical_id
         item_id = self.sync.ingest_message(IngestMessage(
             telegram_message_id=str(message.telegram_message_id),
-            source_id=getattr(message, "source_id", "telegram"),
+            source_id=source_id,
             topic_id=getattr(message, "topic_id", None),
             topic_name=getattr(message, "topic_name", None),
             original_url=getattr(message, "original_url", None),
             source_path=getattr(message, "source_path", None),
             materialize=getattr(message, "materialize", None),
         ))
+        if self.publication_quarantine.contains(str(item_id)):
+            import asyncio
+            asyncio.run(self._release_source_connection())
+            return item_id
         marker = getattr(self.source, "mark_ingested", None)
         if marker is not None:
             marker(str(message.telegram_message_id))
@@ -361,7 +501,13 @@ class Coordinator:
         from copy import copy
 
         db = Database(self.db.path, initialize=False)
+        private_coordinator = None
         try:
+            # Vision's persistent negative-offer cache must use this worker's
+            # connection too, never the main-thread SQLite object.
+            vision = copy(self.pipeline.vision)
+            if hasattr(vision, "db"):
+                vision.db = db
             publisher = None
             studio = None
             ia = None
@@ -371,26 +517,51 @@ class Coordinator:
                     publisher.db = db
                 studio = self.pipeline.studio
                 ia = self.pipeline.ia
-            pipeline = Pipeline(
-                db,
-                self.storage,
-                self.pipeline.vision,
-                studio,
-                publisher,
-                ia,
-            )
-            pipeline.set_shutdown_checker(lambda: self._shutdown_requested)
-            if before_hub is not None:
-                pipeline.set_before_hub_checker(before_hub)
-            pipeline.run(item_id, stop_after_vision=stop_after_vision)
+            if stop_after_vision:
+                pipeline = Pipeline(
+                    db,
+                    self.storage,
+                    vision,
+                    studio,
+                    publisher,
+                    ia,
+                )
+                pipeline.set_shutdown_checker(lambda: self._shutdown_requested)
+                pipeline.run(item_id, stop_after_vision=True)
+            else:
+                private_coordinator = Coordinator(
+                    db,
+                    self.storage,
+                    vision,
+                    studio,
+                    publisher,
+                    source=None,
+                    ia=ia,
+                )
+                private_coordinator._shutdown_requested = self._shutdown_requested
+                if before_hub is not None:
+                    private_coordinator.pipeline.set_before_hub_checker(before_hub)
+                private_coordinator.run(item_id)
         finally:
-            db.close()
+            if private_coordinator is not None:
+                private_coordinator.close()
+            else:
+                db.close()
 
     async def _vision_only_async(self, message, *, offload: bool = False):
         """Reserve and classify a candidate without materializing its media."""
+        source_id = str(getattr(message, "source_id", "telegram") or "telegram")
+        item_id = str(self.db.content_id_for(str(message.telegram_message_id), source_id))
+        if self.publication_quarantine.contains(item_id):
+            current = self.db.get(item_id)
+            self.log.warning(
+                "[COORDINATOR][SYNC][QUARANTINE] item=%s excluded before reservation/Vision",
+                item_id,
+            )
+            return item_id, current
         ingest = IngestMessage(
             telegram_message_id=str(message.telegram_message_id),
-            source_id=str(getattr(message, "source_id", "telegram") or "telegram"),
+            source_id=source_id,
             topic_id=getattr(message, "topic_id", None),
             topic_name=getattr(message, "topic_name", None),
             original_url=getattr(message, "original_url", None),
@@ -399,6 +570,12 @@ class Coordinator:
         )
         item_id = str(self.sync.reserve_message(ingest))
         current = self.db.get(item_id)
+        if self.publication_quarantine.contains(item_id):
+            self.log.warning(
+                "[COORDINATOR][SYNC][QUARANTINE] item=%s reserved but excluded from Vision and later stages",
+                item_id,
+            )
+            return item_id, current
         if current.state in {State.PUBLISHED, State.WAITING_VISION}:
             return item_id, current
         # A prior run may already have durably approved this candidate. Do not
@@ -448,6 +625,17 @@ class Coordinator:
                     if checkpoints:
                         commit(checkpoints)
                 else:
+                    canonical_id = str(self.db.content_id_for(
+                        str(message.telegram_message_id),
+                        str(getattr(message, "source_id", "telegram") or "telegram"),
+                    ))
+                    if self.publication_quarantine.contains(canonical_id):
+                        self.log.warning(
+                            "[COORDINATOR][CATCH-UP][LIVE-DISCOVERY][QUARANTINE] "
+                            "item=%s; discovery checkpoint remains before it",
+                            canonical_id,
+                        )
+                        continue
                     item_id, item = await self._vision_only_async(
                         message,
                         offload=True,
@@ -487,9 +675,14 @@ class Coordinator:
         source = self.source
         processed: list[str] = []
         checkpoint_blocked = False
+        allowed_ids = self._prepare_catch_up_budget()
 
         # Repair interrupted pre-download state before Vision retries.
         for item in self.db.pre_download_recovery_items():
+            if self.publication_quarantine.contains(str(item.content_id)):
+                continue
+            if allowed_ids is not None and str(item.content_id) not in allowed_ids:
+                continue
             target = (
                 State.RECEIVED
                 if str(item.affiliate_url or "").strip()
@@ -501,6 +694,10 @@ class Coordinator:
                 "catch-up-repaired-recovery-without-original",
             )
         for item in self.db.vision_approved_interrupted_items():
+            if self.publication_quarantine.contains(str(item.content_id)):
+                continue
+            if allowed_ids is not None and str(item.content_id) not in allowed_ids:
+                continue
             self.db.transition(
                 item.content_id,
                 State.RECEIVED,
@@ -509,46 +706,75 @@ class Coordinator:
 
         # Stage 1: discover/reserve candidates from all configured sources.
         # Do not download media while any source is still scanning.
-        iterator = source.iter_historical_candidates_async()
+        remaining = self.catch_up_budget.remaining if self.catch_up_budget else None
+        if remaining is not None and remaining > 0:
+            limit_setter = getattr(source, "set_run_candidate_limit", None)
+            if callable(limit_setter):
+                limit_setter(remaining)
+        iterator = (
+            source.iter_historical_candidates_async()
+            if remaining is None or remaining > 0
+            else None
+        )
         try:
-            async for message in iterator:
-                source_id = str(getattr(message, "source_id", "telegram") or "telegram")
-                item_id = str(self.db.content_id_for(
-                    str(message.telegram_message_id), source_id
-                ))
-                try:
-                    ingest = IngestMessage(
-                        telegram_message_id=str(message.telegram_message_id),
-                        source_id=source_id,
-                        topic_id=getattr(message, "topic_id", None),
-                        topic_name=getattr(message, "topic_name", None),
-                        original_url=getattr(message, "original_url", None),
-                        source_path=getattr(message, "source_path", None),
-                        materialize=getattr(message, "materialize", None),
-                    )
-                    item_id = str(self.sync.reserve_message(ingest))
-                    marker = getattr(source, "mark_ingested", None)
-                    if marker is not None:
-                        marker(str(message.telegram_message_id))
-                    processed.append(item_id)
-                except Exception as exc:
-                    checkpoint_blocked = True
-                    marker = getattr(source, "mark_materialization_failed", None)
-                    if marker is not None:
-                        marker()
-                    self.log.exception(
-                        "[COORDINATOR][CATCH-UP][RESERVE] %s failed; "
-                        "historical checkpoint remains blocked: %s",
-                        item_id, exc,
-                    )
-                    break
+            if iterator is not None:
+                async for message in iterator:
+                    source_id = str(getattr(message, "source_id", "telegram") or "telegram")
+                    item_id = str(self.db.content_id_for(
+                        str(message.telegram_message_id), source_id
+                    ))
+                    if self.publication_quarantine.contains(item_id):
+                        self.log.warning(
+                            "[COORDINATOR][CATCH-UP][QUARANTINE] item=%s has an "
+                            "unresolved publication; cursor remains before it while "
+                            "reserved work continues",
+                            item_id,
+                        )
+                        break
+                    try:
+                        ingest = IngestMessage(
+                            telegram_message_id=str(message.telegram_message_id),
+                            source_id=source_id,
+                            topic_id=getattr(message, "topic_id", None),
+                            topic_name=getattr(message, "topic_name", None),
+                            original_url=getattr(message, "original_url", None),
+                            source_path=getattr(message, "source_path", None),
+                            materialize=getattr(message, "materialize", None),
+                        )
+                        item_id = str(self.sync.reserve_message(ingest))
+                        if self.catch_up_budget is not None:
+                            newly_claimed = self.catch_up_budget.claim((item_id,))
+                            if item_id not in newly_claimed:
+                                raise RuntimeError("catch-up-budget-reservation-exceeded")
+                            allowed_ids.add(item_id)
+                        marker = getattr(source, "mark_ingested", None)
+                        if marker is not None:
+                            marker(str(message.telegram_message_id))
+                        processed.append(item_id)
+                    except Exception as exc:
+                        checkpoint_blocked = True
+                        marker = getattr(source, "mark_materialization_failed", None)
+                        if marker is not None:
+                            marker()
+                        self.log.exception(
+                            "[COORDINATOR][CATCH-UP][RESERVE] %s failed; "
+                            "historical checkpoint remains blocked: %s",
+                            item_id, exc,
+                        )
+                        break
         finally:
             await self._release_source_connection()
 
         # Stage 2: classify all durable candidates that still need Vision.
         # This includes VISION rows left by an interrupted run. WAITING_VISION
         # rows remain durable and are retried only by the explicit retry policy.
-        for item in self.db.pending_vision_candidates():
+        vision_candidates = self.db.pending_vision_candidates()
+        vision_candidates = [
+            item for item in vision_candidates
+            if (allowed_ids is None or str(item.content_id) in allowed_ids)
+            and not self.publication_quarantine.contains(str(item.content_id))
+        ]
+        for item in vision_candidates:
             try:
                 self.pipeline.run(item.content_id, stop_after_vision=True)
                 current = self.db.get(item.content_id)
@@ -569,6 +795,8 @@ class Coordinator:
             item
             for item in self.db.pending_vision_candidates()
             if item.state != State.WAITING_VISION
+            and (allowed_ids is None or str(item.content_id) in allowed_ids)
+            and not self.publication_quarantine.contains(str(item.content_id))
         ]
         if vision_failures:
             checkpoint_blocked = True
@@ -592,7 +820,16 @@ class Coordinator:
         # publication from this catch-up run.
         from ArmoredStock.service import ArmoredStock
 
-        stock_report = await ArmoredStock(self).run()
+        stock = ArmoredStock(self)
+        stock_ids = tuple(
+            item_id for item_id in (allowed_ids if allowed_ids is not None else self._catch_up_candidate_ids())
+            if not self.publication_quarantine.contains(str(item_id))
+        )
+        stock_report = (
+            await stock.run(content_ids=stock_ids)
+            if stock_ids is not None
+            else await stock.run()
+        )
         stock_errors = list(stock_report.get("errors", []))
         stock_remaining = int(
             stock_report.get("outcomes", {}).get("approved_missing_original", 0)
@@ -628,6 +865,8 @@ class Coordinator:
         hub_pause_requested = threading.Event()
         hub_paused = threading.Event()
         if (
+            self.catch_up_budget is None
+            and
             callable(live_fetch)
             and callable(live_commit)
             and callable(commit_discovered)
@@ -671,8 +910,20 @@ class Coordinator:
         ]
         source_rank = {source_id: index for index, source_id in enumerate(configured_sources)}
         production_seen: set[str] = set()
+        production_snapshot = None
         while not checkpoint_blocked:
-            production_items = self.db.catch_up_production_items()
+            if live_task is not None or production_snapshot is None:
+                production_items = self.db.catch_up_production_items()
+                if live_task is None:
+                    production_snapshot = production_items
+            else:
+                production_items = production_snapshot
+            if allowed_ids is not None:
+                production_items = [
+                    item for item in production_items
+                    if str(item.content_id) in allowed_ids
+                    and not self.publication_quarantine.contains(str(item.content_id))
+                ]
             if not configured_sources:
                 configured_sources = sorted(
                     {item.source_id for item in production_items}
@@ -687,6 +938,173 @@ class Coordinator:
                 else 0,
                 item.content_id,
             ))
+            available_items = [
+                candidate
+                for candidate in production_items
+                if candidate.content_id not in production_seen
+                and candidate.original_path.is_file()
+            ]
+
+            # Batch barrier for new work: complete IA for every eligible item,
+            # then prepare every Speech v5 package, then render the full Studio
+            # batch, and only after all results are validated may Hub begin.
+            # Earlier in-flight/recovery states are resolved first, in order.
+            phase_batch = []
+            for candidate in available_items:
+                if candidate.state in {State.RECEIVED, State.IA, State.SPEECH}:
+                    phase_batch.append(candidate)
+                else:
+                    break
+
+            if phase_batch:
+                batch_ids = [str(candidate.content_id) for candidate in phase_batch]
+                production_seen.update(batch_ids)
+                speech_ids = []
+                ia_failed = False
+
+                for candidate in phase_batch:
+                    try:
+                        current = self.db.get(candidate.content_id)
+                        if self.publication_quarantine.contains(str(current.content_id)):
+                            continue
+                        if current.state in {State.RECEIVED, State.IA}:
+                            self.pipeline.run(current.content_id, stop_after_ia=True)
+                        current = self.db.get(candidate.content_id)
+                        if current.state != State.SPEECH:
+                            raise RuntimeError(
+                                "ia-phase-did-not-reach-speech:"
+                                f"{current.content_id}:{current.state.value}"
+                            )
+                        speech_ids.append(str(current.content_id))
+                    except Exception as exc:
+                        ia_failed = True
+                        self.log.exception(
+                            "[COORDINATOR][CATCH-UP][IA] %s failed; "
+                            "Speech/Studio/Hub are held for this batch: %s",
+                            candidate.content_id,
+                            exc,
+                        )
+
+                for batch_item_id in batch_ids:
+                    if batch_item_id not in processed:
+                        processed.append(batch_item_id)
+
+                if ia_failed or len(speech_ids) != len(batch_ids):
+                    checkpoint_blocked = True
+                    self._last_catch_up_completed_count = 0
+                    self.log.warning(
+                        "[COORDINATOR][CATCH-UP][IA] batch has blocked caption item(s); "
+                        "safe independent items continue, source checkpoint remains held",
+                    )
+
+                if not speech_ids:
+                    continue
+
+                try:
+                    self._run_speech_studio_batch(speech_ids)
+                except Exception as exc:
+                    checkpoint_blocked = True
+                    self.log.exception(
+                        "[COORDINATOR][CATCH-UP][SPEECH/STUDIO] batch=%s failed; "
+                        "Hub is held: %s",
+                        speech_ids,
+                        exc,
+                    )
+                    break
+
+                # Every item in this batch is now PUBLISHING with an atomic,
+                # durable "speech-studio-v5-complete" event. Only now enter Hub.
+                for batch_item_id in speech_ids:
+                    try:
+                        if live_task is not None:
+                            def pause_source_for_hub():
+                                hub_pause_requested.set()
+                                try:
+                                    timeout = max(
+                                        5.0,
+                                        float(
+                                            os.getenv(
+                                                "ARMORED_CATCHUP_HUB_PAUSE_TIMEOUT",
+                                                "30",
+                                            )
+                                        ),
+                                    )
+                                except ValueError:
+                                    timeout = 30.0
+                                if not hub_paused.wait(timeout):
+                                    hub_pause_requested.clear()
+                                    raise TimeoutError(
+                                        "live Telegram discovery did not release its "
+                                        "session before Hub publication"
+                                    )
+
+                            await asyncio.to_thread(
+                                self._run_pipeline_with_private_database,
+                                batch_item_id,
+                                before_hub=pause_source_for_hub,
+                            )
+                        else:
+                            self.run(batch_item_id)
+
+                        current = self.db.get(batch_item_id)
+                        if current.state == State.PUBLISHING:
+                            if (
+                                not self.db.has_speech_studio_v5_completion(batch_item_id)
+                                or current.result_path is None
+                                or not current.result_path.is_file()
+                            ):
+                                raise RuntimeError(
+                                    "hub-deferred-without-durable-v5-result:"
+                                    f"{batch_item_id}"
+                                )
+                            if (
+                                self.db.caption_recovery_blocked(batch_item_id)
+                                or not self.pipeline._caption_is_policy_valid(
+                                    current, current.publication_caption,
+                                )
+                            ):
+                                checkpoint_blocked = True
+                                self._last_catch_up_completed_count = 0
+                                self.log.warning(
+                                    "[COORDINATOR][CATCH-UP][CAPTION] item=%s has no "
+                                    "Policy-valid persisted caption; it remains blocked and "
+                                    "the checkpoint is held",
+                                    batch_item_id,
+                                )
+                                continue
+                            self.log.info(
+                                "[COORDINATOR][CATCH-UP][HUB] item=%s remains "
+                                "PUBLISHING with valid caption and durable v5 render; "
+                                "prepared, send deferred, batch is resumable",
+                                batch_item_id,
+                            )
+                            continue
+                        if (
+                            current.state != State.PUBLISHED
+                            or not current.cleanup_completed
+                            or current.result_path is None
+                            or not current.result_path.is_file()
+                        ):
+                            raise RuntimeError(
+                                "hub-did-not-reach-durable-published-state:"
+                                f"{batch_item_id}:{current.state.value}"
+                            )
+                    except Exception as exc:
+                        checkpoint_blocked = True
+                        self.log.exception(
+                            "[COORDINATOR][CATCH-UP][HUB] %s failed after the "
+                            "complete validated Studio batch; later publication is held: %s",
+                            batch_item_id,
+                            exc,
+                        )
+                        break
+                    finally:
+                        hub_pause_requested.clear()
+
+                if checkpoint_blocked:
+                    break
+                continue
+
             item = next(
                 (
                     candidate
@@ -723,7 +1141,16 @@ class Coordinator:
                 # Drain any approvals discovered during the previous production
                 # batch as one Stock batch. Studio will not start for these
                 # candidates until all of their originals exist.
-                stock_report = await ArmoredStock(self).run()
+                stock = ArmoredStock(self)
+                stock_ids = tuple(
+                    item_id for item_id in (allowed_ids if allowed_ids is not None else self._catch_up_candidate_ids())
+                    if not self.publication_quarantine.contains(str(item_id))
+                )
+                stock_report = (
+                    await stock.run(content_ids=stock_ids)
+                    if stock_ids is not None
+                    else await stock.run()
+                )
                 stock_errors = list(stock_report.get("errors", []))
                 stock_remaining = int(
                     stock_report.get("outcomes", {}).get(
@@ -742,8 +1169,10 @@ class Coordinator:
                     break
                 ready_unseen = [
                     candidate
-                    for candidate in self.db.catch_up_production_items()
+                    for candidate in production_items
                     if candidate.content_id not in production_seen
+                    and (allowed_ids is None or str(candidate.content_id) in allowed_ids)
+                    and not self.publication_quarantine.contains(str(candidate.content_id))
                     and candidate.original_path.is_file()
                 ]
                 if ready_unseen:
@@ -880,11 +1309,12 @@ class Coordinator:
                         item.content_id,
                     )
 
-        failed = checkpoint_blocked or bool(
-            getattr(source, "historical_materialization_failed", False)
+        failed = (
+            checkpoint_blocked
+            or bool(getattr(source, "historical_materialization_failed", False))
         )
         scan_complete = bool(getattr(source, "historical_scan_exhausted", False))
-        if scan_complete and not failed:
+        if scan_complete and not failed and not self._quarantine_blocks_historical_cursor():
             complete = getattr(source, "complete_historical_sync", None)
             if complete is not None:
                 complete()
@@ -924,8 +1354,10 @@ class Coordinator:
         while True:
             message = await fetch_next()
             if message is None:
-                failed = checkpoint_blocked or bool(
-                    getattr(source, "historical_materialization_failed", False)
+                failed = (
+                    checkpoint_blocked
+                    or bool(getattr(source, "historical_materialization_failed", False))
+                    or self._quarantine_blocks_historical_cursor()
                 )
                 scan_complete = bool(
                     getattr(source, "historical_scan_exhausted", True)
@@ -944,6 +1376,14 @@ class Coordinator:
             # multi-source items (and can hide a persisted RECOVERY state).
             source_id = str(getattr(message, "source_id", "telegram") or "telegram")
             item_id = str(self.db.content_id_for(str(message.telegram_message_id), source_id))
+            if self.publication_quarantine.contains(item_id):
+                checkpoint_blocked = True
+                self.log.warning(
+                    "[COORDINATOR][CATCH-UP][QUARANTINE] item=%s blocks this cursor; "
+                    "remaining independent durable work may continue",
+                    item_id,
+                )
+                break
 
             # A historical candidate can be rediscovered when the persisted
             # checkpoint is still behind it (for example after an interrupted
@@ -960,15 +1400,15 @@ class Coordinator:
             ):
                 marker = getattr(source, "mark_ingested", None)
                 if marker is not None:
-                    marker(item_id)
+                    marker(str(message.telegram_message_id))
 
                 # A previously completed item may be rediscovered after an
                 # earlier candidate was recovered. Its checkpoint is safe to
                 # advance now because this item is durably PUBLISHED+cleanup.
                 topic_id = getattr(message, "topic_id", None)
                 commit = getattr(source, "commit_live_checkpoints", None)
-                if topic_id is not None and commit is not None:
-                    commit({int(topic_id): int(item_id)})
+                if topic_id is not None and commit is not None and not checkpoint_blocked:
+                    commit({int(topic_id): int(message.telegram_message_id)})
                 continue
 
             materialized = False
@@ -1155,8 +1595,15 @@ class Coordinator:
                 if "limit" not in str(exc):
                     raise
                 messages, checkpoints = await fetch_batch()
-                messages = messages[:1]
                 checkpoints = dict(checkpoints) if messages else {}
+
+        if len(messages) > 1 and checkpoints:
+            # Never truncate an adapter's batch and then commit a checkpoint
+            # covering messages that were not reserved or processed.
+            raise RuntimeError("LIVE adapter must return at most one candidate per poll")
+        # Cursor-free local adapters retain their original one-item contract;
+        # there is no durable source checkpoint to advance past later inputs.
+        messages = messages[:1]
 
         if not messages:
             commit = getattr(source, "commit_live_checkpoints", None)
@@ -1165,7 +1612,35 @@ class Coordinator:
             return []
 
         message = messages[0]
+        source_id = str(getattr(message, "source_id", "telegram") or "telegram")
+        canonical_id = str(self.db.content_id_for(
+            str(message.telegram_message_id), source_id
+        ))
+        if self.publication_quarantine.contains(canonical_id):
+            self.log.warning(
+                "[COORDINATOR][LIVE][QUARANTINE] item=%s tem publicação "
+                "incerta; checkpoint da fonte não avançou",
+                canonical_id,
+            )
+            return []
         item_id = str(message.telegram_message_id)
+        if self.continuous_budget is not None:
+            reservation = IngestMessage(
+                telegram_message_id=str(message.telegram_message_id),
+                source_id=source_id,
+                topic_id=getattr(message, "topic_id", None),
+                topic_name=getattr(message, "topic_name", None),
+                original_url=getattr(message, "original_url", None),
+                source_path=getattr(message, "source_path", None),
+                materialize=getattr(message, "materialize", None),
+            )
+            item_id = str(self.sync.reserve_message(reservation))
+            if not self.continuous_budget.try_claim(item_id):
+                self.log.info(
+                    "[COORDINATOR][LIVE] orçamento diário esgotado; candidato reservado "
+                    "sem Vision/download e checkpoint mantido"
+                )
+                return []
         materialized = False
         current = None
         try:
@@ -1389,17 +1864,38 @@ class Coordinator:
         That is incompatible with a persistent Telethon session and can
         surface as ``The asyncio event loop must not change after connection``.
         """
+        if self.continuous_budget is not None:
+            await self._run_continuous_async(poll_seconds, max_cycles)
+            return
+
         # Startup is a separate reconciliation phase. It inventories SQLite +
         # canonical storage and reconciles ambiguous publications before Sync
         # opens its Telegram session. It never downloads or publishes.
         self.startup_reconciler.run()
+        self._prepare_catch_up_budget()
         self.recover_pending()
+
+        if self.catch_up_budget is not None:
+            import logging
+            logging.getLogger(__name__).info(
+                "[COORDINATOR][CATCH-UP] execução limitada run_id=%s limit=%s assigned=%s; LIVE fica para uma execução posterior",
+                self.catch_up_budget.run_id,
+                self.catch_up_budget.limit,
+                self.catch_up_budget.assigned_count,
+            )
+            await self._run_catch_up_with_recovery_async()
+            return
 
         source_complete = (
             self.source.is_historical_complete()
             if self.source is not None and hasattr(self.source, "is_historical_complete")
             else self.db.historical_complete()
         )
+        if source_complete and self._quarantine_blocks_historical_cursor():
+            self.log.error(
+                "[COORDINATOR][CATCH-UP] LIVE bloqueado por recibos UNKNOWN em quarentena"
+            )
+            return
         if not source_complete or not self.db.has_sync_checkpoints():
             if (
                 self.source is None or not hasattr(self.source, "is_historical_complete")
@@ -1496,6 +1992,114 @@ class Coordinator:
                 if max_cycles is None or cycles < max_cycles:
                     await asyncio.sleep(live_error_backoff)
 
+    def _continuous_batch_has_unfinished_items(self, item_ids: set[str]) -> bool:
+        terminal = {State.WAITING_VISION, State.DUPLICATE}
+        for item_id in item_ids:
+            item = self.db.get(item_id)
+            if item.state in terminal:
+                continue
+            if item.state == State.PUBLISHED and item.cleanup_completed:
+                continue
+            return True
+        return False
+
+    async def _run_continuous_async(
+        self, poll_seconds: float = 2.0, max_live_cycles: int | None = None
+    ) -> None:
+        """Run durable bounded batches, complete CATCH-UP, then stay LIVE.
+
+        A fixed UTC-day ledger caps unique content IDs across all batches and
+        LIVE. Exhaustion waits for the next window without advancing source
+        checkpoints or changing the persistent allowance.
+        """
+        assert self.continuous_budget is not None
+        controller = self.continuous_budget
+        self.startup_reconciler.run()
+        live_cycles = 0
+        backoff = max(0.25, float(poll_seconds))
+        while not self._shutdown_requested:
+            history_complete = (
+                self.source.is_historical_complete()
+                if self.source is not None and hasattr(self.source, "is_historical_complete")
+                else self.db.historical_complete()
+            )
+            pending_work = self._catch_up_candidate_ids()
+            if history_complete and not pending_work:
+                if controller.remaining <= 0:
+                    await asyncio.sleep(min(controller.seconds_until_reset(), 60.0))
+                    continue
+                if self._quarantine_blocks_historical_cursor():
+                    self.log.error(
+                        "[COORDINATOR][CONTINUOUS] LIVE bloqueado por publicação "
+                        "UNKNOWN em quarentena; aguardando reconciliação explícita"
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+                self.catch_up_budget = None
+                self.db.heartbeat_runtime_lock("coordinator")
+                try:
+                    processed = await self.run_live_once_async()
+                    live_cycles += 1
+                    if max_live_cycles is not None and live_cycles >= max_live_cycles:
+                        return
+                    if not processed:
+                        await asyncio.sleep(backoff)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    self.log.exception("[COORDINATOR][LIVE] erro transitório; checkpoints mantidos")
+                    await asyncio.sleep(backoff)
+                continue
+
+            batch = controller.open_batch()
+            if batch is None:
+                await asyncio.sleep(min(controller.seconds_until_reset(), 60.0))
+                continue
+            run_id, limit = batch
+            budget = DurableCatchUpBudget(
+                self.storage.database / "catch-up-work-budget.sqlite3",
+                run_id,
+                limit,
+                continuous_budget=controller,
+            )
+            previous_budget = self.catch_up_budget
+            self.catch_up_budget = budget
+            try:
+                if callable(getattr(self.source, "reset_historical_scan", None)):
+                    self.source.reset_historical_scan()
+                self._prepare_catch_up_budget()
+                self.recover_pending()
+                await self._run_catch_up_with_recovery_async()
+                assigned = budget.assigned_ids()
+                source_failed = bool(
+                    getattr(self.source, "historical_materialization_failed", False)
+                )
+                history_complete = (
+                    self.source.is_historical_complete()
+                    if self.source is not None and hasattr(self.source, "is_historical_complete")
+                    else self.db.historical_complete()
+                )
+                if source_failed or self._continuous_batch_has_unfinished_items(assigned):
+                    self.log.info(
+                        "[COORDINATOR][CONTINUOUS] lote %s mantido aberto para retomada; itens=%s limit=%s",
+                        run_id, len(assigned), limit,
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+                controller.close_batch(run_id)
+                self.log.info(
+                    "[COORDINATOR][CONTINUOUS] lote %s concluído; histórico_completo=%s "
+                    "itens=%s quota_diária_restante=%s",
+                    run_id, history_complete, len(assigned), controller.remaining,
+                )
+            finally:
+                self.catch_up_budget = previous_budget
+                budget.close()
+            if not history_complete and callable(
+                getattr(self.source, "reset_historical_scan", None)
+            ):
+                self.source.reset_historical_scan()
+
     def run_forever(self, poll_seconds: float = 2.0, max_cycles: int | None = None) -> None:
         """Recover, finish catch-up once, then monitor Telegram continuously.
 
@@ -1504,8 +2108,12 @@ class Coordinator:
         deterministic.
         """
         import asyncio
-        self.db.acquire_runtime_lock("coordinator")
-        self._runtime_lock_held = True
+        # The production CLI acquires the SQLite lease before schema/runtime
+        # validation in Coordinator.build(). run_forever() must reuse that
+        # ownership instead of attempting a second same-process acquisition.
+        if not self._runtime_lock_held:
+            self.db.acquire_runtime_lock("coordinator")
+            self._runtime_lock_held = True
         self._shutdown_requested = False
         previous_sigint = signal.getsignal(signal.SIGINT)
 
@@ -1527,19 +2135,29 @@ class Coordinator:
             if self._runtime_lock_held:
                 self.db.release_runtime_lock("coordinator")
                 self._runtime_lock_held = False
-    def retry_waiting_vision(self, *, limit: int | None = 1) -> list[dict[str, str]]:
+    def retry_waiting_vision(
+        self,
+        *,
+        limit: int | None = 1,
+        content_ids: list[str] | tuple[str, ...] | None = None,
+    ) -> list[dict[str, str]]:
         """Explicitly retry WAITING_VISION items through Vision only.
 
         Requires the runtime lock. Positive limits run batches capped at 1000;
-        ``limit=None`` or ``limit=0`` snapshots all eligible rows and processes
-        each once. Never downloads media or runs Studio/IA/Hub. Rows without
-        an original URL are excluded by the database.
+        ``content_ids`` restricts execution to an explicit reviewed allowlist.
+        ``limit=None`` or ``limit=0`` snapshots all eligible rows only when no
+        allowlist is supplied. Never downloads media or runs Studio/IA/Hub.
+        Exact recent no-offer outcomes are persisted with an expiry and do not
+        trigger another affiliate API request during that interval.
         """
         if not self._runtime_lock_held:
             raise RuntimeError(
                 "WAITING_VISION retry requires the Coordinator runtime lock"
             )
-        candidates = self.db.pending_waiting_vision_retries(limit=limit)
+        candidates = self.db.pending_waiting_vision_retries(
+            limit=limit,
+            content_ids=content_ids,
+        )
         outcomes: list[dict[str, str]] = []
         started = time.perf_counter()
         total = len(candidates)
@@ -1586,16 +2204,424 @@ class Coordinator:
                 )
         return outcomes
 
+
+    def _has_speech_studio_v5_completion(self, item_id: str) -> bool:
+        """Return whether SQLite records the v5 render as the publication input."""
+        return self.db.has_speech_studio_v5_completion(item_id)
+
+    def _preflight_speech_studio_v5(self):
+        """Load Speech's real processor and validate all fixed render dependencies."""
+        # Explicit object injection exists for deterministic tests only. Normal
+        # Coordinator construction never sets this attribute and must preflight
+        # the actual Speech runtime before processing media.
+        injected = getattr(self, "_speech_processor_override", None)
+        if injected is not None:
+            return injected
+        import shutil
+        from ArmoredSpeech.model_processor import ModelProcessor
+
+        root = self.storage.root.resolve(strict=True)
+        processor = ModelProcessor()
+        preflight = getattr(getattr(processor, "intelligence", None), "preflight", None)
+        if not callable(preflight):
+            raise RuntimeError("ArmoredSpeech processor does not expose intelligence.preflight()")
+        preflight()
+
+        for label, key, fallback in (
+            ("FFmpeg", "ARMORED_FFMPEG", "ffmpeg"),
+            ("FFprobe", "ARMORED_FFPROBE", "ffprobe"),
+        ):
+            executable = (os.getenv(key) or fallback).strip()
+            if not executable or shutil.which(executable) is None:
+                raise RuntimeError(f"{label} não encontrado; configuração {key} inválida.")
+
+        configured_effect = (os.getenv("ARMORED_SPEECH_EFFECT") or "").strip()
+        effect = Path(configured_effect).expanduser() if configured_effect else root / "ArmoredSpeech" / "assets" / "efeitosonoro.wav"
+        if not effect.is_absolute():
+            effect = root / effect
+        effect = effect.resolve(strict=True)
+        try:
+            effect.relative_to(root)
+        except ValueError as exc:
+            raise RuntimeError("Asset de efeito Speech precisa permanecer dentro do root do projeto.") from exc
+        if not effect.is_file() or effect.stat().st_size <= 0:
+            raise RuntimeError("Asset canônico ArmoredSpeech/assets/efeitosonoro.wav ausente ou vazio.")
+
+        if os.getenv("ARMORED_STUDIO_INTRO", "1").strip() != "0":
+            configured_banner = (os.getenv("ARMORED_STUDIO_BANNER") or "").strip()
+            banner = Path(configured_banner).expanduser() if configured_banner else root / "ArmoredStudio" / "assets" / "banner.png"
+            if not banner.is_absolute():
+                banner = root / banner
+            banner = banner.resolve(strict=True)
+            try:
+                banner.relative_to(root)
+            except ValueError as exc:
+                raise RuntimeError("Banner do Studio precisa permanecer dentro do root do projeto.") from exc
+            if not banner.is_file() or banner.stat().st_size <= 0:
+                raise RuntimeError("Banner canônico do Studio ausente ou vazio.")
+        return processor
+
+    def _run_speech_studio_batch(self, item_ids: list[str]) -> dict[str, Path]:
+        """Run the complete Speech v5 hand-off before Studio, then persist results atomically.
+
+        The public Coordinator path may pass a one-item batch (LIVE). CATCH-UP can
+        pass all currently stock-backed items together. No Publisher is invoked here.
+        """
+        normalized_ids = [str(value) for value in item_ids]
+        if not normalized_ids or len(normalized_ids) != len(set(normalized_ids)):
+            raise ValueError("Speech/Studio batch requires unique non-empty content IDs")
+        quarantined = [item_id for item_id in normalized_ids if self.publication_quarantine.contains(item_id)]
+        if quarantined:
+            raise RuntimeError("speech-studio-blocked-by-publication-quarantine:" + ",".join(quarantined))
+
+        import json
+        import sqlite3
+        from datetime import datetime, timezone
+        from uuid import uuid4
+
+        from ArmoredSpeech.batch import SpeechItem, run_bulk
+        from ArmoredSpeech.studio_batch_runner import run_complete_batch
+        from armored_core.integrity import sha256_file
+
+        root = self.storage.root.resolve(strict=True)
+        items = [self.db.get(item_id) for item_id in normalized_ids]
+        before_hashes: dict[str, str] = {}
+        for item in items:
+            if item.state != State.SPEECH:
+                raise RuntimeError(
+                    f"Speech/Studio v5 requires durable SPEECH state; "
+                    f"item={item.content_id}, state={item.state.value}"
+                )
+            if not item.affiliate_url or not item.affiliate_name:
+                raise RuntimeError(f"Speech/Studio v5 requires Vision-approved affiliate metadata: {item.content_id}")
+            original = item.original_path.resolve(strict=True)
+            workspace = item.workspace.resolve(strict=True)
+            try:
+                original.relative_to(workspace)
+                original.relative_to(root)
+                workspace.relative_to(root)
+            except ValueError as exc:
+                raise RuntimeError(f"Original/workspace escaped project root for {item.content_id}") from exc
+            if not original.is_file() or original.stat().st_size <= 0:
+                raise FileNotFoundError(f"immutable-original-missing-or-empty:{original}")
+            destination = self.storage.result(
+                item.content_id, item.affiliate_url, item.affiliate_name,
+                source_id=item.source_id,
+            ).resolve()
+            try:
+                destination.relative_to(root)
+            except ValueError as exc:
+                raise RuntimeError(f"Studio destination escaped project root: {destination}") from exc
+            if destination == original:
+                raise RuntimeError("Studio destination collides with immutable original")
+            if destination.exists():
+                raise FileExistsError(
+                    f"Studio refuses to overwrite an existing output; recovery/review required: {destination}"
+                )
+            before_hashes[str(item.content_id)] = sha256_file(original).lower()
+
+        run_id = (
+            "coordinator-"
+            + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            + "-"
+            + uuid4().hex[:12]
+        )
+        run_root = self.storage.storage / "validation" / "speech-studio-v5" / run_id
+        run_root.mkdir(parents=True, exist_ok=False)
+        manifest_path = run_root / "manifest.json"
+        studio_report_path = run_root / "studio-report.json"
+        speech_database = self.storage.database / "armoredspeech.sqlite3"
+
+        try:
+            processor = self._preflight_speech_studio_v5()
+            speech_items = [
+                SpeechItem(
+                    source_id=str(item.source_id),
+                    item_id=str(item.telegram_message_id),
+                    video_path=Path(item.original_path),
+                    source_order=index,
+                )
+                for index, item in enumerate(items)
+            ]
+            counts = run_bulk(
+                speech_items,
+                database=speech_database,
+                processor=processor,
+            )
+            if not isinstance(counts, dict):
+                raise RuntimeError("ArmoredSpeech.run_bulk returned an invalid result")
+            if int(counts.get("failed", 0) or 0) != 0 or int(counts.get("prepared", 0) or 0) != len(items):
+                raise RuntimeError(
+                    f"Speech did not prepare the complete batch: expected={len(items)}, counts={counts}"
+                )
+
+            # Verify Speech's persisted SQLite decisions in read-only mode.
+            db_uri = f"file:{speech_database.resolve().as_posix()}?mode=ro"
+            connection = sqlite3.connect(db_uri, uri=True)
+            try:
+                connection.row_factory = sqlite3.Row
+                rows = connection.execute(
+                    "SELECT source_id,item_id,status,wav_path,original_sha256_before,original_sha256_after "
+                    "FROM armored_speech_results"
+                ).fetchall()
+            finally:
+                connection.close()
+            decisions = {(str(row["source_id"]), str(row["item_id"])): row for row in rows}
+            manifest_items = []
+            for item in items:
+                identity = (str(item.source_id), str(item.telegram_message_id))
+                decision = decisions.get(identity)
+                if decision is None or str(decision["status"]) != "READY":
+                    status = str(decision["status"]) if decision is not None else "MISSING_DECISION"
+                    raise RuntimeError(f"Speech decision not READY for {identity}: {status}")
+                expected_hash = before_hashes[str(item.content_id)]
+                before = str(decision["original_sha256_before"] or "").lower()
+                after = str(decision["original_sha256_after"] or "").lower()
+                if not before or before != expected_hash or after != expected_hash:
+                    raise RuntimeError(f"Speech original hash evidence invalid for {identity}")
+                original = Path(item.original_path).resolve(strict=True)
+                if sha256_file(original).lower() != expected_hash:
+                    raise RuntimeError(f"Original changed during Speech for {identity}")
+                wav = Path(str(decision["wav_path"] or "")).resolve(strict=True)
+                try:
+                    wav.relative_to(Path(item.workspace).resolve(strict=True))
+                except ValueError as exc:
+                    raise RuntimeError(f"Speech WAV escaped item workspace for {identity}") from exc
+                if not wav.is_file() or wav.stat().st_size <= 0:
+                    raise RuntimeError(f"Speech WAV missing or empty for {identity}")
+
+                manifest_items.append({
+                    "source_id": str(item.source_id),
+                    "telegram_message_id": str(item.telegram_message_id),
+                    "content_id": str(item.content_id),
+                    "state": State.SPEECH.value,
+                    "workspace": str(Path(item.workspace).resolve()),
+                    "original_path": str(original),
+                    "original_sha256": expected_hash,
+                    "working_path": str(item.working_path.resolve()) if item.working_path else None,
+                    "affiliate_name": item.affiliate_name,
+                    "affiliate_url": item.affiliate_url,
+                    "original_url": item.original_url,
+                    "topic_id": item.topic_id,
+                    "topic_name": item.topic_name,
+                    "affiliate_urls": list(item.affiliate_urls),
+                    "ia_context": item.ia_context or {},
+                })
+
+            manifest = {
+                "schema_version": 1,
+                "phase": "ARMORED_SPEECH",
+                "phase_status": "COMPLETE",
+                "approved": True,
+                "batch_id": run_id,
+                "expected_item_count": len(manifest_items),
+                "items": manifest_items,
+            }
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            # Persist the hand-off fence for the entire set before any Studio
+            # render starts. A partial Studio failure cannot flow into Hub.
+            for item in items:
+                self.db.transition(
+                    item.content_id,
+                    State.STUDIO_BATCH,
+                    "speech-v5-ready-entering-studio-batch",
+                )
+
+            studio_runner_override = getattr(
+                self, "_speech_studio_batch_runner_override", None
+            )
+            studio_report = (studio_runner_override or run_complete_batch)(
+                root=root,
+                manifest_path=manifest_path,
+                speech_database=speech_database,
+                report_path=studio_report_path,
+                copy_only=False,
+                storage_root=self.storage.storage_root,
+            )
+            if (
+                not isinstance(studio_report, dict)
+                or studio_report.get("status") != "SUCCESS"
+                or studio_report.get("originals_intact") is not True
+            ):
+                raise RuntimeError("Speech/Studio did not confirm SUCCESS and original integrity")
+
+            expected_items = {
+                (str(item.source_id), str(item.telegram_message_id)): item
+                for item in items
+            }
+            processed_rows = studio_report.get("processed")
+            if not isinstance(processed_rows, list) or len(processed_rows) != len(items):
+                raise RuntimeError("Studio report does not contain exactly the requested batch")
+            outputs: dict[str, Path] = {}
+            seen: set[tuple[str, str]] = set()
+            for record in processed_rows:
+                if not isinstance(record, dict):
+                    raise RuntimeError("Studio report contains an invalid item record")
+                identity = (str(record.get("source_id") or ""), str(record.get("item_id") or ""))
+                item = expected_items.get(identity)
+                if item is None or identity in seen:
+                    raise RuntimeError(f"Studio report item identity invalid/duplicated: {identity}")
+                seen.add(identity)
+                expected_hash = before_hashes[str(item.content_id)]
+                if str(record.get("original_sha256_before") or "").lower() != expected_hash:
+                    raise RuntimeError(f"Studio did not confirm original hash for {identity}")
+                output = Path(str(record.get("output_path") or "")).resolve(strict=True)
+                expected_output = self.storage.result(
+                    item.content_id, item.affiliate_url, item.affiliate_name,
+                    source_id=item.source_id,
+                ).resolve(strict=True)
+                if output != expected_output or output == Path(item.original_path).resolve(strict=True):
+                    raise RuntimeError(f"Studio output path does not match canonical destination for {identity}")
+                try:
+                    output.relative_to(root)
+                except ValueError as exc:
+                    raise RuntimeError(f"Studio output escaped project root for {identity}") from exc
+                if not output.is_file() or output.stat().st_size <= 0:
+                    raise RuntimeError(f"Studio output invalid for {identity}")
+                if sha256_file(Path(item.original_path)).lower() != expected_hash:
+                    raise RuntimeError(f"Original changed during Studio for {identity}")
+                outputs[str(item.content_id)] = output
+
+            if set(outputs) != set(normalized_ids):
+                raise RuntimeError("Studio omitted one or more requested items")
+
+            # One SQLite transaction changes every item from STUDIO_BATCH to
+            # PUBLISHING only after the complete batch is rendered and verified.
+            self.db.complete_speech_studio_batch(outputs)
+            self.log.info(
+                "[COORDINATOR][SPEECH/STUDIO] v5 batch=%s items=%s complete; "
+                "publication may now begin",
+                run_id, len(outputs),
+            )
+            return outputs
+        except Exception as exc:
+            # Preserve the durable in-flight boundary on requested shutdown;
+            # Recovery on restart will rebuild from ORIGINAL instead of treating
+            # a killed native child as a completed render.
+            if self.pipeline._shutdown_checker():
+                self.log.warning(
+                    "[COORDINATOR][SPEECH/STUDIO] shutdown during v5 batch; "
+                    "preserving STUDIO_BATCH for restart: %s",
+                    exc,
+                )
+                raise KeyboardInterrupt from exc
+            # If the external phase failed, keep immutable ORIGINALs and write a
+            # durable failure event. Recovery recognizes this boundary and will
+            # rebuild derived artifacts through Speech v5, never legacy Studio.
+            reason = f"speech-studio-v5-failed:{type(exc).__name__}"
+            for item_id in normalized_ids:
+                try:
+                    current = self.db.get(item_id)
+                    if current.state in {State.SPEECH, State.STUDIO_BATCH}:
+                        self.db.transition(item_id, State.RECOVERY, reason)
+                except Exception:
+                    self.log.exception(
+                        "[COORDINATOR][SPEECH/STUDIO] could not persist failure boundary for %s",
+                        item_id,
+                    )
+            raise
+
+
+    def _run_recovery_speech_studio(self, item_id: str) -> None:
+        """Repair Speech/Studio through v5 without crossing into Hub.
+
+        Recovery can reconcile several interrupted items in one pass. It must
+        finish the derived batch for each item and leave publication to the
+        normal Coordinator loop only after the recovery pass has completed.
+        """
+        self._run_speech_studio_batch([str(item_id)])
+
     def run(self, item_id: str) -> None:
-        self.pipeline.run(item_id)
+        """Run one item through IA -> Speech v5 batch -> Studio -> Hub in order."""
+        item_id = str(item_id)
+        if self.publication_quarantine.contains(item_id):
+            self.log.warning(
+                "[COORDINATOR][QUARANTINE] item=%s remains fenced from all stages",
+                item_id,
+            )
+            return
+        if self.db.caption_recovery_blocked(item_id):
+            self.log.debug("[COORDINATOR][CAPTION-BLOCKED] item=%s remains durably blocked", item_id)
+            return
+        item = self.db.get(item_id)
+
+        if item.state in {State.PUBLISHED, State.WAITING_VISION, State.DUPLICATE, State.STUDIO_COMPLETE}:
+            # Preserve existing terminal/business outcomes. PUBLISHED may still
+            # need its already-authorized cleanup; the other states are fences.
+            self.pipeline.run(item_id)
+            return
+
+        if item.state in {State.RECOVERY, State.FAILED}:
+            if self.publication_quarantine.contains(item_id):
+                self.log.warning(
+                    "[COORDINATOR][RECOVERY][QUARANTINE] item=%s remains fenced",
+                    item_id,
+                )
+                return
+            if item.state == State.FAILED:
+                self.db.transition(item_id, State.RECOVERY, "legacy-failed-recovery")
+            self.recovery.reconcile(item_id)
+            return
+
+        if item.state == State.STUDIO:
+            # Existing rows from the pre-v5 path cannot be rendered/published
+            # again through the legacy Studio call. Force evidence-driven
+            # Recovery to rebuild the derived chain through Speech v5.
+            self.db.transition(item_id, State.RECOVERY, "legacy-studio-state-requires-speech-v5")
+            self.recovery.reconcile(item_id)
+            return
+
+        if item.state == State.STUDIO_BATCH:
+            # STUDIO_BATCH surviving a Coordinator invocation means the process
+            # stopped inside the external phase. Do not blindly reuse a partial
+            # output; the explicit Recovery path preserves ORIGINAL and rebuilds.
+            self.db.transition(item_id, State.RECOVERY, "interrupted-speech-studio-v5-batch")
+            self.recovery.reconcile(item_id)
+            return
+
+        if item.state == State.PUBLISHING:
+            if not self._has_speech_studio_v5_completion(item_id):
+                self.db.transition(item_id, State.RECOVERY, "legacy-publishing-state-requires-speech-studio-v5")
+                self.recovery.reconcile(item_id)
+                return
+            self.pipeline.run(item_id)
+            return
+
+        if item.state == State.SPEECH:
+            self._run_speech_studio_batch([item_id])
+            self.pipeline.run(item_id)
+            return
+
+        # Coordinator is the sole composition root. Stop Pipeline immediately
+        # after IA, so no standard path can call Studio without its v5 payload.
+        self.pipeline.run(item_id, stop_after_ia=True)
+        current = self.db.get(item_id)
+        if current.state == State.SPEECH:
+            self._run_speech_studio_batch([item_id])
+            self.pipeline.run(item_id)
 
     def recover(self, item_id: str) -> None:
         self.recovery.reconcile(item_id)
 
     def close(self) -> None:
         try:
-            if self._runtime_lock_held:
-                self.db.release_runtime_lock("coordinator")
+            try:
+                if self.catch_up_budget is not None:
+                    self.catch_up_budget.close()
+            finally:
+                try:
+                    if self.continuous_budget is not None:
+                        self.continuous_budget.close()
+                finally:
+                    try:
+                        self.publication_quarantine.close()
+                    finally:
+                        if self._runtime_lock_held:
+                            self.db.release_runtime_lock("coordinator")
         finally:
             self._runtime_lock_held = False
             self.db.close()
@@ -1608,9 +2634,11 @@ class Coordinator:
         return item_id
 
     def recover_pending(self):
+        allowed_ids = self._prepare_catch_up_budget()
         states = (
             State.RECEIVED.value, State.VISION.value, State.IA.value,
-            State.STUDIO.value, State.PUBLISHING.value, State.RECOVERY.value,
+            State.SPEECH.value, State.STUDIO_BATCH.value, State.STUDIO.value,
+            State.PUBLISHING.value, State.RECOVERY.value,
             State.FAILED.value, State.PUBLISHED.value,
         )
         placeholders = ",".join("?" for _ in states)
@@ -1622,6 +2650,31 @@ class Coordinator:
         recovered = []
         for row in rows:
             item_id = str(row["content_id"])
+            if allowed_ids is not None and item_id not in allowed_ids:
+                continue
+            if self.publication_quarantine.contains(item_id):
+                self.log.warning(
+                    "[COORDINATOR][RECOVERY][QUARANTINE] item=%s remains fenced; "
+                    "ambiguous historical publication is not retried",
+                    item_id,
+                )
+                continue
+            if self.db.caption_recovery_blocked(item_id):
+                self.log.debug(
+                    "[COORDINATOR][RECOVERY][CAPTION-BLOCKED] item=%s remains fenced; "
+                    "manual review required",
+                    item_id,
+                )
+                continue
+            if (
+                str(row["state"]) == State.PUBLISHING.value
+                and self.db.publication(item_id) is None
+                and self._has_speech_studio_v5_completion(item_id)
+            ):
+                # A prior bounded run reached the durable publication barrier.
+                # Preserve the validated payload for a later explicitly
+                # authorized send; do not rebuild Speech/Studio on resume.
+                continue
 
             # FAILED is a legacy terminal state from the previous
             # generic-exception path. Current processing failures are persisted
@@ -1641,20 +2694,9 @@ class Coordinator:
                     # An interrupted download leaves only the transactional
                     # .part artifact. Sync always restarts materialization
                     # from Telegram, so never treat the partial as a usable
-                    # original. Remove it before rediscovery to keep the
-                    # canonical workspace deterministic.
-                    partial = item.original_path.with_suffix(
-                        item.original_path.suffix + ".part"
-                    )
-                    if partial.exists():
-                        try:
-                            partial.unlink()
-                        except OSError as exc:
-                            import logging
-                            logging.getLogger(__name__).warning(
-                                "[STARTUP][DOWNLOAD] id=%s não foi possível remover .part: %s",
-                                item_id, exc,
-                            )
+                    # original. Preserve it in a receipted backup before
+                    # rediscovery; never erase interruption evidence.
+                    self.recovery.preserve_partial_download(item_id)
                     continue
             try:
                 self.recover(item_id)

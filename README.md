@@ -10,6 +10,79 @@ O manual reúne a arquitetura, ownership por módulo, contrato ativo Speech → 
 
 ## Estado de validação
 
+### Candidato de integração em continuação — PR #19
+
+O alvo é Python **3.11.9 unificado**, com instalação isolada reproduzível
+descrita em [PYTHON311_RUNTIME](docs/PYTHON311_RUNTIME.md). O pacote RVC de
+compatibilidade é um fork explícito; modelos Melody e ambientes existentes
+permanecem preservados.
+
+O provedor padrão de legenda é **Ollama local**, modelo `qwen3:4b`, configurável
+por `ARMORED_IA_OLLAMA_MODEL`. `ARMORED_IA_OLLAMA_THINK=false` reduz a latência
+do Qwen3 sem alterar a Policy. Gemini é opcional e só é selecionado
+explicitamente. Ollama gera o conteúdo; normalização e Policy locais verificam
+frase, coração e hashtags. Uma tentativa corretiva limitada pode usar os motivos
+de rejeição. Se a legenda continuar inválida, o item fica bloqueado sem envio.
+O Ollama mantém uma candidata por chamada mesmo quando `ARMORED_IA_MAX_CANDIDATES`
+está configurado para outro provedor; `ARMORED_IA_OLLAMA_FORMAT_RETRIES=1` permite
+uma única correção de JSON malformado. Termos de um trecho do título rejeitado são
+retirados da lista permitida na tentativa corretiva, e a quantidade de chamadas
+fica registrada. Esses limites evitam truncamento local sem flexibilizar a Policy.
+O adaptador não baixa modelos nem inventa legendas ou hashtags. Consulte
+`.env.example`.
+
+O contrato completo separa geração criativa, normalização apenas de formato,
+Policy contextual estrita, persistência de candidatas e recuperação auditável de
+legendas `BLOCKED`: [Contrato de legendas ArmoredIA](docs/ARMOREDIA_CAPTION_CONTRACT.md).
+
+O Hub está incluído no pacote e na composição do Coordinator. Validações usam
+transporte simulado e banco isolado; `ARMORED_HUB_DRY_RUN=1` bloqueia envio e
+verificação externa antes de qualquer alteração de publicação. A aprovação
+dos testes não autoriza publicar em canais reais.
+
+### Inicialização do Coordinator no Windows
+
+O pacote instala o comando `armoredcreator` e também fornece `run_coordinator.py`.
+Configure as três fontes e seus três destinos Hub em `.env`; guarde os valores
+de autenticação somente em `credentials/project.env`. A validação abaixo não
+abre SQLite nem conexão Telegram e oculta os valores sensíveis:
+
+```powershell
+& .\.venv\Scripts\python.exe .\run_coordinator.py --root . --validate-config
+```
+
+Para iniciar a esteira, o Coordinator recupera estados, conclui CATCH-UP e só
+então entra em LIVE. Sem `--publish`, o Hub permanece em dry-run como padrão:
+
+```powershell
+& .\.venv\Scripts\python.exe .\run_coordinator.py --root . --run
+```
+
+O envio real exige a opção explícita `--publish`. Não use essa opção para
+validação local; as rotas e as credenciais reais devem ser revisadas pelo
+operador antes de iniciar a operação.
+
+
+Para um envio **real e explicitamente autorizado** em tópico de teste, use
+somente uma cópia isolada da configuração e configure **a rota efetiva** para
+o chat/tópico de teste, além de definir
+`ARMORED_HUB_TEST_CHAT_ID` e `ARMORED_HUB_TEST_TOPIC_ID` com os mesmos
+identificadores. A trava rejeita env incompleto, rota operacional ou destino
+pré-existente diferente **antes** de criar uma intenção de publicação ou abrir
+o transporte Telegram. Ela **não redireciona** rotas e não supera
+`ARMORED_HUB_DRY_RUN=1`; para envio real autorizado essa variável deve
+estar desativada. Não alterar rotas operacionais nem reaproveitar registros
+de publicação de produção apenas para testar.
+
+
+Uma amostra histórica isolada concluiu IA local → Speech → Studio e retomada
+após interrupção com Hub simulado, mantendo o render e o original. Isso não
+comprova descoberta Telegram e consulta Shopee atuais: a aprovação Vision
+histórica foi reaproveitada. Recuperação dos originais WAITING_VISION, revisão
+manual restante e autorização operacional continuam gates separados.
+
+### Evidência histórica anterior do laboratório
+
 Código testado de referência: commit 23b398d8150a79bb59299733c5340db307b4119c, branch de laboratório test/armoredstudio-speech-integration-20261015.
 
 - **Testes locais:** 127 testes aprovados; compileall, imports e auditoria estática de ownership passaram.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 
@@ -25,6 +26,7 @@ class FakeVision:
             affiliate_urls=("https://affiliate.invalid/product",),
             ia_context={
                 "productName": "Produto fixture",
+                "category": "casa",
                 "shopId": "700",
                 "itemId": "800",
             },
@@ -33,7 +35,7 @@ class FakeVision:
 
 class FakeIA:
     def generate_caption(self, _context):
-        return "Produto demonstrativo 🧡 #casa"
+        return "Casa charmosa 🧡 #casa"
 
 
 class FakeSpeechProcessor:
@@ -166,6 +168,163 @@ def test_full_fixture_pipeline_reaches_studio_and_keeps_hub_disabled(tmp_path, m
     assert output_path.is_file()
     assert output_path.read_bytes().endswith(b"-studio")
     assert report["fixture_originals_intact"] is True
+
+
+def test_approved_reexecution_skips_vision_and_is_idempotent_after_success(tmp_path, monkeypatch):
+    video = tmp_path / "published-original.mp4"
+    video.write_bytes(b"verified-published-original")
+    row = {
+        "source_id": "source1",
+        "telegram_message_id": "12019",
+        "source_path": "published-original.mp4",
+        "expected_original_sha256": hashlib.sha256(b"verified-published-original").hexdigest(),
+        "original_url": "https://shopee.co/approved-origin-12019",
+        "source_content_id": "telegram-source_12019",
+        "prior_publication_receipt": "1338",
+        "approved_vision": {
+            "affiliate_name": "Fixture approved product",
+            "affiliate_url": "https://affiliate.invalid/approved-12019",
+            "affiliate_urls": ["https://affiliate.invalid/approved-12019"],
+            "ia_context": {"productName": "Fixture approved product", "category": "casa", "shopId": "120", "itemId": "190"},
+        },
+    }
+    manifest = _manifest(tmp_path, [row])
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["reexecution"] = {
+        "kind": "approved_publication_reexecution",
+        "execution_id": "published-batch-20261023",
+        "version": 1,
+    }
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setenv("ARMORED_IA_ENABLED", "1")
+    monkeypatch.setenv("ARMORED_IA_CAPTION_ENABLED", "1")
+
+    class VisionMustNotRun:
+        def identify(self, _item):
+            raise AssertionError("persisted Vision approval must be reused")
+
+    calls = {"ia": 0}
+    class CountingIA(FakeIA):
+        def generate_caption(self, context):
+            calls["ia"] += 1
+            return super().generate_caption(context)
+
+    kwargs = dict(
+        ia_provider="ollama",
+        require_live_preflight=False,
+        vision_factory=VisionMustNotRun,
+        ia_factory=CountingIA,
+        speech_processor=FakeSpeechProcessor(),
+        studio_runner=_studio_runner,
+    )
+    report = run_lab_pipeline(tmp_path, manifest, **kwargs)
+    assert report["status"] == "SUCCESS"
+    assert report["reexecution"]["approved_vision_seeded"] == 1
+    assert report["reexecution"]["publication_disabled"] is True
+    assert report["outputs"][0]["source_content_id"] == "telegram-source_12019"
+    assert report["outputs"][0]["prior_publication_receipt"] == "1338"
+    assert report["outputs"][0]["publication_idempotency_key"].endswith("telegram-source_12019")
+    assert calls["ia"] == 1
+
+    repeated = run_lab_pipeline(tmp_path, manifest, **kwargs)
+    assert repeated["run_directory"] == report["run_directory"]
+    assert repeated["outputs"] == report["outputs"]
+    assert calls["ia"] == 1
+
+
+def test_approved_reexecution_rejects_repeated_canonical_product(tmp_path):
+    video = tmp_path / "original.mp4"
+    video.write_bytes(b"fixture")
+    approval = {
+        "affiliate_name": "Fixture product",
+        "affiliate_url": "https://affiliate.invalid/product",
+        "ia_context": {"shopId": "12", "itemId": "34"},
+    }
+    rows = []
+    for message in ("1", "2"):
+        rows.append({
+            "source_id": "source1",
+            "telegram_message_id": message,
+            "source_path": "original.mp4",
+            "expected_original_sha256": hashlib.sha256(b"fixture").hexdigest(),
+            "original_url": f"https://shopee.co/{message}",
+            "source_content_id": f"source_{message}",
+            "prior_publication_receipt": f"receipt_{message}",
+            "approved_vision": approval,
+        })
+    manifest = _manifest(tmp_path, rows)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["reexecution"] = {
+        "kind": "approved_publication_reexecution",
+        "execution_id": "duplicate-product-replay",
+        "version": 1,
+    }
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    import pytest
+    with pytest.raises(LabPipelineError, match="URL ou produto canônico repetido"):
+        load_fixture_manifest(tmp_path, manifest)
+
+
+def test_approved_reexecution_resumes_only_an_ai_failure_without_repeating_sync_or_vision(tmp_path, monkeypatch):
+    import pytest
+
+    video = tmp_path / "published-original.mp4"
+    video.write_bytes(b"verified-published-original")
+    row = {
+        "source_id": "source1", "telegram_message_id": "12019",
+        "source_path": "published-original.mp4",
+        "expected_original_sha256": hashlib.sha256(video.read_bytes()).hexdigest(),
+        "original_url": "https://shopee.co/approved-origin-12019",
+        "source_content_id": "telegram-source_12019", "prior_publication_receipt": "1338",
+        "approved_vision": {
+            "affiliate_name": "Fixture approved product",
+            "affiliate_url": "https://affiliate.invalid/approved-12019",
+            "affiliate_urls": ["https://affiliate.invalid/approved-12019"],
+            "ia_context": {"productName": "Fixture approved product", "category": "casa", "shopId": "120", "itemId": "190"},
+        },
+    }
+    manifest = _manifest(tmp_path, [row])
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["reexecution"] = {
+        "kind": "approved_publication_reexecution",
+        "execution_id": "published-batch-resume-20261023", "version": 1,
+    }
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setenv("ARMORED_IA_ENABLED", "1")
+    monkeypatch.setenv("ARMORED_IA_CAPTION_ENABLED", "1")
+
+    class FailOnceIA(FakeIA):
+        calls = 0
+
+        def generate_caption(self, context):
+            self.calls += 1
+            if self.calls == 1:
+                from ArmoredIA.providers.base import AIProviderError
+                raise AIProviderError("temporary local generation failure", category="TRANSIENT_UNAVAILABLE")
+            return super().generate_caption(context)
+
+    class VisionMustNotRun:
+        calls = 0
+
+        def identify(self, _item):
+            self.calls += 1
+            raise AssertionError("persisted approval must be reused")
+
+    ia = FailOnceIA()
+    vision = VisionMustNotRun()
+    kwargs = dict(
+        ia_provider="ollama", require_live_preflight=False,
+        vision_factory=lambda: vision, ia_factory=lambda: ia,
+        speech_processor=FakeSpeechProcessor(), studio_runner=_studio_runner,
+    )
+    with pytest.raises(LabPipelineError, match="IA não concluiu"):
+        run_lab_pipeline(tmp_path, manifest, **kwargs)
+    report = run_lab_pipeline(tmp_path, manifest, **kwargs)
+    assert report["status"] == "SUCCESS"
+    assert report["resumption_count"] == 1
+    assert vision.calls == 0
+    assert ia.calls == 2
+    assert len(report["outputs"]) == 1
 
 
 def test_project_environment_loader_ignores_production_runtime_and_telegram_settings(tmp_path, monkeypatch):

@@ -1,0 +1,68 @@
+{
+  "run_id": "ollama-caption-recovery-clone-20261023-v6",
+  "provider": {
+    "provider": "ollama",
+    "model": "gemma3:1b"
+  },
+  "content_id": "-1003788989075_296",
+  "state": "PUBLISHING",
+  "caption": "Acidificante 🧡 elegantes\n#Acidificante #Equilíbrio",
+  "policy_valid": true,
+  "recovery_status": "SUCCEEDED",
+  "recovery_attempts": 5,
+  "ia_attempts_after_first": 5,
+  "ia_attempts_after_restart": 5,
+  "restart_did_not_repeat_ia": true,
+  "candidates": [
+    {
+      "candidate_index": 1,
+      "caption": "pH ajustado 🧡 para?\n#equilíbrio",
+      "raw_caption": "pH ajustado para?\n#pH #equilíbrio",
+      "policy_valid": 0,
+      "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+      "selected": 0
+    },
+    {
+      "candidate_index": 2,
+      "caption": "Acidificante 🧡 poderoso\n#acidificante",
+      "raw_caption": "Acidificante poderoso\n#acidificante #PH",
+      "policy_valid": 0,
+      "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+      "selected": 0
+    },
+    {
+      "candidate_index": 1,
+      "caption": "Protege a 🧡 pele",
+      "raw_caption": "Protege a pele\n#cuidadoscomapele #pele",
+      "policy_valid": 0,
+      "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+      "selected": 0
+    },
+    {
+      "candidate_index": 2,
+      "caption": "Acidificante 🧡 poderoso\n#acidificante #máscara",
+      "raw_caption": "Acidificante poderoso\n#acidificante #máscara",
+      "policy_valid": 0,
+      "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+      "selected": 0
+    },
+    {
+      "candidate_index": 1,
+      "caption": "Acidificante 🧡 elegantes\n#Acidificante #Equilíbrio",
+      "raw_caption": "Acidificante elegantes\n#Acidificante #Equilíbrio",
+      "policy_valid": 1,
+      "rejection_reason": null,
+      "selected": 1
+    }
+  ],
+  "original_sha256": "687a763d6e842d5dc7a30fb82609f7063f947196c753ebdb1d959dbc4b965cfe",
+  "render_sha256": "d3689bba01861b181b5cf848bb48cf096af4806a1056f88bb57bab6f81b79591",
+  "media_unchanged": true,
+  "vision_speech_studio_reexecuted": false,
+  "hub": "dry-run",
+  "publication_receipt": null,
+  "elapsed_seconds_first_run": 48.19,
+  "production_db_touched": false,
+  "shopee_calls": 0,
+  "telegram_sends": 0
+}

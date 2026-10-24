@@ -10,6 +10,9 @@ from typing import Any
 
 from armored_core.database import Database
 from armored_core.services import IngestMessage, SyncService
+from armored_core.shopee_urls import is_supported_shopee_url
+from armored_core.storage import Storage
+from armored_core.telegram_session import telegram_session_basename
 
 
 @dataclass(frozen=True)
@@ -57,7 +60,9 @@ class TelegramReader:
         except ImportError as exc:
             raise RuntimeError("Dependência Telethon ausente; instale as dependências do Sync.") from exc
 
-        self._session = Path(root) / "credentials" / "telegram" / "session" / "armoredsync"
+        self._session = (
+            Path(root) / "credentials" / "telegram" / "session" / telegram_session_basename()
+        )
         self._api_id = api_id
         self._api_hash = api_hash
         self._TelegramClient = TelegramClient
@@ -135,7 +140,6 @@ class TelegramSource:
     """
 
     URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
-    SHOPEE_DOMAINS = ("shopee.com.br", "shopee.co", "shopee.ee")
     # Class defaults preserve legacy tests that instantiate TelegramSource via __new__.
     source: str | None = None
     source_id: str | None = None
@@ -159,6 +163,7 @@ class TelegramSource:
         self._historical_complete = False
         self._historical_checkpoints: dict[int, int] = {}
         self._historical_limit = self._read_historical_limit()
+        self._configured_historical_limit = self._historical_limit
         self._historical_candidates_emitted = 0
         self._historical_limit_reached = False
         self._historical_materialization_failed = False
@@ -245,6 +250,34 @@ class TelegramSource:
             return True
         return False
 
+    def set_run_candidate_limit(self, limit: int) -> None:
+        """Apply the remaining Coordinator work budget to this source pass."""
+        if limit < 1:
+            raise ValueError("run candidate limit must be positive")
+        configured = getattr(self, "_configured_historical_limit", None)
+        self._historical_limit = min(limit, configured) if configured else limit
+
+    def _is_durably_reserved_without_new_link(
+        self, telegram_message_id: str, source_id: str, incoming_url: str | None
+    ) -> bool:
+        """Avoid spending a new batch slot on an already durable message.
+
+        A late-discovered Shopee URL is the exception: Sync must be allowed to
+        enrich a reservation that had no URL so Vision can make a fresh,
+        authorized decision.
+        """
+        if self.db is None:
+            return False
+        content_id = self.db.content_id_for(str(telegram_message_id), str(source_id))
+        row = self.db.conn.execute(
+            "SELECT original_url FROM items WHERE content_id=?", (content_id,)
+        ).fetchone()
+        if row is None:
+            return False
+        stored_url = str(row["original_url"] or "").strip()
+        candidate_url = str(incoming_url or "").strip()
+        return not (not stored_url and candidate_url)
+
     def mark_historical_complete(self) -> None:
         if self.db is not None:
             if self.source_id:
@@ -283,12 +316,12 @@ class TelegramSource:
         text = str(getattr(message, "message", "") or "")
         for url in TelegramSource.URL_RE.findall(text):
             cleaned = url.rstrip(".,!?;:" + chr(34) + "'()[]{}<>")
-            if any(domain in cleaned.lower() for domain in TelegramSource.SHOPEE_DOMAINS):
+            if is_supported_shopee_url(cleaned):
                 return cleaned
         for entity in (getattr(message, "entities", None) or []):
-            url = getattr(entity, "url", None)
-            if url and any(domain in str(url).lower() for domain in TelegramSource.SHOPEE_DOMAINS):
-                return str(url)
+            url = str(getattr(entity, "url", "") or "").strip()
+            if is_supported_shopee_url(url):
+                return url
         return None
 
     @staticmethod
@@ -319,12 +352,15 @@ class TelegramSource:
             (str(original_url),),
         ).fetchall()
 
-        # Raw URL identity is global: another Telegram source must not create
-        # a second durable row for a URL that is already represented.
+        # Cross-source identity must be recorded in SQLite as DUPLICATE.
+        # Returning True here would discard the source/message identity before
+        # Database.reserve_item() can create the durable duplicate row/event.
+        # Let cross-source candidates reach reservation; same-source rediscovery
+        # is still suppressed below when an existing row safely represents it.
         if not rows:
             return False
         if any(str(row["source_id"] or "telegram") != current_source_id for row in rows):
-            return True
+            return False
 
         recoverable = False
         represented = False
@@ -518,8 +554,8 @@ class TelegramSource:
         necessary as long as Telegram keeps delivering data.
         """
         target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists():
-            target.unlink()
+        if target.exists() or target.is_symlink():
+            raise FileExistsError(f"Telegram download refuses to overwrite an existing target: {target}")
 
         telegram_size = getattr(getattr(message, "document", None), "size", None)
         idle_timeout = max(
@@ -535,7 +571,7 @@ class TelegramSource:
             request_size=1024 * 1024,
         ).__aiter__()
 
-        with target.open("wb") as output:
+        with target.open("xb") as output:
             while True:
                 try:
                     chunk = await asyncio.wait_for(
@@ -601,6 +637,8 @@ class TelegramSource:
         Retries are confined to materialization. They do not alter Vision state,
         advance historical checkpoints, or invoke downstream processing.
         """
+        if target.exists() or target.is_symlink():
+            raise FileExistsError(f"Telegram materialization refuses an existing target: {target}")
         source = self.source or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         if not source:
             raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
@@ -627,14 +665,13 @@ class TelegramSource:
                 await self._download_to(message, target)
                 return
             except Exception as exc:
-                # Never leave a partial file that could be mistaken for an ORIGINAL.
-                try:
-                    if target.exists():
-                        target.unlink()
-                except OSError:
-                    logging.getLogger(__name__).exception(
-                        "[SYNC][DOWNLOAD] Não foi possível remover arquivo parcial: %s", target
-                    )
+                # A collision is not our failed download; never move or retry it.
+                if isinstance(exc, FileExistsError):
+                    raise
+                if target.exists() or target.is_symlink():
+                    Storage(self.root).preserve_artifacts([target], workspace=target.parent,
+                        content_id=Database.content_id_for(str(telegram_message_id), self.source_id or source),
+                        reason="telegram-download-attempt-failed")
 
                 if attempt >= max_attempts or not self._is_retryable_download_error(exc):
                     raise
@@ -946,6 +983,10 @@ class TelegramSource:
                 message_id, topic_id, topic_name, message, original_url = candidate
                 if message_id in self._seen:
                     continue
+                if self._is_durably_reserved_without_new_link(
+                    str(message_id), source_id, original_url
+                ):
+                    continue
                 if self._catchup_limit_before_candidate():
                     return
                 self._historical_candidates_emitted += 1
@@ -1004,6 +1045,14 @@ class TelegramSource:
 
     async def fetch_live_batch_async(self, limit: int | None = None) -> tuple[list[SyncMessage], dict[int, int]]:
         """Discover all new LIVE candidates, resolving grouped albums consistently."""
+        if limit is not None:
+            if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+                raise ValueError("LIVE batch limit must be a positive integer")
+            # A bounded compatibility call uses the canonical one-candidate
+            # cursor. The old full-scan path computed the newest checkpoint
+            # before stopping at the limit and could skip undispatched videos.
+            message, checkpoints = await self.fetch_live_candidate_async()
+            return ([] if message is None else [message]), checkpoints
         source = self.source or (os.getenv("ARMORED_SYNC_SOURCE") or "").strip()
         if not source:
             raise RuntimeError("ARMORED_SYNC_SOURCE não configurado")
@@ -1351,6 +1400,7 @@ class MultiTelegramSource:
         self._pending_source: TelegramSource | None = None
         self._pending_message: SyncMessage | None = None
         self._pending_checkpoints: dict[int, int] = {}
+        self._run_candidate_limit: int | None = None
 
     @property
     def mode(self) -> str:
@@ -1388,16 +1438,30 @@ class MultiTelegramSource:
         stream. Each source's topic checkpoints remain pending until the
         Coordinator confirms the complete staged catch-up.
         """
+        remaining = self._run_candidate_limit
         for source in self.sources:
             if source.is_historical_complete():
                 continue
+            if remaining is not None:
+                if remaining <= 0:
+                    return
+                source.set_run_candidate_limit(remaining)
             async for message in source.iter_historical_candidates_async():
                 self._last_source = source
                 yield message
+                if remaining is not None:
+                    remaining -= 1
+                    if remaining <= 0:
+                        return
             # ARMORED_SYNC_CATCHUP_LIMIT is a global certification boundary:
             # do not start the next source after one source reaches that limit.
             if source.historical_limit_reached:
                 return
+
+    def set_run_candidate_limit(self, limit: int) -> None:
+        if limit < 1:
+            raise ValueError("run candidate limit must be positive")
+        self._run_candidate_limit = int(limit)
 
     async def materialize_candidate_async(
         self, source_id: str, telegram_message_id: str, target: Path

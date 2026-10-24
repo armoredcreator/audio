@@ -1,18 +1,306 @@
+<!-- Public copy: local roots and operational source identifiers use placeholders. -->
 # ArmoredAudioLab — manual canônico de arquitetura, operação e evidências
 
-**Versão:** 2.1  
-**Revisão:** 20/10/2026 (horário local de São Paulo)  
+**Versão:** 2.4
+**Revisão:** 23/10/2026 (horário local de São Paulo)
 **Repositório:** armoredcreator/audio  
 **Branch estável de laboratório:** test/armoredstudio-speech-integration-20261015  
 **Base de código consolidada antes da auditoria Sync:** a2af33c378c12a4599c7fe8bf6de3cb541575d86  
 **Contrato ativo Speech → Studio:** v5  
-**Finalidade:** validar a separação de responsabilidades entre Speech (áudio) e Studio (visual/renderização) antes de uma futura integração operacional.
+**Finalidade:** validar a separação de responsabilidades entre Speech (áudio) e Studio (visual/renderização), com um candidato de integração operacional em revisão.
 
 Este é o documento canônico: reúne arquitetura, fronteiras de responsabilidade, contrato, ordem de execução, ativos, segurança, comandos e evidências verificadas. Os READMEs e documentos técnicos curtos devem apontar para este manual e não manter um segundo estado operacional divergente. Os bancos, vídeos, pacotes, relatórios e saídas citados abaixo são evidências locais do laboratório; não devem ser adicionados ao Git.
 
 ---
 
+## 0. Continuação autorizada da PR #19 — situação atual
+
+### Estado da campanha de 23/10/2026
+
+Na árvore operacional, a regressão completa terminou com **693 aprovados,
+4 ignorados e 0 falhas**. Na árvore efetivamente integrada à PR #19, antes do
+push final, a regressão terminou com **567 aprovados, 3 ignorados e 0 falhas**.
+Os dois workflows da PR no commit `fe6f8426a1cdee5dfcdb17550e6ba11c39dd8689`
+passaram: [RVC Windows](https://github.com/armoredcreator/audio/actions/runs/39976747946)
+e [ArmoredSpeech isolado](https://github.com/armoredcreator/audio/actions/runs/39976748034).
+Os totais diferem porque as árvores contêm conjuntos de testes diferentes.
+
+O Coordinator verdadeiro foi executado em clones consistentes, com três itens
+históricos de fontes diferentes e originais de mídia verificados. ArmoredIA
+gerou e persistiu as legendas com o provedor configurado; Speech v5 e Studio
+reais produziram saídas novas; Vision e Stock reaproveitaram aprovação e
+original existentes. Em uma quarta amostra histórica aprovada (`391`), Speech
+classificou narração PT-BR como RVC elegível e executou RVC Melody real. O WAV
+de voz, o resultado Speech v5 e o render H.264/AAC 1080×1920 foram produzidos
+no clone; o decode completo passou e o SHA-256 do original permaneceu igual.
+O Bot API local respondeu a `getMe`, `getChat` e `getChatMember` nas três rotas
+e confirmou o bot como administrador. Somente `Bot.send_video` foi interceptado:
+as chamadas simuladas continham vídeo, legenda, link afiliado e tópico corretos
+(228, 1160 e 1327). **Nenhuma publicação real foi enviada e nenhuma consulta
+Shopee foi feita.**
+
+O teste controlado de CATCH-UP usou o Coordinator real e SQLite clonado. Uma
+falha técnica manteve `historical_complete=0` e não avançou checkpoints. Após
+uma interrupção de conexão, a retomada completou os três fluxos históricos;
+com a fonte de teste exaurida e sem falhas pendentes, o Coordinator mudou
+legitimamente para LIVE e processou um item novo. Os 48 checkpoints de entrada
+foram preservados no clone antes da passagem controlada; o SQLite operacional
+não foi modificado.
+
+O launcher `START_ALL.bat` agora exige Python 3.11.9 da `.venv`, executa o
+preflight de áudio e o preflight integrado dos sete módulos sobre uma cópia
+consistente do SQLite, valida as rotas e, somente em `--run`, verifica o Bot
+API em `127.0.0.1:8081`. Reutiliza um serviço já autenticado; se a porta estiver
+ocupada por um serviço que falhe `getMe`, encerra o fluxo sem abrir duplicata.
+O Bot API operacional existente foi autenticado e reutilizado sem iniciar outro
+processo. Os modos sem `--run` foram verificados e não iniciaram o Coordinator.
+
+Uma checagem adicional usou o Coordinator verdadeiro, Telethon autorizado e
+cópias consistentes do SQLite e da sessão configurada. A leitura limitada
+encontrou a mensagem `12043` da fonte `-1002039708059`, tópico de origem `0`.
+Ela chegou à reserva do Sync e à decisão real da Vision: sem link Shopee,
+persistida em `WAITING_VISION`. Não houve download nem consulta Shopee. O
+cursor `12043` foi gravado somente no clone; a cópia operacional permanece no
+cursor `12042`, com os três `historical_complete=0` e os 48 checkpoints
+preservados.
+
+A barreira do Hub foi corrigida no candidato. Em clone, o Coordinator verdadeiro
+processou um lote pequeno, validou o payload no Hub real e, com
+`ARMORED_HUB_DRY_RUN=1`, deixou o item em `PUBLISHING`, sem recibo, sem chamada
+ao Bot API e sem avanço do checkpoint. A retomada com o mesmo ID preservou o
+render v5; com o gate de envio aberto apenas no teste isolado, a execução retomou
+no Hub sem repetir IA/Speech/Studio. Nenhum envio real foi feito.
+
+O `--run` da CLI agora exige `--catch-up-run-id` e `--max-catch-up-items` de 1 a
+1000. Um ledger SQLite separado e durável fixa a allowlist global do lote,
+incluindo itens históricos elegíveis existentes e novas reservas do Sync.
+Cada `content_id` consome no máximo uma vaga na execução inteira; nenhuma etapa
+reinicia o orçamento. Vision, Stock, recuperação, IA, Speech, Studio e Hub
+recebem somente IDs dessa allowlist. Repetir o mesmo ID e limite retoma o mesmo
+lote; um novo ID autoriza o lote seguinte e conta de novo qualquer item que
+continue pendente. A execução limitada encerra ao fim do lote e não entra em
+LIVE. O limite encerra a leitura sem confirmar cursores parciais nem forçar
+`historical_complete`; as mensagens restantes continuam disponíveis para a
+próxima execução. O teste integrado do Coordinator comprovou limite 2 abrangendo
+um aprovado histórico e um novo, terceiro item intocado, reinício idempotente,
+e orçamento não reiniciado entre etapas.
+
+Com `--run` sem `--publish`, o Hub real valida integridade, legenda e destino,
+mas adia o envio antes de consultar o Bot API ou criar recibo. O item renderizado
+permanece em `PUBLISHING`, com evidência v5 e arquivo de resultado persistidos;
+ele não é marcado `PUBLISHED`. A retomada do mesmo lote reutiliza esse resultado
+e volta à barreira do Hub sem repetir IA, Speech, RVC ou Studio. Uma autorização
+independente de publicação é necessária para atravessar a barreira.
+
+**A primeira execução limitada parou com segurança em recibos históricos
+UNKNOWN.** A correção nesta PR registra essas incertezas em um ledger lateral,
+isola a recuperação item a item e mantém a barreira de envio. Promova e valide
+esta correção antes de retomar o mesmo lote. O comando para retomar é
+`START_ALL.bat --run --catch-up-run-id lote-001 --max-catch-up-items 3`; não
+inclui `--publish`, portanto só prepara/retoma o lote e para na barreira do Hub.
+Usar outro ID inicia outro orçamento; para retomar após interrupção, repetir o
+mesmo ID e o mesmo limite.
+
+Para operação contínua após a aprovação e promoção, existe um modo separado:
+`START_ALL.bat --continuous --continuous-operation-id producao-2026 --max-items-per-day 100 --max-items-per-batch 3`.
+O Coordinator executa sucessivos lotes de até 3 itens, termina o CATCH-UP
+somente após a varredura legítima e então permanece em LIVE. Um ledger separado
+e persistente limita itens únicos por dia UTC; a configuração do identificador,
+limite diário e tamanho do lote não pode ser alterada pelo mesmo ledger. Ao
+esgotar o teto, o processo aguarda a próxima janela diária, mantendo o candidato
+reservado e os checkpoints sem avanço. A retomada reabre o lote incompleto.
+Escolha um teto diário compatível com a quota Shopee autorizada e os recursos do
+computador. O modo contínuo não autoriza consultas Shopee nem publicações: sem
+quota Shopee válida, Vision continua bloqueada; sem `--publish`, um resultado
+pronto fica em `PUBLISHING` e segura o lote corrente até autorização de envio.
+
+### Quarentena de recibos Telegram incertos
+
+Uma resposta `UNKNOWN` durante verificação de publicação nunca é convertida em
+`ABSENT`. O Coordinator preserva o recibo SQLite e acrescenta a observação a
+`storage/database/publication-quarantine.sqlite3`, com chave de idempotência,
+destino/tópico, status original, estado do item e evidência da última transição.
+A quarentena não confirma publicação, não autoriza reenvio e não altera o recibo.
+Ela bloqueia todas as etapas daquele item, em qualquer estado SQLite, desde Sync
+e Vision até Stock, IA, Speech, Studio e Hub. `--publish` não remove essa cerca.
+O Coordinator, Pipeline, Recovery, ArmoredStock e Hub verificam o ledger lateral;
+os renders existentes ficam preservados em seus caminhos originais.
+
+Itens independentes e seguros continuam elegíveis dentro de um orçamento novo
+explicitamente limitado. IDs já atribuídos a `lote-001` nunca são substituídos:
+se todos estiverem em quarentena, esse lote não processa outros itens. A
+quarentena só bloqueia CATCH-UP/LIVE quando o cursor da mesma fonte e tópico
+ainda teria de atravessar a mensagem não reconciliada. O checkpoint permanece
+antes dela; quarentenas já atrás de um cursor comprovado não congelam fontes
+independentes. Falta de identidade ou evidência de cursor é tratada de forma
+conservadora e mantém o bloqueio.
+
+Na validação da correção, o clone manteve inalteradas as atribuições originais de
+`lote-001` (`-1003788989075_291`, `_292`, `_293`). Os cinco recibos ambíguos
+(`291`–`294` e o legado `1040`/`1339`) não entraram em nenhuma etapa; os resultados
+já existentes de 292 e 293 permaneceram byte a byte iguais e sem autorização de
+envio. O limite 3 não foi aumentado. Um lote novo isolado, com item sem recibo
+ambíguo, percorreu IA → Speech → Studio → Hub em dry-run e retomou sem repetir as
+etapas de geração; o original manteve o mesmo SHA-256. O Hub também foi testado
+com envio habilitado e continuou recusando itens em quarentena.
+
+Uma quarentena cujo cursor está antes da mensagem mantém o histórico bloqueado;
+uma quarentena já coberta por cursor persistido não impede a operação contínua
+de itens seguros. A reconciliação da mensagem antiga continua separada da
+autorização de novas publicações. Os recibos históricos nunca são editados por
+essa regra.
+
+### Validação integrada real em clone (2026-10-23)
+
+O Coordinator e SyncService, Vision, Stock, IA, Speech, Studio e Hub foram
+executados com componentes reais em uma cópia consistente do banco e do original
+aprovado `-1003788989075_392`. A aprovação Vision persistida foi reutilizada; a
+consulta Shopee ficou desautorizada. O ArmoredIA local gerou e persistiu
+`Touca com 🧡 regulador` / `#regulador`, aprovada pela Policy. Speech classificou
+`PT_BR_NARRATION_WITH_MUSIC` em `pt-br`, separou a voz com UVR e executou RVC
+Melody; o contrato v5 registrou os hashes do modelo, índice, voz e original.
+Studio renderizou H.264/AAC a 1080×1920, 10 s. O original permaneceu com SHA-256
+`5ae7d1c3565504720ecaf02acccf1e30bd40dc7415be3ff70cc512c2e08d9aec`; o render
+teve SHA-256 `0eb2d4a6019c590b238cbb10c198f6dcfb6ce152b382ca3db53b066eed8c5fb6`.
+
+O Hub real validou o render, legenda e afiliado, resolveu a rota para o grupo
+`-1004341972306`, tópico `228`, e parou no dry-run antes de construir o cliente
+Bot ou enviar. Não houve recibo de publicação. Após reiniciar o Coordinator, o
+item permaneceu `PUBLISHING`, o orçamento continuou em 1/1, os hashes e as
+contagens de IA/Speech não mudaram e somente a barreira Hub foi verificada de
+novo.
+
+Uma leitura Telethon separada usou somente a cópia isolada da sessão configurada
+e leu até 20 mensagens recentes por fonte. Fonte 1: a mensagem de vídeo 2754,
+sem link Shopee, chegou à decisão real Vision `WAITING_VISION`. Fonte 2: nenhum
+vídeo posterior ao cursor apareceu na janela limitada. Fonte 3 (canal sem tópico
+de origem): a mensagem 12239 foi reservada no clone e ficou `RECEIVED` aguardando
+a autorização de Vision; nenhum resolver comercial foi chamado. Os snapshots de
+checkpoints antes/depois foram idênticos. Não houve download, consulta Shopee ou
+envio Telegram.
+
+### Regressão integrada real das três rotas e correções de retomada (2026-10-23)
+
+Uma execução isolada com o Coordinator e módulos reais processou o lote global
+de três itens `-1003788989075_296`, `-1002698134896_30` e
+`-1002039708059_71`, um de cada fonte. Os originais aprovados foram copiados
+para storage isolado e reutilizados; hashes antes/depois foram idênticos. A IA
+real (Ollama local) persistiu legendas aprovadas pela Policy, Speech v5
+classificou narração PT-BR (RVC Melody elegível), fala em espanhol e música
+instrumental; Studio gerou três MP4. O Hub real capturou payloads dry-run para
+os tópicos `228`, `1160` e `1327`, com vídeo, legenda, afiliado e grupo
+`-1004341972306`. Todos terminaram recuperáveis em `PUBLISHING`, sem recibos.
+O limite atribuiu exatamente três IDs. Não houve download, consulta Shopee nem
+envio. A retomada das falhas de preflight de Speech/Studio reutilizou as
+legendas e manteve uma tentativa IA por item.
+
+O ensaio encontrou duas lacunas corrigidas antes da execução final: itens com
+aprovação Vision persistida mas sem `ia_context_json` agora usam um contexto
+mínimo recuperável derivado somente de `affiliate_name`, sem reconsultar Vision
+ou inventar identidade; e a Policy compara frases do produto após remover
+palavras de ligação, impedindo que uma legenda copie o título com “de/para”.
+Quando todas as candidatas são rejeitadas, o ArmoredIA faz uma única tentativa
+adicional por padrão (`ARMORED_IA_POLICY_RETRIES=1`, configurável de 0 a 2),
+inclui os motivos da Policy no pedido real ao provider e persiste as avaliações
+de ambas as rodadas. Se continuar sem legenda válida, o item permanece em
+`RECOVERY` e o Hub não é chamado.
+
+Evidências locais da campanha, não versionadas no Git: `armored-real-three-source-batch-v4-result.json`,
+`armored-real-safe-e2e-392-result.json`, `armored-real-safe-e2e-392-resume.json`,
+`armored-real-telegram-sync-discovery.json` e `operational-preflight-final.json`.
+O preflight operacional passou com Python 3.11.9, imports/assets/rotas e cópia
+SQLite íntegra; registrou explicitamente rede desligada, Telegram desconectado,
+Shopee não consultada e publicação desabilitada.
+
+Consultas reais Shopee permanecem bloqueadas sem
+`ARMORED_SHOPEE_QUERIES_AUTHORIZED=1`, ID de orçamento, limite entre 1 e 1000,
+evidência de autorização e validade ISO-8601 com fuso horário. O ledger de quota
+é persistente, consome a vaga antes da chamada e não permite reconfigurar a
+mesma chave. Publicação real exige `--publish` separadamente. Os 12 vídeos v3 e
+a origem 1040/recibo 1339 seguem excluídos.
+
+As árvores operacional e da PR eram iguais antes desta rodada; o candidato desta
+rodada acrescenta o orçamento de quota Shopee, o orçamento global do Coordinator,
+limites no Sync/Stock e a barreira de deferimento Hub. Não foi copiado para
+produção. Os testes focais e integrados da implementação limitada passaram; o
+CI desta cabeça deve ser confirmado antes da promoção. A regressão integral
+anterior não foi repetida por rotina.
+
+Esta seção atualiza a fotografia histórica das seções seguintes. A fotografia
+de commits abaixo refere-se à rodada anterior; os resultados desta alteração
+devem ser vinculados ao novo commit da branch da PR após a regressão e o CI.
+
+- **Python 3.11.9 unificado:** ambiente isolado corrigido e uma segunda
+  instalação limpa passaram em `pip check`, imports e inferência Melody curta.
+  O fork explícito `rvc-python 0.1.5+armored311.1` conserva o código de inferência
+  upstream e sua licença. Receita, lock, hashes e a limitação de proveniência
+  do wheel Fairseq estão em [PYTHON311_RUNTIME](PYTHON311_RUNTIME.md).
+- **IA:** Ollama local é o padrão, com `gemma3:1b` configurável; Gemini é opcional.
+  Texto e hashtags são gerados pelo modelo e validados pela política única.
+  O coração é inserido entre as palavras. Nenhuma candidata válida implica
+  `RECOVERY`, sem legenda inventada. Consulte `.env.example` e
+  [GEMINI_RECOVERY](GEMINI_RECOVERY.md) para os limites de transporte opcionais.
+  Provedor e modelo selecionados são registrados antes da geração em
+  `ia_generation_attempts` e no trace, com conclusão, falha ou interrupção.
+  A tabela é criada nas cópias isoladas; nenhuma migração foi aplicada à base
+  operacional. Promoção de esquema continua sujeita ao backup e à autorização.
+- **Integração histórica isolada:** uma amostra real retomou IA com Ollama,
+  concluiu Speech/Studio, renderizou H.264/AAC 1080×1920 e passou decodificação.
+  A interrupção antes do Hub foi retomada preservando o mesmo render; uma
+  chamada ao transporte simulado concluiu a fronteira de publicação no banco
+  experimental. Não houve envio externo. Vision histórica foi reaproveitada;
+  isto não comprova descoberta Telegram ou oferta Shopee atuais.
+- **Hub:** o pacote, antes ausente da árvore da PR, foi integrado à composição,
+  empacotamento e CI. Revalida estado SQLite, evento v5, original, resultado e
+  caminhos antes de envio. `ARMORED_HUB_DRY_RUN=1` bloqueia também verificações
+  externas, antes de criar registro de publicação. Falha de preflight sem
+  intenção de envio preserva o render validado para retomada.
+- **Sync:** o adaptador LIVE limitado utiliza o cursor canônico de um candidato.
+  Um adaptador legado não pode truncar um lote e avançar checkpoint sobre
+  mensagens ainda não entregues. Identidades e checkpoints operacionais não
+  foram alterados por estes testes.
+  A redescoberta de itens já publicados utiliza o ID original da mensagem
+  para o cursor, preserva o namespace da fonte no SQLite e não avança sobre
+  uma falha anterior. Esses dois cenários têm regressão específica.
+- **Separação vocal:** o executável do ambiente ativo tem prioridade sobre
+  um CLI global encontrado no PATH. WAVs e recibos existentes são preservados;
+  a escrita é exclusiva e os estágios parciais permanecem disponíveis após
+  falha. A inferência curta não substitui a validação dessa separação real.
+  Uma amostra audiovisual adicional concluiu separação validada, RVC Melody
+  e Studio com `BANNER_PRESENT` no Python 3.11.9 corrigido (árvore da revisão
+  `56a93d66d471f36e79c5ea316510f9c985564a23`), com decodificação aprovada e
+  original intacto. Não houve publicação nem repetição do lote de 14.
+  Qualidade subjetiva da voz continua sem aprovação humana.
+- **Hash canônico:** a escolha de proprietário histórico no SQLite reutiliza
+  `armored_core.integrity.sha256_file`; a validação de formato e o ranking
+  permanecem iguais. Os 13 testes focais de deduplicação passaram antes e
+  depois da unificação.
+- **Retomada e threads:** Vision executado em segundo plano utiliza uma cópia
+  do serviço vinculada à conexão SQLite da própria thread. Cache negativo,
+  oferta e erro de autenticação têm regressões, sem transformar falha técnica
+  em ausência de oferta. Sync e Recovery arquivam derivados e downloads
+  parciais em backups únicos com recibo e verificação SHA-256 dos arquivos.
+  A operação de armazenamento é compartilhada; o ponto de entrada assíncrono
+  de materialização delega à implementação canônica, preservando sua interface.
+- **Recuperação:** há ferramenta de sessão Telegram nova e recuperação de uma
+  mensagem exata; credenciais são fornecidas somente no terminal local.
+  Consulte [TARGETED_TELEGRAM_RECOVERY](TARGETED_TELEGRAM_RECOVERY.md).
+  Originais WAITING_VISION ainda não foram recuperados com prova suficiente.
+- **Pendências preservadas:** orçamento Shopee verificável para consultas
+  adicionais, autenticação Telegram, revisão manual dos caminhos restantes,
+  proveniência completa do build Fairseq e liberação operacional. Os lotes
+  aprovados de 14/17 vídeos não foram repetidos.
+
+Os relatórios individuais, cópias SQLite, sessões, URLs históricas, mídias e
+recibos operacionais permanecem locais. Esta versão não promove código nem
+reconciliação para produção e não autoriza publicação real.
+
+---
+
 ## 1. Resumo executivo — estado confirmado
+
+**Referência histórica de 20/10/2026:** os resultados e limites abaixo pertencem
+às versões identificadas nessa seção; o estado mais recente está na seção 0.
 
 ### Decisão atual
 
@@ -152,7 +440,7 @@ Invariantes obrigatórios:
 8. Não converter avisos em sucesso sem pós-validação; não converter avisos isolados em falha sem verificar status, streams e decodificação.
 9. Não adicionar Redis, RabbitMQ, Celery, Kafka, publish_queue ou outra infraestrutura de fila para esta fronteira.
 10. Não executar git reset, git clean, remoções recursivas genéricas, substituições destrutivas de ativos ou limpeza automática de storage.
-11. Não migrar o código para o repositório operacional até existir plano separado, revisão de interfaces/Coordinator/SQLite e validação em branch isolada.
+11. A promoção operacional é um fluxo separado do AudioLab. A PR #19 continua sujeita à revisão de interfaces/Coordinator/schema SQLite; não integrar mudanças da instalação privada por cópia ou merge cego.
 12. Alterações de documentação precisam refletir evidências efetivamente vistas e identificar como pendente qualquer validação ainda não realizada.
 
 ---
@@ -357,7 +645,7 @@ Execute os comandos a partir da raiz de ArmoredAudioLab. Estas verificações n�
 ### 9.1 Ambiente e integridade de código
 
 ~~~powershell
-$Root = "C:\Users\Administrador\Downloads\ArmoredAudioLab"
+$Root = "<LAB_ROOT>"
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 
 git -C $Root branch --show-current
@@ -390,7 +678,7 @@ O comando de ownership é somente leitura. Ele verifica referências/estruturas 
 O exemplo seguinte lê os dois relatórios registrados neste manual. Não chama Speech, não renderiza e não altera banco, manifesto ou saída.
 
 ~~~powershell
-$Root = "C:\Users\Administrador\Downloads\ArmoredAudioLab"
+$Root = "<LAB_ROOT>"
 $Reports = @(
     (Join-Path $Root "storage\validation\post_consolidation_corpus17_20261019T234723122Z\studio-report.json"),
     (Join-Path $Root "storage\validation\corpus1_banner_present_20261020T004009599Z\studio-report.json")
@@ -421,7 +709,7 @@ Para o corpus são esperados 17 itens e as contagens de rota registradas na seç
 O runner real requer manifesto aprovado e SQLite experimental correspondente. O destino do relatório e os IDs/paths de trabalho precisam ser novos. Exemplo estrutural — não é para reexecutar agora os cenários já aprovados:
 
 ~~~powershell
-$Root = "C:\Users\Administrador\Downloads\ArmoredAudioLab"
+$Root = "<LAB_ROOT>"
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 $Manifest = Join-Path $Root "storage\validation\<lote_novo>\studio-manifest.json"
 $Database = Join-Path $Root "storage\database\<sqlite_experimental_correspondente>.sqlite3"
@@ -753,7 +1041,7 @@ Arquivos sem ia_context_json/campo equivalente podem ter identidade canônica ex
 Primeiro atualize o checkout local para receber scripts/audit_sync_duplicates.py. Não continue se houver alterações locais em arquivos versionados. Não use reset nem clean.
 
 ~~~powershell
-$Root = "C:\Users\Administrador\Downloads\ArmoredAudioLab"
+$Root = "<LAB_ROOT>"
 $Target = "test/armoredstudio-speech-integration-20261015"
 
 if ((git -C $Root branch --show-current).Trim() -ne $Target) {
@@ -780,9 +1068,9 @@ Depois de confirmar que a aplicação aponta ao banco correto, execute a auditor
 
 ~~~powershell
 $ErrorActionPreference = "Stop"
-$Root = "C:\Users\Administrador\Downloads\ArmoredAudioLab"
+$Root = "<LAB_ROOT>"
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
-$SourceDb = "C:\Users\Administrador\Downloads\ArmoredCreator-final\storage\database\armoredcreator.db"
+$SourceDb = "<OPERATIONAL_ROOT>\storage\database\armoredcreator.db"
 
 if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
     throw "Python do AudioLab não encontrado: $Python"
@@ -901,7 +1189,7 @@ O modo CLI real exige `--approve-real-processing`, credenciais Shopee, Ollama/mo
 Exemplo de invocação após preencher uma cópia local do template `docs/lab-pipeline-input.example.json` com os vídeos que quer testar e URLs Shopee válidas:
 
 ~~~powershell
-$Root = "C:\Users\Administrador\Downloads\ArmoredAudioLab"
+$Root = "<LAB_ROOT>"
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 $Manifest = Join-Path $Root "storage\validation\lab-input-reviewed.json"
 

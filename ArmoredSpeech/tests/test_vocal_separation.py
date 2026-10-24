@@ -15,6 +15,18 @@ from ArmoredSpeech.vocal_separation import (
 )
 
 
+def test_separator_prefers_active_runtime_over_global_path(tmp_path, monkeypatch):
+    from ArmoredSpeech.vocal_separation import _resolve_executable
+    import os
+    python = tmp_path / ('python.exe' if os.name == 'nt' else 'python')
+    sibling = tmp_path / ('audio-separator.exe' if os.name == 'nt' else 'audio-separator')
+    sibling.write_bytes(b'isolated launcher fixture')
+    monkeypatch.delenv('ARMORED_AUDIO_SEPARATOR', raising=False)
+    monkeypatch.setattr('ArmoredSpeech.vocal_separation.sys.executable', str(python))
+    monkeypatch.setattr('ArmoredSpeech.vocal_separation.shutil.which', lambda name: 'global-incompatible-launcher')
+    assert _resolve_executable('audio-separator', 'ARMORED_AUDIO_SEPARATOR') == str(sibling)
+
+
 def _write_wav(path: Path, *, rate: int = 44100, channels: int = 2, seconds: float = 1.0, silent: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     sample = b"\x00\x00" if silent else b"\x20\x10"
@@ -76,6 +88,38 @@ def test_stale_or_missing_separation_receipt_is_not_trusted(tmp_path):
     vocal = tmp_path / "vocals.wav"
     _write_wav(vocal, rate=16000, channels=1)
     assert validate_vocal_separation_receipt(source, vocal, workspace_root=tmp_path) is None
+
+
+@pytest.mark.parametrize('existing', ['wav', 'receipt'])
+def test_separation_preserves_existing_artifacts_before_starting_backend(tmp_path, monkeypatch, existing):
+    source = tmp_path / 'source.mp4'
+    source.write_bytes(b'immutable original')
+    output = tmp_path / 'vocals.wav'
+    protected = output if existing == 'wav' else output.with_suffix('.separation.json')
+    protected.write_bytes(b'preserved previous result')
+    def forbidden(*args): raise AssertionError('Backend must not start')
+    monkeypatch.setattr('ArmoredSpeech.vocal_separation._resolve_executable', forbidden)
+    with pytest.raises(VocalSeparationError, match='EXISTING_SEPARATION_ARTIFACT'):
+        separate_vocal_stem(source, output_wav=output, workspace_root=tmp_path)
+    assert protected.read_bytes() == b'preserved previous result'
+    assert source.read_bytes() == b'immutable original'
+
+
+def test_failed_separation_preserves_partial_stage(tmp_path, monkeypatch):
+    source = tmp_path / 'source.mp4'
+    source.write_bytes(b'immutable original')
+    output = tmp_path / 'vocals.wav'
+    monkeypatch.setattr('ArmoredSpeech.vocal_separation._resolve_executable', lambda *args: 'synthetic-backend')
+    def fail(command, **kwargs):
+        Path(command[-1]).write_bytes(b'partial extracted audio')
+        return subprocess.CompletedProcess(command, 1, '', 'injected failure')
+    monkeypatch.setattr('ArmoredSpeech.vocal_separation.subprocess.run', fail)
+    with pytest.raises(VocalSeparationError, match='injected failure'):
+        separate_vocal_stem(source, output_wav=output, workspace_root=tmp_path)
+    partials = list(tmp_path.glob('.vocals.separation-*/source-audio.wav'))
+    assert len(partials) == 1
+    assert partials[0].read_bytes() == b'partial extracted audio'
+    assert not output.exists()
 
 
 def test_mixed_directive_uses_verified_stem_and_authorizes_rvc(tmp_path, monkeypatch):

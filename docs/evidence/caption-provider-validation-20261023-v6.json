@@ -1,0 +1,169 @@
+{
+  "run_id": "caption-provider-validation-20261023-v6",
+  "provider": "gemini",
+  "model": "gemini-3.1-flash-lite",
+  "context": {
+    "productName": "Amend Essencial Acidificante Máscara Equilíbrio do PH - 250g"
+  },
+  "content_id": "-1003788989075_296",
+  "item_id_in_clone": "caption-evidence_296",
+  "policy_retries_configured": 2,
+  "status": "SUCCESS",
+  "live_external_actions": [],
+  "suggestions": [
+    {
+      "raw": "Equilibra fios fragilizados #Acidificante",
+      "normalized": "Equilibra fios 🧡 fragilizados\n#Acidificante",
+      "corrections": [
+        "orange_heart_inserted"
+      ],
+      "policy_valid": false,
+      "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+      "selected": false
+    },
+    {
+      "raw": "Sela cutículas danificadas #CuidadoCapilar",
+      "normalized": "Sela cutículas 🧡 danificadas",
+      "corrections": [
+        "unrelated_hashtag_removed",
+        "orange_heart_inserted"
+      ],
+      "policy_valid": false,
+      "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+      "selected": false
+    },
+    {
+      "raw": "Recupera brilho intenso #Amend",
+      "normalized": "Recupera brilho 🧡 intenso\n#Amend",
+      "corrections": [
+        "orange_heart_inserted"
+      ],
+      "policy_valid": false,
+      "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+      "selected": false
+    },
+    {
+      "raw": "Tratamento pós química #Essencial",
+      "normalized": "Tratamento pós 🧡 química\n#Essencial",
+      "corrections": [
+        "orange_heart_inserted"
+      ],
+      "policy_valid": false,
+      "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+      "selected": false
+    },
+    {
+      "raw": "Equilíbrio para cabelos #Acidificante",
+      "normalized": "Equilíbrio para 🧡 cabelos\n#Acidificante",
+      "corrections": [
+        "orange_heart_inserted"
+      ],
+      "policy_valid": false,
+      "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+      "selected": false
+    },
+    {
+      "raw": "Recuperação profunda fios #CuidadoCapilar",
+      "normalized": "Recuperação profunda 🧡 fios",
+      "corrections": [
+        "unrelated_hashtag_removed",
+        "orange_heart_inserted"
+      ],
+      "policy_valid": false,
+      "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+      "selected": false
+    },
+    {
+      "raw": "Equilíbrio do PH #Acidificante",
+      "normalized": "Equilíbrio do 🧡 PH\n#Acidificante",
+      "corrections": [
+        "orange_heart_inserted"
+      ],
+      "policy_valid": false,
+      "rejection_reason": "legenda revela medida ou especificação técnica",
+      "selected": false
+    },
+    {
+      "raw": "Máscara Essencial Equilíbrio #Essencial",
+      "normalized": "Máscara Essencial 🧡 Equilíbrio\n#Essencial",
+      "corrections": [
+        "orange_heart_inserted"
+      ],
+      "policy_valid": true,
+      "rejection_reason": null,
+      "selected": true
+    },
+    {
+      "raw": "Equilíbrio dos fios #Máscara",
+      "normalized": "Equilíbrio dos 🧡 fios\n#Máscara",
+      "corrections": [
+        "orange_heart_inserted"
+      ],
+      "policy_valid": false,
+      "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+      "selected": false
+    },
+    {
+      "raw": "Essencial equilíbrio capilar #Acidificante",
+      "normalized": "Essencial equilíbrio 🧡 capilar\n#Acidificante",
+      "corrections": [
+        "orange_heart_inserted"
+      ],
+      "policy_valid": false,
+      "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+      "selected": false
+    },
+    {
+      "raw": "Máscara equilíbrio capilar #Essencial",
+      "normalized": "Máscara equilíbrio 🧡 capilar\n#Essencial",
+      "corrections": [
+        "orange_heart_inserted"
+      ],
+      "policy_valid": false,
+      "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+      "selected": false
+    },
+    {
+      "raw": "Tratamento equilíbrio PH #Máscara",
+      "normalized": "Tratamento equilíbrio 🧡 PH\n#Máscara",
+      "corrections": [
+        "orange_heart_inserted"
+      ],
+      "policy_valid": false,
+      "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+      "selected": false
+    }
+  ],
+  "selected_caption": "Máscara Essencial 🧡 Equilíbrio\n#Essencial",
+  "policy_valid": true,
+  "provider_requests": 2,
+  "feedback_rounds": [
+    [
+      "texto principal contém termo sem suporte no contexto Vision",
+      "a legenda precisa ter 1 ou 2 hashtags distintas",
+      "Use hashtags únicas e relacionadas ao contexto persistido do produto.",
+      "Remova palavras descritivas ausentes do nome, categoria, uso ou descrição Vision; não invente atributo, benefício ou cenário.",
+      "Prefira uma hashtag simples que esteja literalmente no contexto aprovado; não concatene palavras com sufixos genéricos nem use marca/modelo.",
+      "O contexto Vision contém apenas o nome do produto: escolha duas ou três palavras não técnicas que já apareçam nesse nome, sem marca/modelo e sem repetir uma sequência consecutiva distintiva; use uma hashtag de uma só palavra que também esteja literalmente no nome."
+    ]
+  ],
+  "provider_attempts": [
+    {
+      "policy_round": 1,
+      "attempt": 1,
+      "status": "SUCCESS",
+      "http_status": 200
+    },
+    {
+      "policy_round": 2,
+      "attempt": 1,
+      "status": "SUCCESS",
+      "http_status": 200
+    }
+  ],
+  "batch_id": "85fb68c55b6740a7b77c3b9feb9af2ff",
+  "persisted_after_reopen": true,
+  "persisted_caption": "Máscara Essencial 🧡 Equilíbrio\n#Essencial",
+  "recovery_status_after_reopen": "SUCCEEDED",
+  "evidence_file": "docs/evidence/caption-provider-validation-20261023-v6.json"
+}

@@ -1,0 +1,3 @@
+# Canonical install entry point; speech analysis pins match the validated 3.11.9 runtime.
+-e .
+-r ArmoredSpeech/requirements-analysis.txt

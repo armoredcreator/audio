@@ -1,0 +1,155 @@
+{
+  "run_id": "caption-recovery-coordinator-hub-dryrun-20261023-v10",
+  "created_at": "2026-10-23T23:54:25.432867+00:00",
+  "mode": "consistent clone; actual Pipeline + ArmoredIA Gemini + actual ArmoredHub validation; Hub dry-run; no media-stage execution",
+  "production_db_modified": false,
+  "shopee_calls": 0,
+  "telegram_send_calls": 0,
+  "pre": {
+    "-1003788989075_295": {
+      "state": "RECOVERY",
+      "caption": "Detalhe moderno 🧡 lateral\n#camurca",
+      "original_sha256": "ef42a6d9988e8c0afbd98b20a4cb26d1cbb31fe8de7a4b34185b915b8766db7a",
+      "render_sha256": "7fc70ef2331b7cba8e7d1ab415382d4c01282e8cb3fa6c8f9311eee1227c5fe9",
+      "v5_completion": true,
+      "ia_count": 2,
+      "quarantined": false,
+      "publication": null
+    },
+    "-1003788989075_296": {
+      "state": "PUBLISHING",
+      "caption": null,
+      "original_sha256": "687a763d6e842d5dc7a30fb82609f7063f947196c753ebdb1d959dbc4b965cfe",
+      "render_sha256": "d3689bba01861b181b5cf848bb48cf096af4806a1056f88bb57bab6f81b79591",
+      "v5_completion": true,
+      "ia_count": 0,
+      "quarantined": false,
+      "publication": null
+    },
+    "-1003788989075_297": {
+      "state": "PUBLISHING",
+      "caption": null,
+      "original_sha256": "8d1e2e887550c3f08ebed17d321ae33dea4a1e1814e4e145c0b259a7fefdb565",
+      "render_sha256": "1811c77836efbeb109f0326cb7f74e78f5a998b59becfa43af497c3f2f25177b",
+      "v5_completion": true,
+      "ia_count": 0,
+      "quarantined": false,
+      "publication": null
+    }
+  },
+  "results": [
+    {
+      "content_id": "-1003788989075_295",
+      "state": "PUBLISHING",
+      "caption": "Detalhe moderno 🧡 lateral\n#camurca",
+      "policy_valid": true,
+      "recovery": {
+        "content_id": "-1003788989075_295",
+        "attempts": 2,
+        "status": "SUCCEEDED",
+        "reason": "armored-ia-policy-approved",
+        "previous_caption": null,
+        "updated_at": "2026-10-23 23:52:17",
+        "manual_retry_authorized": 0,
+        "automatic_retry_authorized": 0
+      },
+      "ia_count": 2,
+      "hub_destination": {
+        "chat_id": "-1004341972306",
+        "topic_id": 228
+      },
+      "hub_payload": "Detalhe moderno 🧡 lateral\n#camurca\n\nhttps://s.shopee.com.br/1LgRnEDh12",
+      "payload_error": null,
+      "receipt": null,
+      "original_sha256": "ef42a6d9988e8c0afbd98b20a4cb26d1cbb31fe8de7a4b34185b915b8766db7a",
+      "render_sha256": "7fc70ef2331b7cba8e7d1ab415382d4c01282e8cb3fa6c8f9311eee1227c5fe9",
+      "v5_completion": true
+    },
+    {
+      "content_id": "-1003788989075_296",
+      "state": "PUBLISHING",
+      "caption": null,
+      "policy_valid": false,
+      "recovery": {
+        "content_id": "-1003788989075_296",
+        "attempts": 1,
+        "status": "BLOCKED",
+        "reason": "caption-provider-temporary:TRANSIENT_UNAVAILABLE",
+        "previous_caption": null,
+        "updated_at": "2026-10-23 23:54:02",
+        "manual_retry_authorized": 0,
+        "automatic_retry_authorized": 0
+      },
+      "ia_count": 1,
+      "hub_destination": {
+        "chat_id": "-1004341972306",
+        "topic_id": 228
+      },
+      "hub_payload": null,
+      "payload_error": "CaptionPolicyError:legenda vazia",
+      "receipt": null,
+      "original_sha256": "687a763d6e842d5dc7a30fb82609f7063f947196c753ebdb1d959dbc4b965cfe",
+      "render_sha256": "d3689bba01861b181b5cf848bb48cf096af4806a1056f88bb57bab6f81b79591",
+      "v5_completion": true
+    },
+    {
+      "content_id": "-1003788989075_297",
+      "state": "PUBLISHING",
+      "caption": "Verao 🧡 strass\n#strass",
+      "policy_valid": true,
+      "recovery": {
+        "content_id": "-1003788989075_297",
+        "attempts": 1,
+        "status": "SUCCEEDED",
+        "reason": "armored-ia-policy-approved",
+        "previous_caption": null,
+        "updated_at": "2026-10-23 23:54:23",
+        "manual_retry_authorized": 0,
+        "automatic_retry_authorized": 0
+      },
+      "ia_count": 1,
+      "hub_destination": {
+        "chat_id": "-1004341972306",
+        "topic_id": 228
+      },
+      "hub_payload": "Verao 🧡 strass\n#strass\n\nhttps://s.shopee.com.br/9zyQ7A71sy",
+      "payload_error": null,
+      "receipt": null,
+      "original_sha256": "8d1e2e887550c3f08ebed17d321ae33dea4a1e1814e4e145c0b259a7fefdb565",
+      "render_sha256": "1811c77836efbeb109f0326cb7f74e78f5a998b59becfa43af497c3f2f25177b",
+      "v5_completion": true
+    }
+  ],
+  "restart": [
+    {
+      "content_id": "-1003788989075_295",
+      "state": "PUBLISHING",
+      "ia_count_before": 2,
+      "ia_count_after": 2,
+      "no_repeat_ia": true,
+      "original_sha256": "ef42a6d9988e8c0afbd98b20a4cb26d1cbb31fe8de7a4b34185b915b8766db7a",
+      "render_sha256": "7fc70ef2331b7cba8e7d1ab415382d4c01282e8cb3fa6c8f9311eee1227c5fe9",
+      "receipt": null
+    },
+    {
+      "content_id": "-1003788989075_296",
+      "state": "PUBLISHING",
+      "ia_count_before": 1,
+      "ia_count_after": 1,
+      "no_repeat_ia": true,
+      "original_sha256": "687a763d6e842d5dc7a30fb82609f7063f947196c753ebdb1d959dbc4b965cfe",
+      "render_sha256": "d3689bba01861b181b5cf848bb48cf096af4806a1056f88bb57bab6f81b79591",
+      "receipt": null
+    },
+    {
+      "content_id": "-1003788989075_297",
+      "state": "PUBLISHING",
+      "ia_count_before": 1,
+      "ia_count_after": 1,
+      "no_repeat_ia": true,
+      "original_sha256": "8d1e2e887550c3f08ebed17d321ae33dea4a1e1814e4e145c0b259a7fefdb565",
+      "render_sha256": "1811c77836efbeb109f0326cb7f74e78f5a998b59becfa43af497c3f2f25177b",
+      "receipt": null
+    }
+  ]
+}

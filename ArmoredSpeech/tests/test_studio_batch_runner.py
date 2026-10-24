@@ -413,6 +413,72 @@ def test_real_runner_prepares_all_speech_variants_before_studio_analysis(tmp_pat
     ]
 
 
+def test_runner_resumes_only_missing_speech_packages_and_preserves_prior_package(
+    tmp_path, monkeypatch
+):
+    manifest_path, database, manifest = _fixture(tmp_path, item_count=2)
+    report_path = tmp_path / "storage" / "validation" / "resume-report.json"
+    resume_root = tmp_path / "storage" / "validation" / "prior-speech-v5"
+    first_item, second_item = manifest["items"]
+    canonical_items = runner_module.load_complete_batch(
+        tmp_path, manifest_path
+    )[1]
+    first_canonical = canonical_items[0]
+    package = _fake_v5_package(tmp_path, first_canonical)
+    persisted_package = resume_root / "source1" / "telegram-1" / "package.json"
+    persisted_package.parent.mkdir(parents=True)
+    persisted_package.write_text(json.dumps(package, indent=2), encoding="utf-8")
+    original_package_bytes = persisted_package.read_bytes()
+    prepare_calls = []
+
+    def fake_prepare(items, **kwargs):
+        prepare_calls.append([str(item.telegram_message_id) for item in items])
+        return [(item, _fake_v5_package(tmp_path, item)) for item in items]
+
+    class FakeStudio:
+        def analyze_visual(self, item):
+            return SimpleNamespace(plan={
+                "crop_final": None,
+                "video_start": 0.0,
+                "acoes": [],
+                "detectores": {"banner": {"banner_detectado": False}},
+            })
+
+        def process(self, item, *, speech_payload=None, visual_analysis=None):
+            assert speech_payload["source_id"] == "source1"
+            destination = runner_module.Storage(tmp_path).result(
+                item.content_id,
+                item.affiliate_url,
+                item.affiliate_name,
+                source_id=item.source_id,
+            )
+            destination.write_bytes(b"synthetic rendered video")
+            return SimpleNamespace(result_path=destination)
+
+    monkeypatch.setattr(runner_module, "prepare_audio_packages_for_items", fake_prepare)
+    monkeypatch.setattr(runner_module, "build_studio", lambda *_args, **_kwargs: FakeStudio())
+
+    report = run_complete_batch(
+        root=tmp_path,
+        manifest_path=manifest_path,
+        speech_database=database,
+        report_path=report_path,
+        copy_only=False,
+        resume_package_root=resume_root,
+    )
+
+    assert report["status"] == "SUCCESS"
+    assert prepare_calls == [["telegram-2"]]
+    assert report["speech_package_resume"]["reused_item_ids"] == ["telegram-1"]
+    assert report["speech_package_resume"]["prepared_item_ids"] == ["telegram-2"]
+    assert Path(report["speech_package_resume"]["new_package_root"]).is_dir()
+    assert len(report["processed"]) == len(manifest["items"]) == 2
+    assert persisted_package.read_bytes() == original_package_bytes
+    assert (first_item["telegram_message_id"], second_item["telegram_message_id"]) == (
+        "telegram-1", "telegram-2"
+    )
+
+
 def test_real_runner_blocks_all_studio_calls_if_any_v5_package_is_invalid(tmp_path, monkeypatch):
     manifest_path, database, _ = _fixture(tmp_path, item_count=2)
     report_path = tmp_path / "storage" / "validation" / "v2-report-failed.json"
@@ -463,3 +529,51 @@ def test_real_runner_blocks_all_studio_calls_if_any_v5_package_is_invalid(tmp_pa
             source_id=item["source_id"],
         ))
         assert not output.exists()
+
+
+def test_runner_fails_closed_and_records_original_mutation(tmp_path, monkeypatch):
+    manifest_path, database, _ = _fixture(tmp_path, item_count=1)
+    report_path = tmp_path / "storage" / "validation" / "original-mutated-report.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    original = Path(manifest["items"][0]["original_path"])
+    before = _sha(original)
+    events = []
+
+    def fake_prepare(items, **kwargs):
+        return [(item, _fake_v5_package(tmp_path, item)) for item in items]
+
+    class MutatingStudio:
+        def analyze_visual(self, item):
+            return SimpleNamespace(plan={"crop_final": None, "video_start": 0.0, "acoes": []})
+
+        def process(self, item, *, speech_payload=None, visual_analysis=None):
+            events.append("studio-render")
+            Path(item.original_path).write_bytes(b"unexpectedly-mutated-original")
+            destination = runner_module.Storage(tmp_path).result(
+                item.content_id,
+                item.affiliate_url,
+                item.affiliate_name,
+                source_id=item.source_id,
+            )
+            destination.write_bytes(b"synthetic rendered video")
+            return SimpleNamespace(result_path=destination)
+
+    monkeypatch.setattr(runner_module, "prepare_audio_packages_for_items", fake_prepare)
+    monkeypatch.setattr(runner_module, "build_studio", lambda _root, **_kwargs: MutatingStudio())
+
+    with pytest.raises(RuntimeError, match="Hash de original mudou durante Studio"):
+        run_complete_batch(
+            root=tmp_path,
+            manifest_path=manifest_path,
+            speech_database=database,
+            report_path=report_path,
+            copy_only=False,
+        )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    identity = (manifest["items"][0]["source_id"], manifest["items"][0]["telegram_message_id"])
+    assert report["status"] == "FAILED"
+    assert report["originals_intact"] is False
+    assert report["changed_originals"] == [list(identity)]
+    assert events == ["studio-render"]
+    assert _sha(original) != before

@@ -1,0 +1,25 @@
+{
+  "run_id": "ollama-caption-provider-real-20261023-v2",
+  "mode": "real local Ollama inference through the configured default ArmoredIA CaptionGenerator; isolated product context; no production database access",
+  "provider": "OllamaProvider",
+  "model": "gemma3:1b",
+  "context": {
+    "productName": "Chinelo feminino com detalhe em strass",
+    "category": "calçados",
+    "usage": "uso casual"
+  },
+  "selected_caption": "Chinelo 🧡 charmoso\n#Chinelo #detalhe",
+  "policy_valid": true,
+  "provider_requests": 1,
+  "provider_attempts": [
+    {
+      "policy_round": 1,
+      "attempt": 1,
+      "status": "SUCCESS",
+      "http_status": 200
+    }
+  ],
+  "production_db_touched": false,
+  "shopee_calls": 0,
+  "telegram_sends": 0
+}

@@ -9,12 +9,84 @@ from armored_core.models import PublicationCheck, State
 from armored_core.services import PublicationResult, VisionResult, VisionUnresolvedError
 
 
+
+def _install_coordinator_speech_studio_test_seam(coordinator):
+    """Inject deterministic Speech/Studio providers; never alter production defaults."""
+    from ArmoredSpeech.contracts import AudioClass, SpeechDecision
+
+    class SpeechProcessor:
+        intelligence = SimpleNamespace(preflight=lambda: None)
+
+        def analyze(self, _video_path):
+            return SpeechDecision(
+                audio_class=AudioClass.MUSIC_ONLY,
+                language=None,
+                speech_detected=False,
+                music_detected=True,
+                confidence=0.99,
+                rationale="isolated lifecycle fixture",
+            )
+
+        def prepare_wav(self, _video_path, wav_path, _decision):
+            wav_path = Path(wav_path)
+            wav_path.parent.mkdir(parents=True, exist_ok=True)
+            wav_path.write_bytes(b"isolated-speech-wav")
+
+    def studio_batch_runner(*, root, manifest_path, speech_database, report_path, copy_only, storage_root):
+        from ArmoredSpeech.studio_batch_runner import load_complete_batch
+        from armored_core.integrity import sha256_file
+        from armored_core.storage import Storage as LabStorage
+
+        if copy_only:
+            raise AssertionError("Lifecycle tests must use the contract-v5 path, not copy-only mode")
+        _, items, hashes = load_complete_batch(Path(root), Path(manifest_path))
+        storage = LabStorage(
+            Path(root),
+            storage_root=Path(storage_root) if storage_root is not None else None,
+        )
+        processed = []
+        for item in items:
+            identity = (str(item.source_id), str(item.telegram_message_id))
+            expected_hash = hashes[identity]
+            original = Path(item.original_path).resolve(strict=True)
+            rendered = coordinator.pipeline.studio.process(item)
+            rendered_path = Path(rendered.result_path).resolve(strict=True)
+            destination = storage.result(
+                item.content_id,
+                item.affiliate_url,
+                item.affiliate_name,
+                source_id=item.source_id,
+            ).resolve()
+            if rendered_path != destination:
+                if destination.exists():
+                    raise FileExistsError(f"test runner refuses to overwrite {destination}")
+                destination.write_bytes(rendered_path.read_bytes())
+            if not destination.is_file() or destination.stat().st_size <= 0:
+                raise RuntimeError(f"test Studio output missing for {identity}")
+            if sha256_file(original).lower() != expected_hash.lower():
+                raise RuntimeError(f"test Studio changed original for {identity}")
+            processed.append({
+                "source_id": identity[0],
+                "item_id": identity[1],
+                "output_path": str(destination),
+                "original_sha256_before": expected_hash,
+            })
+        return {
+            "status": "SUCCESS",
+            "originals_intact": True,
+            "processed": processed,
+            "report_path": str(report_path),
+        }
+
+    coordinator._speech_processor_override = SpeechProcessor()
+    coordinator._speech_studio_batch_runner_override = studio_batch_runner
+
 class VisionStage:
     def identify(self, item):
         return VisionResult(
             f"product-{item.item_id}",
             f"https://example.invalid/affiliate-{item.item_id}",
-            ia_context={"productName": f"Product {item.item_id}"},
+            ia_context={"productName": f"Product {item.item_id}", "category": "casa"},
         )
 
 
@@ -22,13 +94,36 @@ class FailingFirstIA:
     def __init__(self):
         self.calls = {}
 
-    def generate_caption(self, context):
+    def generate_caption_with_evidence(self, context):
         item_id = context["productName"].split()[-1]
         self.calls[item_id] = self.calls.get(item_id, 0) + 1
         if item_id == "100" and self.calls[item_id] == 1:
             from ArmoredIA.caption.generator import CaptionGenerationError
             raise CaptionGenerationError("Nenhuma das 10 candidata(s) passou pela Policy")
-        return f"Olha esse charme ✨\n#item{item_id}"
+        from ArmoredIA.caption.generator import CaptionGenerator
+
+        class Provider:
+            def generate_candidates(self, _task, _context, _limit):
+                return ["Casa charmosa 🧡\n#casa"]
+
+        return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
+
+    def generate_caption(self, context):
+        return self.generate_caption_with_evidence(context).caption
+
+
+class ValidCaptionIA:
+    def generate_caption_with_evidence(self, context):
+        from ArmoredIA.caption.generator import CaptionGenerator
+
+        class Provider:
+            def generate_candidates(self, _task, _context, _limit):
+                return ["Casa charmosa 🧡\n#casa"]
+
+        return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
+
+    def generate_caption(self, context):
+        return self.generate_caption_with_evidence(context).caption
 
 
 class DeterministicStudio:
@@ -131,7 +226,7 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
                     return VisionResult(
                         f"product-{item.item_id}",
                         f"https://example.invalid/affiliate-{item.item_id}",
-                        ia_context={"productName": f"Product {item.item_id}"},
+                        ia_context={"productName": f"Product {item.item_id}", "category": "casa"},
                     )
 
             publisher = DeterministicPublisher()
@@ -140,13 +235,14 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
                 root,
                 SimpleNamespace(
                     vision=WaitingFirstVision(),
-                    ia=None,
+                    ia=ValidCaptionIA(),
                     studio=DeterministicStudio(),
                     publisher=publisher,
                     source=source,
                 ),
             )
             source.db = coordinator.db
+            _install_coordinator_speech_studio_test_seam(coordinator)
 
             try:
                 asyncio.run(coordinator._run_catch_up_with_recovery_async())
@@ -172,7 +268,7 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
             finally:
                 coordinator.close()
 
-    def test_ia_failure_recovery_does_not_rerun_vision_and_reenters_live(self):
+    def test_permanent_caption_failure_is_blocked_and_holds_source_cursor(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             source_file = root / "input.mp4"
@@ -193,25 +289,21 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
                 ),
             )
             source.db = coordinator.db
+            _install_coordinator_speech_studio_test_seam(coordinator)
 
             try:
                 asyncio.run(coordinator._run_catch_up_with_recovery_async())
 
                 item_100 = coordinator.db.get("100")
                 item_101 = coordinator.db.get("101")
-                self.assertEqual(item_100.state, State.PUBLISHED)
-                self.assertTrue(item_100.cleanup_completed)
+                self.assertEqual(item_100.state, State.RECOVERY)
+                self.assertEqual(ia.calls["100"], 1)
                 self.assertEqual(item_101.state, State.PUBLISHED)
-                self.assertTrue(item_101.cleanup_completed)
-                self.assertEqual(ia.calls["100"], 2)
                 self.assertEqual(ia.calls["101"], 1)
-                self.assertEqual(publisher.published, ["101", "100"])
-                self.assertEqual(source.reset_count, 1)
-                self.assertTrue(source.historical_complete)
-                self.assertEqual(source.commits, [{7: 100}, {7: 101}])
-
-                asyncio.run(coordinator._run_forever_async(max_cycles=1, poll_seconds=0))
-                self.assertTrue(source.live_called)
+                self.assertEqual(publisher.published, ["101"])
+                self.assertFalse(source.historical_complete)
+                self.assertEqual(source.commits, [])
+                self.assertFalse(source.live_called)
             finally:
                 coordinator.close()
 

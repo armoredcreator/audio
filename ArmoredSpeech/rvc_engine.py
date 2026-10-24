@@ -25,7 +25,12 @@ _SAFE_GLOBALS_LOCK = threading.RLock()
 
 
 def _trusted_safe_globals(torch_module, globals_to_allow):
-    """Temporarily allowlist trusted RVC checkpoint metadata."""
+    """Temporarily allowlist trusted RVC checkpoint metadata.
+
+    Use the scoped public context manager where available. On older PyTorch
+    versions, emulate its scope with the public add/get/clear API and restore
+    the process's previous allowlist even when inference raises.
+    """
     serialization = torch_module.serialization
     native_scope = getattr(serialization, "safe_globals", None)
 
@@ -57,7 +62,6 @@ def _trusted_safe_globals(torch_module, globals_to_allow):
                     add_globals(previous)
 
     return compatible_scope()
-
 
 DEFAULT_VOICE = "melody"
 DEFAULT_OUTPUT = RVC_ROOT / "output" / "audio_rvc.wav"
@@ -112,7 +116,17 @@ def _backend_output_tail(stdout: str, stderr: str, limit: int = 12) -> str:
     return " | ".join(lines[-limit:])
 
 
+def _require_new_output(entrada, saida) -> None:
+    source, destination = Path(entrada), Path(saida)
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(f"RVC refuses to overwrite an existing file: {destination}")
+    if source.resolve() == destination.resolve():
+        raise ValueError("RVC input and output must be different files")
+
+
 def converter_interno(entrada, saida, modelo, index, item_id=None):
+    # Check before backend setup or exception cleanup can touch the output.
+    _require_new_output(entrada, saida)
     import scipy.io.wavfile as wavfile
 
     prefix = f"[SPEECH][ITEM {item_id}] " if item_id else "[SPEECH] "
@@ -239,9 +253,8 @@ def converter_voz(entrada, saida=None, voz=DEFAULT_VOICE, item_id=None):
     entrada = Path(entrada)
     saida = Path(saida) if saida is not None else DEFAULT_OUTPUT
     validar_arquivo(entrada, "Áudio de entrada")
+    _require_new_output(entrada, saida)
     saida.parent.mkdir(parents=True, exist_ok=True)
-    if saida.exists():
-        saida.unlink()
     return executar_no_rvc(entrada, saida, voz, item_id)
 
 

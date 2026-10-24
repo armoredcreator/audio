@@ -15,6 +15,10 @@ class ArmoredIA:
     def generate_caption(self, product_context: dict[str, Any]) -> str:
         return self.caption_generator.generate(product_context)
 
+    def provider_configuration(self) -> dict:
+        configuration = getattr(self.caption_generator.provider, "configuration", None)
+        return configuration() if callable(configuration) else {"provider": "custom", "model": None}
+
     def generate_caption_with_evidence(self, product_context: dict[str, Any]):
         return self.caption_generator.generate_with_evidence(product_context)
 

@@ -20,13 +20,25 @@ def _approved(db: Database, source_id: str, message_id: str, url: str, context: 
     return content_id
 
 
-def test_sync_deduplicates_same_raw_url_across_sources(tmp_path: Path):
+def test_sync_allows_cross_source_url_to_reach_durable_reservation(tmp_path: Path):
     db = Database(tmp_path / "history.sqlite3")
     url = "https://s.shopee.com.br/shared-product"
-    db.reserve_item("100", source_id="source1", original_url=url, original_path=tmp_path / "source1.mp4")
+    owner = db.reserve_item("100", source_id="source1", original_url=url, original_path=tmp_path / "source1.mp4")
     source2 = TelegramSource(tmp_path, SimpleNamespace(), db, source="source2-chat", source_id="source2")
 
-    assert source2._shopee_url_exists(url) is True
+    # The pre-check must not silently discard a different source/message identity.
+    assert source2._shopee_url_exists(url) is False
+    duplicate = db.reserve_item(
+        "200", source_id="source2", original_url=url,
+        original_path=tmp_path / "source2.mp4",
+    )
+    row = db.conn.execute(
+        "SELECT state, duplicate_of_content_id FROM items WHERE content_id=?", (duplicate,)
+    ).fetchone()
+    assert duplicate != owner
+    assert row["state"] == State.DUPLICATE.value
+    assert row["duplicate_of_content_id"] == owner
+    assert db.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 2
     db.close()
 
 
@@ -62,6 +74,51 @@ def test_product_claim_is_unique_across_message_and_source_ids(tmp_path: Path):
     assert event["new_state"] == State.DUPLICATE.value
     assert event["old_state"] == State.RECEIVED.value
     assert db.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 2
+    db.close()
+
+
+def test_exact_product_url_is_deduplicated_before_shopee_api_lookup(tmp_path: Path):
+    from ArmoredVision.service import ArmoredVision
+    from armored_core.pipeline import Pipeline
+    from armored_core.storage import Storage
+
+    class ApiMustNotBeCalled:
+        calls = 0
+
+        def get_exact_product(self, shop_id, item_id):
+            self.calls += 1
+            raise AssertionError("known exact product must be blocked before Shopee API")
+
+    db = Database(tmp_path / "history.sqlite3")
+    context = {"shopId": "900", "itemId": "111"}
+    owner = _approved(
+        db, "source1", "101", "https://shopee.com.br/product/900/111", context, tmp_path
+    )
+    candidate = db.reserve_item(
+        "202", source_id="source2",
+        original_url="https://shopee.com.br/product/900/111?variant=2",
+        original_path=tmp_path / "candidate.mp4",
+    )
+    (tmp_path / "candidate.mp4").write_bytes(b"original")
+    api = ApiMustNotBeCalled()
+    class NoDownstream:
+        def process(self, item):
+            raise AssertionError("duplicate must not reach Studio")
+
+        def publish(self, item):
+            raise AssertionError("duplicate must not reach Hub")
+
+    Pipeline(
+        db,
+        Storage(tmp_path),
+        ArmoredVision(api=api, db=db),
+        NoDownstream(),
+        NoDownstream(),
+    ).run(candidate)
+
+    assert api.calls == 0
+    assert db.get(candidate).state is State.DUPLICATE
+    assert db.get(candidate).duplicate_of_content_id == owner
     db.close()
 
 
@@ -196,6 +253,64 @@ def test_global_raw_url_reservation_preserves_duplicate_message_without_vision_a
     assert row["affiliate_url"] is None
     assert db.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 2
     assert db.get(duplicate).state is State.DUPLICATE
+    db.close()
+
+
+def test_same_url_across_three_sources_stays_duplicate_after_database_restart(tmp_path: Path):
+    path = tmp_path / "history.sqlite3"
+    url = "https://s.shopee.com.br/one-product-shared-across-three-sources"
+    db = Database(path)
+    owner = db.reserve_item("100", source_id="source1", original_url=url)
+    second = db.reserve_item("200", source_id="source2", original_url=url)
+    third = db.reserve_item("300", source_id="source3", original_url=url)
+
+    assert db.get(second).state is State.DUPLICATE
+    assert db.get(third).state is State.DUPLICATE
+    assert db.get(second).duplicate_of_content_id == owner
+    assert db.get(third).duplicate_of_content_id == owner
+    db.close()
+
+    reopened = Database(path)
+    third_again = reopened.reserve_item("300", source_id="source3", original_url=url)
+    assert third_again == third
+    assert reopened.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 3
+    assert reopened.get(third_again).state is State.DUPLICATE
+    assert reopened.get(third_again).duplicate_of_content_id == owner
+    reopened.close()
+
+
+def test_concurrent_cross_source_reservations_of_same_url_have_one_owner(tmp_path: Path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    path = tmp_path / "history.sqlite3"
+    Database(path).close()
+    barrier = Barrier(2)
+    url = "https://s.shopee.com.br/concurrent-shared-product"
+
+    def reserve(message: str, source: str) -> str:
+        db = Database(path)
+        try:
+            barrier.wait(timeout=5)
+            return db.reserve_item(message, source_id=source, original_url=url)
+        finally:
+            db.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(reserve, "101", "source1"),
+            pool.submit(reserve, "202", "source2"),
+        ]
+        identities = [future.result(timeout=10) for future in futures]
+
+    db = Database(path)
+    rows = [db.get(identity) for identity in identities]
+    assert sum(row.state is State.RECEIVED for row in rows) == 1
+    assert sum(row.state is State.DUPLICATE for row in rows) == 1
+    duplicate = next(row for row in rows if row.state is State.DUPLICATE)
+    owner = next(row for row in rows if row.state is State.RECEIVED)
+    assert duplicate.duplicate_of_content_id == owner.content_id
+    assert db.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 2
     db.close()
 
 

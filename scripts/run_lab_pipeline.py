@@ -97,6 +97,18 @@ def load_fixture_manifest(root: Path, manifest_path: Path) -> tuple[dict[str, An
         raise LabPipelineError("Manifest deve conter pelo menos um vídeo de teste.")
     seen: set[tuple[str, str]] = set()
     items: list[dict[str, Any]] = []
+    reexecution = payload.get("reexecution")
+    if reexecution is not None:
+        if not isinstance(reexecution, dict):
+            raise LabPipelineError("reexecution deve ser um objeto versionado.")
+        execution_id = str(reexecution.get("execution_id") or "").strip()
+        version = reexecution.get("version")
+        if (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{2,79}", execution_id)
+                or not isinstance(version, int) or isinstance(version, bool) or version < 1
+                or reexecution.get("kind") != "approved_publication_reexecution"):
+            raise LabPipelineError("reexecution exige kind, execution_id seguro e version inteiro positivo.")
+    product_keys: set[str] = set()
+    origin_urls: set[str] = set()
     for index, raw in enumerate(raw_items, start=1):
         if not isinstance(raw, dict):
             raise LabPipelineError(f"Item {index}: esperado objeto JSON.")
@@ -118,6 +130,11 @@ def load_fixture_manifest(root: Path, manifest_path: Path) -> tuple[dict[str, An
             raise LabPipelineError(f"Item {index}: source_path precisa ser um vídeo existente suportado.")
         if source_path.stat().st_size <= 0:
             raise LabPipelineError(f"Item {index}: vídeo de entrada vazio.")
+        source_sha256 = _sha256(source_path)
+        if reexecution is not None:
+            expected_hash = str(raw.get("expected_original_sha256") or "").strip().lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", expected_hash) or expected_hash != source_sha256:
+                raise LabPipelineError(f"Item {index}: SHA-256 do original diverge da aprovação persistida.")
         original_url_value = raw.get("original_url")
         if original_url_value is not None and not isinstance(original_url_value, str):
             raise LabPipelineError(f"Item {index}: original_url deve ser texto ou null.")
@@ -128,17 +145,69 @@ def load_fixture_manifest(root: Path, manifest_path: Path) -> tuple[dict[str, An
         topic_name = raw.get("topic_name")
         if topic_name is not None and not isinstance(topic_name, str):
             raise LabPipelineError(f"Item {index}: topic_name precisa ser texto ou null.")
-        items.append({
+        item = {
             "source_label": source_label,
             "telegram_message_id": message_id,
             "source_path": source_path,
-            "source_sha256": _sha256(source_path),
+            "source_sha256": source_sha256,
             "original_url": original_url,
             "topic_id": topic_id,
             "topic_name": topic_name,
             "input_index": index,
-        })
-    return {"manifest_path": str(manifest_path), "sources": sources, "batch_id": str(payload.get("batch_id") or "local-fixture")}, items
+        }
+        if reexecution is not None:
+            approval = raw.get("approved_vision")
+            source_content_id = str(raw.get("source_content_id") or "").strip()
+            prior_receipt = str(raw.get("prior_publication_receipt") or "").strip()
+            if (not isinstance(approval, dict) or not source_content_id or not prior_receipt
+                    or not original_url):
+                raise LabPipelineError(
+                    f"Item {index}: reexecução exige origem, recibo anterior, URL e aprovação Vision persistida."
+                )
+            affiliate_name = str(approval.get("affiliate_name") or "").strip()
+            affiliate_url = str(approval.get("affiliate_url") or "").strip()
+            affiliate_urls = approval.get("affiliate_urls")
+            context = approval.get("ia_context")
+            if not isinstance(affiliate_urls, list):
+                affiliate_urls = [affiliate_url] if affiliate_url else []
+            if not affiliate_name or not affiliate_url or not isinstance(context, dict):
+                raise LabPipelineError(f"Item {index}: aprovação Vision persistida incompleta.")
+            shop = str(context.get("shopId") or context.get("shop_id") or "").strip()
+            product = str(context.get("itemId") or context.get("item_id") or "").strip()
+            if not shop.isdigit() or not product.isdigit():
+                raise LabPipelineError(f"Item {index}: identidade canônica shop_id:item_id ausente.")
+            product_key = f"{shop}:{product}"
+            normalized_origin = original_url.casefold()
+            if product_key in product_keys or normalized_origin in origin_urls:
+                raise LabPipelineError("Reexecução contém URL ou produto canônico repetido.")
+            product_keys.add(product_key)
+            origin_urls.add(normalized_origin)
+            clean_affiliate_urls = list(dict.fromkeys(
+                str(value).strip() for value in affiliate_urls
+                if isinstance(value, str) and str(value).strip()
+            ))
+            if affiliate_url not in clean_affiliate_urls:
+                clean_affiliate_urls.insert(0, affiliate_url)
+            item.update({
+                "source_content_id": source_content_id,
+                "prior_publication_receipt": prior_receipt,
+                "approved_vision": {
+                    "affiliate_name": affiliate_name,
+                    "affiliate_url": affiliate_url,
+                    "affiliate_urls": clean_affiliate_urls,
+                    "ia_context": context,
+                    "canonical_product_key": product_key,
+                },
+            })
+        elif raw.get("approved_vision") is not None:
+            raise LabPipelineError("approved_vision só pode ser usado com reexecution versionado.")
+        items.append(item)
+    return {
+        "manifest_path": str(manifest_path),
+        "sources": sources,
+        "batch_id": str(payload.get("batch_id") or "local-fixture"),
+        "reexecution": reexecution,
+    }, items
 
 
 class LocalFixtureSource:
@@ -225,10 +294,12 @@ LAB_ENV_ALLOWLIST = frozenset({
     "GEMINI_API_KEY",
     "ARMORED_IA_API_TIMEOUT",
     "ARMORED_IA_AUDIENCE",
+    "ARMORED_IA_AUTO_TRANSIENT_RETRIES",
     "ARMORED_IA_CAPTION_ENABLED",
     "ARMORED_IA_ENABLED",
     "ARMORED_IA_MAX_ATTEMPTS",
     "ARMORED_IA_MAX_CANDIDATES",
+    "ARMORED_IA_POLICY_RETRIES",
     "ARMORED_IA_MODEL",
     "ARMORED_IA_PROVIDER",
     "ARMORED_IA_RETRY_DELAY",
@@ -272,9 +343,14 @@ def _require_executable(name: str, env_key: str, default: str) -> str:
     raise LabPipelineError(f"{name} não encontrado; verifique {env_key}.")
 
 
-def _live_preflight(root: Path, ia_provider: str, speech_processor: Any | None) -> Any:
+def _live_preflight(
+    root: Path, ia_provider: str, speech_processor: Any | None, *, require_shopee: bool = True,
+) -> Any:
     """Check external dependencies before reserving candidates or downloading originals."""
-    if not (os.getenv("SHOPEE_APP_ID") or "").strip() or not (os.getenv("SHOPEE_SECRET_KEY") or "").strip():
+    if require_shopee and (
+        not (os.getenv("SHOPEE_APP_ID") or "").strip()
+        or not (os.getenv("SHOPEE_SECRET_KEY") or "").strip()
+    ):
         raise LabPipelineError("SHOPEE_APP_ID/SHOPEE_SECRET_KEY ausentes em credentials/project.env.")
     if os.getenv("ARMORED_IA_ENABLED", "1") != "1" or os.getenv("ARMORED_IA_CAPTION_ENABLED", "1") != "1":
         raise LabPipelineError("Para este E2E, ARMORED_IA_ENABLED e ARMORED_IA_CAPTION_ENABLED devem ser 1.")
@@ -363,13 +439,45 @@ def run_lab_pipeline(
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     run_token = uuid4().hex[:10]
-    run_id = f"{stamp}_{run_token}"
-    run_dir = root / "storage" / "validation" / f"full_pipeline_{run_id}"
-    run_dir.mkdir(parents=True, exist_ok=False)
+    reexecution = input_manifest.get("reexecution")
+    manifest_sha256 = _sha256(Path(input_manifest["manifest_path"]))
+    resuming = False
+    prior_report: dict[str, Any] | None = None
+    if reexecution:
+        run_id = f"reexec_{reexecution['execution_id']}_v{reexecution['version']}"
+        run_dir = root / "storage" / "validation" / f"full_pipeline_{run_id}"
+        if run_dir.exists():
+            prior_report_path = run_dir / "pipeline-report.json"
+            if prior_report_path.is_file():
+                try:
+                    prior_report = json.loads(prior_report_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    prior_report = None
+            if not prior_report:
+                raise LabPipelineError(
+                    "Execução versionada já existe sem relatório recuperável; preserve artefatos e use nova versão após revisão."
+                )
+            prior_reexecution = prior_report.get("reexecution") or {}
+            if (prior_report.get("manifest_sha256") != manifest_sha256
+                    or prior_reexecution.get("execution_id") != reexecution["execution_id"]
+                    or prior_reexecution.get("version") != reexecution["version"]):
+                raise LabPipelineError("Execução versionada existente não corresponde ao mesmo manifest; não será sobrescrita.")
+            if prior_report.get("status") == "SUCCESS":
+                return prior_report
+            if prior_report.get("status") not in {"RUNNING", "FAILED"}:
+                raise LabPipelineError("Estado do run existente não permite retomada segura.")
+            resuming = True
+        else:
+            run_dir.mkdir(parents=True, exist_ok=False)
+    else:
+        run_id = f"{stamp}_{run_token}"
+        run_dir = root / "storage" / "validation" / f"full_pipeline_{run_id}"
+        run_dir.mkdir(parents=True, exist_ok=False)
     report_path = run_dir / "pipeline-report.json"
-    report: dict[str, Any] = {
+    report: dict[str, Any] = prior_report if resuming and prior_report is not None else {
         "schema_version": 1,
         "run_id": run_id,
+        "manifest_sha256": manifest_sha256,
         "status": "RUNNING",
         "input_batch_id": input_manifest["batch_id"],
         "source_mode": "EXPLICIT_LOCAL_FIXTURE_MANIFEST",
@@ -385,36 +493,72 @@ def run_lab_pipeline(
         "stages": {},
         "outputs": [],
         "fixture_originals_intact": None,
+        "reexecution": ({
+            "kind": reexecution["kind"],
+            "execution_id": reexecution["execution_id"],
+            "version": reexecution["version"],
+            "publication_disabled": True,
+            "approved_vision_seeded": 0,
+            "publication_idempotency_keys": [],
+        } if reexecution else None),
     }
+    if resuming:
+        report["status"] = "RUNNING"
+        report["resumption_count"] = int(report.get("resumption_count", 0)) + 1
+        report.pop("error_type", None)
+        report.pop("error", None)
+        report.pop("finished_at_utc", None)
 
     def save_report() -> None:
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     db: Database | None = None
     coordinator: Coordinator | None = None
+    run_lock_name = f"lab-run:{run_id}"
+    run_lock_held = False
     try:
-        processor = _live_preflight(root, provider, speech_processor) if require_live_preflight else speech_processor
+        processor = _live_preflight(
+            root, provider, speech_processor, require_shopee=not bool(reexecution)
+        ) if require_live_preflight else speech_processor
         if processor is None:
             from ArmoredSpeech.model_processor import ModelProcessor
             processor = ModelProcessor()
 
         labels = input_manifest["sources"]
         suffixes = ("A", "B", "C")
-        source_map = {
-            label: f"sourceLab{run_token}{suffix}"
-            for label, suffix in zip(labels, suffixes, strict=True)
-        }
+        source_map = (
+            report.get("source_map") if resuming else {
+                label: f"sourceLab{run_token}{suffix}"
+                for label, suffix in zip(labels, suffixes, strict=True)
+            }
+        )
+        if not isinstance(source_map, dict) or set(source_map) != set(labels):
+            raise LabPipelineError("source_map persistido não corresponde ao manifest; retomada bloqueada.")
         report["source_map"] = source_map
+        reexecution_items = {
+            (source_map[row["source_label"]], str(row["telegram_message_id"])): row
+            for row in fixture_items
+        } if reexecution else {}
 
         # Database and all generated media are rooted in this run directory.
         # The project root remains available for assets/models/configuration.
         db = Database(run_dir / "core.sqlite3")
+        db.acquire_runtime_lock(run_lock_name)
+        run_lock_held = True
         storage = Storage(root, storage_root=run_dir / "workspace")
         source = LocalFixtureSource(source_map, fixture_items)
 
         if vision_factory is None:
-            from ArmoredVision.service import ArmoredVision
-            vision_factory = ArmoredVision
+            if reexecution:
+                class PersistedApprovalOnly:
+                    def identify(self, _item):
+                        raise LabPipelineError(
+                            "Vision/Shopee não pode ser executado durante replay com aprovação persistida."
+                        )
+                vision_factory = PersistedApprovalOnly
+            else:
+                from ArmoredVision.service import ArmoredVision
+                vision_factory = ArmoredVision
         if ia_factory is None:
             from ArmoredIA.service import ArmoredIA
             ia_factory = ArmoredIA
@@ -437,6 +581,88 @@ def run_lab_pipeline(
         save_report()
 
         for stage in ("sync", "vision", "stock"):
+            if (resuming and stage in {"sync", "vision"}
+                    and report.get("stages", {}).get(stage, {}).get("status") == "SUCCESS"):
+                continue
+            if (resuming and stage == "stock"
+                    and report.get("stages", {}).get(stage, {}).get("status") == "SUCCESS"):
+                stock_reconciled = all(
+                    db.get(db.content_id_for(row["telegram_message_id"], source_map[row["source_label"]]))
+                    .original_path.is_file()
+                    and db.get(db.content_id_for(row["telegram_message_id"], source_map[row["source_label"]]))
+                    .original_path.stat().st_size > 0
+                    for row in fixture_items
+                )
+                if stock_reconciled:
+                    continue
+            if stage == "vision" and reexecution:
+                seeded = []
+                for row in fixture_items:
+                    approval = row.get("approved_vision")
+                    if not approval:
+                        raise LabPipelineError("Reexecução versionada perdeu aprovação Vision validada.")
+                    source_id = source_map[row["source_label"]]
+                    content_id = db.content_id_for(row["telegram_message_id"], source_id)
+                    current = db.get(content_id)
+                    if current.state is State.RECOVERY:
+                        event = db.last_state_event(content_id)
+                        publication = db.publication(content_id)
+                        ai_only_recovery = (
+                            event is not None
+                            and str(event["old_state"] or "") == State.IA.value
+                            and str(event["new_state"] or "") == State.RECOVERY.value
+                            and str(event["reason"] or "").startswith(("AIProviderError:", "Timeout:", "ReadTimeout:"))
+                            and publication is None
+                            and current.result_path is None
+                            and current.original_path.is_file()
+                            and _sha256(current.original_path) == row["source_sha256"]
+                        )
+                        if not ai_only_recovery:
+                            raise LabPipelineError(
+                                f"RECOVERY fora de falha IA recuperável; retomada bloqueada: {content_id}."
+                            )
+                        db.transition(content_id, State.IA, "explicit-versioned-reexecution-retry-ia-only")
+                        current = db.get(content_id)
+                    if current.state is State.DUPLICATE:
+                        raise LabPipelineError(f"Item da reexecução foi bloqueado como duplicata: {content_id}.")
+                    if current.state is State.RECEIVED:
+                        owner = db.commit_vision_result(
+                            content_id,
+                            approval["affiliate_name"],
+                            approval["affiliate_url"],
+                            affiliate_urls=approval["affiliate_urls"],
+                            ia_context=approval["ia_context"],
+                        )
+                    else:
+                        owner = None
+                    current = db.get(content_id)
+                    valid_states = {
+                        State.RECEIVED, State.IA, State.SPEECH, State.STUDIO_BATCH,
+                        State.STUDIO_COMPLETE,
+                    }
+                    if (owner or current.state not in valid_states
+                            or current.affiliate_url != approval["affiliate_url"]
+                            or str((current.ia_context or {}).get("shopId", (current.ia_context or {}).get("shop_id", "")))
+                                != str(approval["ia_context"].get("shopId", approval["ia_context"].get("shop_id", "")))
+                            or str((current.ia_context or {}).get("itemId", (current.ia_context or {}).get("item_id", "")))
+                                != str(approval["ia_context"].get("itemId", approval["ia_context"].get("item_id", "")))):
+                        raise LabPipelineError(
+                            f"Identidade canônica ou aprovação persistida não pôde ser reutilizada: {content_id}."
+                        )
+                    key = (
+                        f"armoredcreator:reexecution:{reexecution['execution_id']}"
+                        f":v{reexecution['version']}:{row['source_content_id']}"
+                    )
+                    seeded.append({
+                        "source_content_id": row["source_content_id"],
+                        "content_id": content_id,
+                        "prior_publication_receipt": row["prior_publication_receipt"],
+                        "canonical_product_key": approval["canonical_product_key"],
+                        "publication_idempotency_key": key,
+                    })
+                report["reexecution"]["approved_vision_seeded"] = len(seeded)
+                report["reexecution"]["publication_idempotency_keys"] = seeded
+                save_report()
             stage_report = asyncio.run(run_catch_up_stage(coordinator, stage))
             report["stages"][stage] = _stage_summary(stage_report)
             save_report()
@@ -462,6 +688,20 @@ def run_lab_pipeline(
         }
 
         approved = db.pending_vision_approved_items()
+        if reexecution:
+            eligible_states = {State.RECEIVED.value, State.IA.value}
+            approved = [
+                db.get(content_id)
+                for content_id in (
+                    str(row["content_id"])
+                    for row in db.conn.execute(
+                        "SELECT content_id FROM items WHERE state IN (?,?) "
+                        "AND affiliate_url IS NOT NULL AND TRIM(affiliate_url)<>'' "
+                        "ORDER BY source_id, CAST(telegram_message_id AS INTEGER), content_id",
+                        tuple(sorted(eligible_states)),
+                    ).fetchall()
+                )
+            ]
         if not approved:
             raise LabPipelineError(
                 "Nenhum item com aprovação Vision e ORIGINAL íntegro chegou à etapa IA; "
@@ -472,6 +712,9 @@ def run_lab_pipeline(
             current = db.get(item.content_id)
             if not current.original_path.is_file():
                 ia_failed.append({"content_id": current.content_id, "reason": "original-missing-after-stock"})
+                continue
+            if current.state is State.IA and str(current.publication_caption or "").strip():
+                db.transition(current.content_id, State.SPEECH, "resume-ia-caption-persisted")
                 continue
             try:
                 coordinator.pipeline.run(current.content_id, stop_after_ia=True)
@@ -496,9 +739,9 @@ def run_lab_pipeline(
         speech_items = [
             db.get(str(row["content_id"]))
             for row in db.conn.execute(
-                "SELECT content_id FROM items WHERE state=? ORDER BY source_id, "
+                "SELECT content_id FROM items WHERE state IN (?,?) ORDER BY source_id, "
                 "CAST(telegram_message_id AS INTEGER), content_id",
-                (State.SPEECH.value,),
+                (State.SPEECH.value, State.STUDIO_BATCH.value),
             ).fetchall()
         ]
         if not speech_items:
@@ -640,6 +883,16 @@ def run_lab_pipeline(
                 "result_size": output_path.stat().st_size,
                 "original_sha256": expected_hash,
                 "state": State.STUDIO_COMPLETE.value,
+                **({
+                    "source_content_id": reexecution_items[identity]["source_content_id"],
+                    "prior_publication_receipt": reexecution_items[identity]["prior_publication_receipt"],
+                    "execution_id": reexecution["execution_id"],
+                    "execution_version": reexecution["version"],
+                    "publication_idempotency_key": (
+                        f"armoredcreator:reexecution:{reexecution['execution_id']}"
+                        f":v{reexecution['version']}:{reexecution_items[identity]['source_content_id']}"
+                    ),
+                } if reexecution else {}),
             })
         report["stages"]["studio"] = {
             "status": "SUCCESS",
@@ -677,7 +930,21 @@ def run_lab_pipeline(
         ) from exc
     finally:
         if db is not None:
+            if run_lock_held:
+                try:
+                    db.release_runtime_lock(run_lock_name)
+                except Exception:
+                    pass
             db.close()
+        if report.get("status") == "RUNNING":
+            report["status"] = "INTERRUPTED"
+            report["error_type"] = "KeyboardInterrupt"
+            report["error"] = "Execução interrompida; relatório e banco isolados preservados para retomada explícita."
+            report["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
+            try:
+                save_report()
+            except OSError:
+                pass
         if previous_ia_provider is None:
             os.environ.pop("ARMORED_IA_PROVIDER", None)
         else:

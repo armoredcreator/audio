@@ -1,19 +1,36 @@
 from __future__ import annotations
+import uuid
 from pathlib import Path
 import logging
 import os
 import shutil
 from .database import Database
 from .models import PublicationCheck, State
-from .services import AIService, Publisher, StudioService, VisionService, VisionUnresolvedError, PublicationUnknownError
+from .services import (
+    AIService,
+    Publisher,
+    StudioService,
+    VisionService,
+    VisionDuplicateError,
+    VisionUnresolvedError,
+    PublicationDeferredError,
+    PublicationUnknownError,
+)
 from .storage import Storage
 from .trace import PipelineTrace
+from .publication_quarantine import PublicationQuarantine
+from ArmoredIA.caption.policy import CaptionPolicyError, validate_caption
+from ArmoredIA.caption.selector import CaptionGenerationError, CaptionSelector
+from ArmoredIA.providers.base import AIProviderError
 
 
 class Pipeline:
-    def __init__(self, db: Database, storage: Storage, vision: VisionService, studio: StudioService, publisher: Publisher, ia: AIService | None = None):
+    def __init__(self, db: Database, storage: Storage, vision: VisionService, studio: StudioService, publisher: Publisher, ia: AIService | None = None, publication_quarantine: PublicationQuarantine | None = None):
         self.db, self.storage = db, storage
         self.vision, self.studio, self.publisher, self.ia = vision, studio, publisher, ia
+        self.publication_quarantine = publication_quarantine or PublicationQuarantine(
+            storage.database / "publication-quarantine.sqlite3"
+        )
         self.log = logging.getLogger(__name__)
         self.trace = PipelineTrace(getattr(storage, "storage_root", None) or getattr(storage, "root"))
         self._shutdown_checker = lambda: False
@@ -27,6 +44,298 @@ class Pipeline:
         """Allow async source owners to release shared Telegram sessions before Hub."""
         self._before_hub_checker = checker
 
+    def _caption_is_policy_valid(self, item, caption: str | None) -> bool:
+        raw = str(caption or "").strip()
+        if not raw or not item.affiliate_name:
+            return False
+        try:
+            canonical = validate_caption(
+                raw,
+                product_name=str(item.affiliate_name),
+                product_context=item.ia_context or {},
+            )
+        except CaptionPolicyError:
+            return False
+        return canonical == raw
+
+    @staticmethod
+    def _caption_failure_reason(exc: Exception) -> tuple[str, str, bool]:
+        category = str(getattr(exc, "category", "") or type(exc).__name__)
+        if isinstance(exc, CaptionPolicyError):
+            return "caption-content-rejected", category, False
+        if isinstance(exc, CaptionGenerationError):
+            return "caption-candidates-exhausted-policy", category, False
+        if isinstance(exc, AIProviderError):
+            if category in {"TRANSIENT_UNAVAILABLE", "RATE_LIMITED", "RETRY_BUDGET_EXHAUSTED"}:
+                return f"caption-provider-temporary:{category}", category, True
+            if category == "AUTHENTICATION_OR_PERMISSION":
+                return "caption-provider-authentication-required", category, False
+            return f"caption-provider-failed:{category}", category, False
+        return f"caption-recovery-{type(exc).__name__}", category, False
+
+    def _persist_caption_failure(
+        self,
+        item_id: str,
+        exc: Exception,
+        *,
+        provider_metadata: dict,
+        attempt_id: int | None = None,
+        batch_id: str | None = None,
+        evaluations=(),
+    ) -> str:
+        if batch_id and evaluations:
+            self.db.record_caption_candidates(item_id, batch_id, evaluations)
+        if attempt_id is not None:
+            provider_obj = getattr(getattr(self.ia, "caption_generator", None), "provider", None)
+            request_count = max(0, int(getattr(exc, "provider_requests", 0)))
+            self.db.record_ia_generation_evidence(
+                attempt_id,
+                provider_requests=request_count,
+                policy_retries=max(0, request_count - 1),
+                feedback=getattr(exc, "feedback_rounds", ()),
+                provider_attempts=(
+                    getattr(exc, "provider_attempts", ())
+                    or getattr(provider_obj, "last_attempts", ())
+                ),
+            )
+        reason, category, retryable = self._caption_failure_reason(exc)
+        try:
+            auto_retry_limit = int(os.getenv("ARMORED_IA_AUTO_TRANSIENT_RETRIES", "1"))
+        except ValueError:
+            auto_retry_limit = 0
+        auto_retry_limit = max(0, min(auto_retry_limit, 2))
+        # Count retries actually claimed from the append-only ledger. The
+        # recovery row's `attempts` also includes the initial IA attempt, so
+        # comparing it to the retry budget incorrectly denied the first retry.
+        automatic_retry_claims = self.db.automatic_caption_retry_claim_count(item_id)
+        publication = self.db.publication(item_id)
+        no_uncertain_publication = publication is None or (
+            str(publication["verification_status"] or "").upper() == "ABSENT_CONFIRMED"
+            and not bool(publication["confirmed"])
+            and not str(publication["published_message_id"] or "").strip()
+        )
+        automatic_retry_authorized = bool(
+            retryable
+            and no_uncertain_publication
+            and automatic_retry_claims < auto_retry_limit
+        )
+        self.db.finish_caption_recovery(
+            item_id,
+            status="BLOCKED",
+            reason=reason,
+            provider=str(provider_metadata.get("provider") or "custom"),
+            model=provider_metadata.get("model"),
+            automatic_retry_authorized=automatic_retry_authorized,
+            evidence={
+                "batch_id": batch_id,
+                "candidate_count": len(evaluations),
+                "error_type": type(exc).__name__,
+                "error_category": category,
+                "retryable_after_operator_review": retryable,
+                "automatic_retry_authorized": automatic_retry_authorized,
+                "automatic_retry_limit": auto_retry_limit,
+                "automatic_retry_claims": automatic_retry_claims,
+            },
+        )
+        self.trace.emit(
+            item_id,
+            "IA",
+            "CAPTION_BLOCKED",
+            reason=reason,
+            retryable_after_operator_review=retryable,
+        )
+        return reason
+
+    def _ensure_publication_caption(self, item_id: str) -> bool:
+        """Recover a missing Hub caption once from approved IA evidence, before send."""
+        item = self.db.get(item_id)
+        publication = self.db.publication(item_id)
+        if publication is not None:
+            verification_status = str(publication["verification_status"] or "").upper()
+            receipt_message_id = str(publication["published_message_id"] or "").strip()
+            if verification_status == "CONFIRMED" or bool(publication["confirmed"]):
+                self.trace.emit(
+                    item_id, "HUB", "CAPTION_RECOVERY_BLOCKED",
+                    reason="confirmed-publication-history-is-immutable",
+                )
+                return False
+            if verification_status != "ABSENT_CONFIRMED":
+                self.publication_quarantine.quarantine_unknown(
+                    item_id,
+                    publication,
+                    evidence={"item_state": item.state.value, "reason": "caption-recovery-saw-existing-receipt"},
+                )
+                self.trace.emit(
+                    item_id, "HUB", "CAPTION_RECOVERY_BLOCKED",
+                    reason="publication-receipt-requires-explicit-reconciliation",
+                )
+                return False
+            if receipt_message_id and verification_status != "ABSENT_CONFIRMED":
+                self.publication_quarantine.quarantine_unknown(
+                    item_id, publication,
+                    evidence={"item_state": item.state.value, "reason": "message-id-without-absence-reconciliation"},
+                )
+                return False
+
+        raw_caption = str(item.publication_caption or "").strip()
+        if self._caption_is_policy_valid(item, raw_caption):
+            return True
+
+        selected = self.db.selected_valid_caption(item_id)
+        if selected and self._caption_is_policy_valid(item, selected):
+            self.db.set_caption(item_id, selected)
+            self.db.finish_caption_recovery(item_id, status="SUCCEEDED", reason="reused-persisted-policy-selection")
+            self.trace.emit(
+                item_id, "IA", "CAPTION_RECOVERED",
+                source="persisted-selected-policy-candidate",
+            )
+            return True
+
+        recovery = self.db.caption_recovery(item_id)
+        if recovery is not None and str(recovery["status"]) == "SUCCEEDED":
+            # A caption may have been approved by an older Policy and remain
+            # persisted while the current Hub contract has since become
+            # stricter. Do not loop on that stale success or silently replace
+            # it: preserve the text and evidence, then require one explicit,
+            # auditable retry after verifying the publication receipt.
+            reason = "persisted-caption-failed-current-policy"
+            self.db.finish_caption_recovery(
+                item_id,
+                status="BLOCKED",
+                reason=reason,
+                evidence={
+                    "previous_caption": raw_caption or None,
+                    "selected_candidate": selected,
+                    "current_policy_rejected_persisted_caption": True,
+                },
+            )
+            self.trace.emit(
+                item_id, "HUB", "CAPTION_RECOVERY_BLOCKED",
+                reason=reason,
+                previous_caption_preserved=bool(raw_caption),
+            )
+            return False
+
+        if (
+            recovery is not None
+            and str(recovery["status"]) == "BLOCKED"
+            and self.db.caption_recovery_blocked(item_id)
+        ):
+            self.trace.emit(
+                item_id, "HUB", "CAPTION_RECOVERY_BLOCKED",
+                reason=str(recovery["reason"] or "operator-review-required"),
+            )
+            return False
+
+        context = dict(item.ia_context or {})
+        if not context:
+            product_name = str(item.affiliate_name or "").strip()
+            if product_name and str(item.affiliate_url or "").strip():
+                context = {"productName": product_name}
+                self.db.set_ia_context(item_id, context)
+                item = self.db.get(item_id)
+                self.trace.emit(
+                    item_id, "IA", "CONTEXT_RECOVERED",
+                    source="persisted_vision_approval",
+                    fields=["productName"],
+                )
+            else:
+                self.db.finish_caption_recovery(
+                    item_id, status="BLOCKED", reason="approved-product-context-missing",
+                )
+                self.trace.emit(
+                    item_id, "HUB", "CAPTION_RECOVERY_BLOCKED",
+                    reason="approved-product-context-missing",
+                )
+                return False
+
+        if self.ia is None:
+            self.db.finish_caption_recovery(
+                item_id, status="BLOCKED", reason="armored-ia-service-not-configured",
+            )
+            return False
+
+        claim = self.db.claim_caption_recovery(
+            item_id,
+            previous_caption=raw_caption or None,
+        )
+        if claim != "STARTED":
+            self.trace.emit(item_id, "HUB", "CAPTION_RECOVERY_BLOCKED", reason=claim.casefold())
+            return False
+
+        configuration = getattr(self.ia, "provider_configuration", None)
+        provider_metadata = configuration() if callable(configuration) else {"provider": "custom", "model": None}
+        self.trace.emit(item_id, "IA", "CAPTION_RECOVERY_STARTED", **provider_metadata)
+        batch_id = None
+        evaluations = ()
+        ia_attempt_id = None
+        try:
+            generate_with_evidence = getattr(self.ia, "generate_caption_with_evidence", None)
+            if not callable(generate_with_evidence):
+                raise RuntimeError("armored-ia-evidence-api-required-for-caption-recovery")
+            with self.trace.stage(item_id, "IA_CAPTION_RECOVERY"), self.db.ia_generation_attempt(
+                item_id,
+                provider=str(provider_metadata.get("provider") or "custom"),
+                model=provider_metadata.get("model"),
+            ) as ia_attempt_id:
+                generated = generate_with_evidence(context)
+                batch_id = str(generated.batch_id)
+                evaluations = tuple(generated.evaluations)
+                self.db.record_caption_candidates(item_id, batch_id, evaluations)
+                self.db.record_ia_generation_evidence(
+                    ia_attempt_id,
+                    provider_requests=generated.provider_requests,
+                    policy_retries=max(0, int(generated.provider_requests) - 1),
+                    feedback=generated.feedback_rounds,
+                    provider_attempts=generated.provider_attempts,
+                )
+                caption = str(generated.caption or "").strip()
+                if not self._caption_is_policy_valid(self.db.get(item_id), caption):
+                    raise CaptionPolicyError("recovered-caption-failed-current-policy")
+                # SQLite commits the selected candidates before caption text. Both
+                # are durable before Hub performs even its dry-run validation.
+                self.db.set_caption(item_id, caption)
+            self.db.finish_caption_recovery(
+                item_id,
+                status="SUCCEEDED",
+                reason="armored-ia-policy-approved",
+                provider=str(provider_metadata.get("provider") or "custom"),
+                model=provider_metadata.get("model"),
+                evidence={"batch_id": batch_id, "candidate_count": len(evaluations), "policy_valid": True},
+            )
+            self.trace.emit(
+                item_id, "IA", "CAPTION_RECOVERED",
+                source="armored-ia",
+                batch_id=batch_id,
+                candidates=len(evaluations),
+                policy_valid=True,
+            )
+            return True
+        except Exception as exc:
+            # CaptionGenerator attaches the full failed batch to policy errors.
+            # Preserve those candidates too; otherwise a failed local attempt
+            # leaves only a generic BLOCKED reason and cannot be audited or
+            # used to teach the next explicitly authorized retry.
+            if batch_id is None:
+                batch_id = getattr(exc, "batch_id", None)
+            if not evaluations:
+                evaluations = tuple(getattr(exc, "evaluations", ()) or ())
+            reason = self._persist_caption_failure(
+                item_id,
+                exc,
+                provider_metadata=provider_metadata,
+                attempt_id=ia_attempt_id,
+                batch_id=batch_id,
+                evaluations=evaluations,
+            )
+            self.trace.emit(
+                item_id, "HUB", "CAPTION_RECOVERY_BLOCKED",
+                reason=reason,
+                ia_attempted=True,
+            )
+            self.log.error("[PIPELINE][ITEM %s] caption recovery durably blocked: %s", item_id, reason)
+            return False
+
     def run(
         self,
         item_id: str,
@@ -37,6 +346,29 @@ class Pipeline:
         retry_waiting_vision: bool = False,
     ) -> None:
         item = self.db.get(item_id)
+        if self.publication_quarantine.contains(item_id):
+            self.trace.emit(
+                item_id,
+                "PIPELINE",
+                "QUARANTINE_BLOCK",
+                state=item.state.value,
+                reason="unresolved-publication-outcome",
+            )
+            self.log.warning(
+                "[PIPELINE][ITEM %s] blocked by unresolved publication quarantine; state=%s",
+                item.content_id,
+                item.state.value,
+            )
+            return
+        if self.db.caption_recovery_blocked(item_id):
+            self.trace.emit(
+                item_id,
+                "PIPELINE",
+                "CAPTION_BLOCKED_SKIP",
+                state=item.state.value,
+                reason="explicit-caption-recovery-review-required",
+            )
+            return
         self.trace.emit(item_id, "PIPELINE", "START", state=item.state.value, attempt=item.attempts + 1)
         self.log.info("[PIPELINE][ITEM %s] início state=%s", item.content_id, item.state.value)
         if item.state == State.DUPLICATE:
@@ -175,6 +507,20 @@ class Pipeline:
                 with self.trace.stage(item_id, "VISION"):
                     try:
                         v = self.vision.identify(item)
+                    except VisionDuplicateError as exc:
+                        self.db.mark_duplicate(
+                            item_id,
+                            exc.owner_content_id,
+                            "canonical-product-known-before-vision-api",
+                        )
+                        self.trace.emit(
+                            item_id,
+                            "VISION",
+                            "DUPLICATE",
+                            duplicate_of=exc.owner_content_id,
+                            reason="canonical-product-known-before-vision-api",
+                        )
+                        return
                     except VisionUnresolvedError as exc:
                         self.db.mark_vision_waiting(item_id, str(exc))
                         self.trace.emit(item_id, "VISION", "WAITING", reason=str(exc))
@@ -241,54 +587,127 @@ class Pipeline:
             if item.state == State.IA:
                 self.log.info("[PIPELINE][ITEM %s] ARMOREDIA iniciando", item.content_id)
                 if self.ia is None:
+                    self.db.finish_caption_recovery(
+                        item_id, status="BLOCKED", reason="armored-ia-service-not-configured",
+                    )
                     raise RuntimeError("armored-ia-service-not-configured")
                 if not item.ia_context:
-                    raise RuntimeError("armored-ia-context-missing")
-                with self.trace.stage(item_id, "IA"):
-                    generate_with_evidence = getattr(
-                        self.ia,
-                        "generate_caption_with_evidence",
-                        None,
-                    )
-                    if callable(generate_with_evidence):
-                        try:
-                            generated = generate_with_evidence(dict(item.ia_context))
-                        except Exception as exc:
-                            batch_id = getattr(exc, "batch_id", None)
-                            evaluations = getattr(exc, "evaluations", ())
-                            if batch_id and evaluations:
-                                self.db.record_caption_candidates(
-                                    item_id,
-                                    batch_id,
-                                    evaluations,
-                                )
-                            raise
-                        self.db.record_caption_candidates(
-                            item_id,
-                            generated.batch_id,
-                            generated.evaluations,
-                        )
-                        caption = generated.caption
+                    # Older, already-approved rows can predate durable Vision
+                    # context persistence. Rebuild only the minimum caption
+                    # context from the stored approval; never rerun Vision or
+                    # resolve a product through Shopee as a recovery shortcut.
+                    approved_name = str(item.affiliate_name or "").strip()
+                    if item.affiliate_url and approved_name:
+                        fallback_context = {"productName": approved_name}
+                        self.db.set_ia_context(item_id, fallback_context)
+                        item = self.db.get(item_id)
                         self.trace.emit(
                             item_id,
                             "IA",
-                            "EVALUATED",
-                            batch_id=generated.batch_id,
-                            candidates=len(generated.evaluations),
-                            valid=sum(
-                                1
-                                for evaluation in generated.evaluations
-                                if evaluation.policy_valid
-                            ),
-                            selected=generated.selection.index,
-                            score=generated.selection.score,
+                            "CONTEXT_RECOVERED",
+                            source="persisted_vision_approval",
+                            fields=sorted(fallback_context),
                         )
-                    else:
-                        caption = self.ia.generate_caption(dict(item.ia_context))
-                    if not str(caption or "").strip():
-                        raise RuntimeError("armored-ia-empty-caption")
-                    self.db.set_caption(item_id, str(caption))
-                    self.trace.emit(item_id, "IA", "RESULT", caption=True)
+                    if not item.ia_context:
+                        self.db.finish_caption_recovery(
+                            item_id, status="BLOCKED", reason="approved-product-context-missing",
+                        )
+                        raise RuntimeError("armored-ia-context-missing")
+                prior_caption_recovery = self.db.caption_recovery(item_id)
+                if (
+                    prior_caption_recovery is not None
+                    and str(prior_caption_recovery["status"]) == "BLOCKED"
+                    and (
+                        int(prior_caption_recovery["manual_retry_authorized"] or 0)
+                        or int(prior_caption_recovery["automatic_retry_authorized"] or 0)
+                    )
+                ):
+                    claim = self.db.claim_caption_recovery(item_id)
+                    if claim != "STARTED":
+                        return
+                configuration = getattr(self.ia, "provider_configuration", None)
+                provider_metadata = configuration() if callable(configuration) else {"provider": "custom", "model": None}
+                self.trace.emit(item_id, "IA", "CONFIGURED", **provider_metadata)
+                ia_attempt_id = None
+                generated = None
+                try:
+                    with self.trace.stage(item_id, "IA"), self.db.ia_generation_attempt(item_id, **provider_metadata) as ia_attempt_id:
+                        generate_with_evidence = getattr(
+                            self.ia,
+                            "generate_caption_with_evidence",
+                            None,
+                        )
+                        if callable(generate_with_evidence):
+                            generated = generate_with_evidence(dict(item.ia_context))
+                            self.db.record_caption_candidates(
+                                item_id,
+                                generated.batch_id,
+                                generated.evaluations,
+                            )
+                            self.db.record_ia_generation_evidence(
+                                ia_attempt_id,
+                                provider_requests=generated.provider_requests,
+                                policy_retries=max(0, int(generated.provider_requests) - 1),
+                                feedback=generated.feedback_rounds,
+                                provider_attempts=generated.provider_attempts,
+                            )
+                            caption = generated.caption
+                            self.trace.emit(
+                                item_id,
+                                "IA",
+                                "EVALUATED",
+                                batch_id=generated.batch_id,
+                                candidates=len(generated.evaluations),
+                                valid=sum(1 for evaluation in generated.evaluations if evaluation.policy_valid),
+                                selected=generated.selection.index,
+                                score=generated.selection.score,
+                                provider_requests=generated.provider_requests,
+                                policy_retries=max(0, int(generated.provider_requests) - 1),
+                            )
+                        else:
+                            raw_caption = str(self.ia.generate_caption(dict(item.ia_context)) or "")
+                            legacy_selector = CaptionSelector()
+                            evaluations = legacy_selector.evaluate(
+                                [raw_caption],
+                                product_name=str(item.affiliate_name or ""),
+                                product_context=dict(item.ia_context or {}),
+                            )
+                            batch_id = f"legacy-{uuid.uuid4().hex}"
+                            try:
+                                selection, marked = legacy_selector.choose(evaluations)
+                            except CaptionGenerationError:
+                                self.db.record_caption_candidates(item_id, batch_id, evaluations)
+                                raise
+                            self.db.record_caption_candidates(item_id, batch_id, marked)
+                            caption = selection.caption
+                        if not str(caption or "").strip():
+                            raise RuntimeError("armored-ia-empty-caption")
+                        if not self._caption_is_policy_valid(self.db.get(item_id), str(caption)):
+                            raise CaptionPolicyError("armored-ia-caption-failed-shared-policy")
+                        self.db.set_caption(item_id, str(caption))
+                        self.trace.emit(item_id, "IA", "RESULT", caption=True)
+                except Exception as exc:
+                    self._persist_caption_failure(
+                        item_id,
+                        exc,
+                        provider_metadata=provider_metadata,
+                        attempt_id=ia_attempt_id,
+                        batch_id=getattr(generated, "batch_id", None) or getattr(exc, "batch_id", None),
+                        evaluations=getattr(generated, "evaluations", ()) or getattr(exc, "evaluations", ()),
+                    )
+                    raise
+                if prior_caption_recovery is not None:
+                    self.db.finish_caption_recovery(
+                        item_id,
+                        status="SUCCEEDED",
+                        reason="armored-ia-policy-approved",
+                        provider=str(provider_metadata.get("provider") or "custom"),
+                        model=provider_metadata.get("model"),
+                        evidence={
+                            "batch_id": getattr(generated, "batch_id", None),
+                            "policy_valid": True,
+                        },
+                    )
                 next_state = State.SPEECH if stop_after_ia else State.STUDIO
                 reason = "ia-complete-awaiting-speech" if stop_after_ia else "ia-complete"
                 self.db.transition(item_id, next_state, reason)
@@ -344,17 +763,26 @@ class Pipeline:
 
             item = self.db.get(item_id)
             if item.state == State.PUBLISHING:
-                if self._before_hub_checker is not None:
-                    self._before_hub_checker()
                 self.log.info("[PIPELINE][ITEM %s] HUB/PUBLICAÇÃO iniciando", item.content_id)
                 if not item.result_path or not item.result_path.is_file():
                     raise FileNotFoundError("publication-result-missing")
+                if not self._ensure_publication_caption(item_id):
+                    return
+                item = self.db.get(item_id)
+                if self._before_hub_checker is not None:
+                    self._before_hub_checker()
 
                 with self.trace.stage(item_id, "HUB"):
                     publish_once = getattr(self.publisher, "publish_once", None)
                     if callable(publish_once):
                         try:
                             result = publish_once(item)
+                        except PublicationDeferredError as exc:
+                            self.trace.emit(
+                                item_id, "HUB", "DEFERRED", reason=str(exc),
+                                state=item.state.value,
+                            )
+                            return
                         except PublicationUnknownError as exc:
                             self.db.transition(item_id, State.RECOVERY, str(exc))
                             self.trace.emit(item_id, "HUB", "UNKNOWN", reason=str(exc), new_state=State.RECOVERY.value)

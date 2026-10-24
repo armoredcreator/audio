@@ -1,0 +1,452 @@
+{
+  "run_id": "caption-provider-validation-20261023-v5",
+  "created_at": "2026-10-23T23:15:45.017736+00:00",
+  "mode": "Gemini called live with bounded corrective feedback for items 295/296; one real Ollama candidate set from an earlier call re-evaluated by the final Policy for item 297; all candidate/attempt/recovery evidence persisted in isolated SQLite and verified after reopen; production SQLite read-only; no Shopee, Telegram, or media processing",
+  "results": [
+    {
+      "provider": "gemini",
+      "content_id": "-1003788989075_295",
+      "product_name": "Tênis Feminino Casual Camurça Detalhe Lateral Listra Dupla Moderno Break GiGiL",
+      "context": {
+        "productName": "Tênis Feminino Casual Camurça Detalhe Lateral Listra Dupla Moderno Break GiGiL"
+      },
+      "item_id_in_clone": "caption-final-evidence_final-295",
+      "status": "SUCCESS",
+      "selected_caption": "Visual moderno 🧡 casual\n#tenis",
+      "policy_valid": true,
+      "provider_requests": 1,
+      "feedback_rounds": [],
+      "provider_attempts": [
+        {
+          "policy_round": 1,
+          "attempt": 1,
+          "status": "SUCCESS",
+          "http_status": 200
+        }
+      ],
+      "suggestions": [
+        {
+          "raw": "Tênis camurça casual #estilocasual",
+          "normalized": "Tênis camurça 🧡 casual",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Estilo camurça moderno #teniscasual",
+          "normalized": "Estilo camurça 🧡 moderno",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Casual detalhe listrado #modafeminina",
+          "normalized": "Casual detalhe 🧡 listrado",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Tênis moderno versátil #tenisfeminino",
+          "normalized": "Tênis moderno 🧡 versátil",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Listra lateral marcante #estilo",
+          "normalized": "Listra lateral 🧡 marcante",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Conforto camurça casual #lookcasual",
+          "normalized": "Conforto camurça 🧡 casual",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Visual moderno casual #tenis",
+          "normalized": "Visual moderno 🧡 casual\n#tenis",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": true,
+          "rejection_reason": null,
+          "score": 0.25,
+          "selected": true
+        },
+        {
+          "raw": "Toque camurça macio #estilourbano",
+          "normalized": "Toque camurça 🧡 macio",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Design listra lateral #casual",
+          "normalized": "Design listra 🧡 lateral\n#casual",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Tênis feminino estilo #modafeminina",
+          "normalized": "Tênis feminino 🧡 estilo",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        }
+      ],
+      "persisted_after_reopen": true,
+      "persisted_caption": "Visual moderno 🧡 casual\n#tenis",
+      "recovery_status_after_reopen": "SUCCEEDED",
+      "recovery_event_count_after_reopen": 1
+    },
+    {
+      "provider": "gemini",
+      "content_id": "-1003788989075_296",
+      "product_name": "Amend Essencial Acidificante Máscara Equilíbrio do PH - 250g",
+      "context": {
+        "productName": "Amend Essencial Acidificante Máscara Equilíbrio do PH - 250g"
+      },
+      "item_id_in_clone": "caption-final-evidence_final-296",
+      "status": "BLOCKED",
+      "error_type": "CaptionGenerationError",
+      "error_category": null,
+      "error": "Nenhuma das 10 candidata(s) passou pela Policy: 1: legenda revela medida ou especificação técnica; 2: texto principal contém termo sem suporte no contexto Vision; 3: texto principal contém termo sem suporte no contexto Vision; 4: a legenda precisa ter 1 ou 2 hashtags distintas; 5: a legenda precisa ter 1 ou 2 hashtags distintas; 6: a legenda precisa ter 1 ou 2 hashtags distintas; 7: texto principal contém termo sem suporte no contexto Vision; 8: a legenda precisa ter 1 ou 2 hashtags distintas; 9: a legenda precisa ter 1 ou 2 hashtags distintas; 10: texto principal contém termo sem suporte no contexto Vision",
+      "provider_requests": 2,
+      "feedback_rounds": [
+        [
+          "texto principal contém termo sem suporte no contexto Vision",
+          "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "Use hashtags únicas e relacionadas ao contexto persistido do produto.",
+          "Remova palavras descritivas ausentes do nome, categoria, uso ou descrição Vision; não invente atributo, benefício ou cenário.",
+          "Prefira uma hashtag simples que esteja literalmente no contexto aprovado; não concatene palavras com sufixos genéricos nem use marca/modelo."
+        ]
+      ],
+      "provider_attempts": [
+        {
+          "attempt": 1,
+          "status": "SUCCESS",
+          "http_status": 200
+        }
+      ],
+      "suggestions": [
+        {
+          "raw": "Equilíbrio dos fios #acidificante",
+          "normalized": "Equilíbrio dos 🧡 fios\n#acidificante",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Selagem pós química #cabelosbrilhantes",
+          "normalized": "Selagem pós 🧡 química",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Acidificação capilar intensa #tratamentocapilar",
+          "normalized": "Acidificação capilar 🧡 intensa",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Fios alinhados naturalmente #cabelosaudavel",
+          "normalized": "Fios alinhados 🧡 naturalmente",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Cuidado após coloração #acidificante",
+          "normalized": "Cuidado após 🧡 coloração\n#acidificante",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Redução de porosidade #cabeloequilibrado",
+          "normalized": "Redução de 🧡 porosidade",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Brilho e alinhamento #acidificante",
+          "normalized": "Brilho e 🧡 alinhamento\n#acidificante",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Tratamento selante profissional #cabelosselados",
+          "normalized": "Tratamento selante 🧡 profissional",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Equilíbrio de PH #acidificante",
+          "normalized": "Equilíbrio de 🧡 PH\n#acidificante",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "legenda revela medida ou especificação técnica",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Máscara equilíbrio capilar #amend",
+          "normalized": "Máscara equilíbrio 🧡 capilar\n#amend",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Tratamento essencial diário #acidificante",
+          "normalized": "Tratamento essencial 🧡 diário\n#acidificante",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Equilíbrio dos fios #tratamento",
+          "normalized": "Equilíbrio dos 🧡 fios",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Acidificante para fios #ph",
+          "normalized": "Acidificante para 🧡 fios",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Essencial pós química #cabelos",
+          "normalized": "Essencial pós 🧡 química",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Máscara para fios #acidificante",
+          "normalized": "Máscara para 🧡 fios\n#acidificante",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Equilíbrio do ph #cabelos",
+          "normalized": "Equilíbrio do 🧡 ph",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Essencial para fios #tratamento",
+          "normalized": "Essencial para 🧡 fios",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Tratamento de ph #amend",
+          "normalized": "Tratamento de 🧡 ph\n#amend",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        }
+      ],
+      "persisted_after_reopen": false,
+      "persisted_caption": null,
+      "recovery_status_after_reopen": "BLOCKED",
+      "recovery_event_count_after_reopen": 1
+    },
+    {
+      "provider": "ollama-replayed-real-candidates",
+      "content_id": "-1003788989075_297",
+      "product_name": "Chinelo feminino NO STRASS Verao 2026",
+      "context": {
+        "productName": "Chinelo feminino NO STRASS Verao 2026"
+      },
+      "item_id_in_clone": "caption-final-evidence_final-297",
+      "status": "SUCCESS_REEVALUATED",
+      "selected_caption": "Estilo 🧡 verão\n#verão",
+      "policy_valid": true,
+      "provider_requests_original_run": 1,
+      "suggestions": [
+        {
+          "raw": "Vestido floral\n#moda #floral",
+          "normalized": "Vestido 🧡 floral\n#moda",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Look casual\n#casual #look",
+          "normalized": "Look 🧡 casual",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Estilo verão\n#verão #estilo",
+          "normalized": "Estilo 🧡 verão\n#verão",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": true,
+          "rejection_reason": null,
+          "score": 0.0,
+          "selected": true
+        }
+      ],
+      "persisted_after_reopen": true,
+      "persisted_caption": "Estilo 🧡 verão\n#verão",
+      "recovery_status_after_reopen": "SUCCEEDED",
+      "recovery_event_count_after_reopen": 1
+    }
+  ]
+}

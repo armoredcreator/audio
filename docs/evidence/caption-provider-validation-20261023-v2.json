@@ -1,0 +1,251 @@
+{
+  "run_id": "caption-provider-validation-20261023-v2",
+  "created_at": "2026-10-23T23:05:45.319910+00:00",
+  "mode": "real configured providers; historical product context read-only; isolated SQLite clone, reopened for persistence check; no Shopee, Telegram, or media processing",
+  "results": [
+    {
+      "provider": "ollama",
+      "model": "gemma3:1b",
+      "content_id": "-1003788989075_295",
+      "product_name": "Tênis Feminino Casual Camurça Detalhe Lateral Listra Dupla Moderno Break GiGiL",
+      "context": {
+        "productName": "Tênis Feminino Casual Camurça Detalhe Lateral Listra Dupla Moderno Break GiGiL"
+      },
+      "status": "FAILED",
+      "error_type": "AIProviderError",
+      "error_category": "TRANSIENT_UNAVAILABLE",
+      "error": "Ollama indisponível após 1 tentativa(s): ReadTimeout",
+      "provider_requests": 1,
+      "feedback_rounds": [],
+      "provider_attempts": [
+        {
+          "policy_round": 1,
+          "attempt": 1,
+          "status": "TRANSIENT_UNAVAILABLE",
+          "http_status": null
+        }
+      ]
+    },
+    {
+      "provider": "ollama",
+      "model": "gemma3:1b",
+      "content_id": "-1003788989075_296",
+      "product_name": "Amend Essencial Acidificante Máscara Equilíbrio do PH - 250g",
+      "context": {
+        "productName": "Amend Essencial Acidificante Máscara Equilíbrio do PH - 250g"
+      },
+      "status": "FAILED",
+      "error_type": "AIProviderError",
+      "error_category": "TRANSIENT_UNAVAILABLE",
+      "error": "Ollama indisponível após 1 tentativa(s): ReadTimeout",
+      "provider_requests": 1,
+      "feedback_rounds": [],
+      "provider_attempts": [
+        {
+          "policy_round": 1,
+          "attempt": 1,
+          "status": "TRANSIENT_UNAVAILABLE",
+          "http_status": null
+        }
+      ]
+    },
+    {
+      "provider": "ollama",
+      "model": "gemma3:1b",
+      "content_id": "-1003788989075_297",
+      "product_name": "Chinelo feminino NO STRASS Verao 2026",
+      "context": {
+        "productName": "Chinelo feminino NO STRASS Verao 2026"
+      },
+      "status": "FAILED",
+      "error_type": "AIProviderError",
+      "error_category": "TRANSIENT_UNAVAILABLE",
+      "error": "Ollama indisponível após 1 tentativa(s): ReadTimeout",
+      "provider_requests": 1,
+      "feedback_rounds": [],
+      "provider_attempts": [
+        {
+          "policy_round": 1,
+          "attempt": 1,
+          "status": "TRANSIENT_UNAVAILABLE",
+          "http_status": null
+        }
+      ]
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-3.1-flash-lite",
+      "content_id": "-1003788989075_295",
+      "product_name": "Tênis Feminino Casual Camurça Detalhe Lateral Listra Dupla Moderno Break GiGiL",
+      "context": {
+        "productName": "Tênis Feminino Casual Camurça Detalhe Lateral Listra Dupla Moderno Break GiGiL"
+      },
+      "status": "FAILED",
+      "error_type": "CaptionGenerationError",
+      "error_category": null,
+      "error": "Nenhuma das 4 candidata(s) passou pela Policy: 1: a legenda precisa ter 1 ou 2 hashtags distintas; 2: a legenda precisa ter 1 ou 2 hashtags distintas; 3: texto principal contém termo sem suporte no contexto Vision; 4: a legenda precisa ter 1 ou 2 hashtags distintas",
+      "provider_requests": 2,
+      "feedback_rounds": [
+        [
+          "texto principal contém termo sem suporte no contexto Vision",
+          "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "Use hashtags únicas e relacionadas ao contexto persistido do produto."
+        ]
+      ],
+      "provider_attempts": [
+        {
+          "attempt": 1,
+          "status": "SUCCESS",
+          "http_status": 200
+        }
+      ]
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-3.1-flash-lite",
+      "content_id": "-1003788989075_296",
+      "product_name": "Amend Essencial Acidificante Máscara Equilíbrio do PH - 250g",
+      "context": {
+        "productName": "Amend Essencial Acidificante Máscara Equilíbrio do PH - 250g"
+      },
+      "status": "SUCCESS",
+      "item_id_in_clone": "provider-validation_evidence-gemini-296",
+      "suggestions": [
+        {
+          "raw": "Equilíbrio do PH #acidificante",
+          "normalized": "Equilíbrio do 🧡 PH\n#acidificante",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": true,
+          "rejection_reason": null,
+          "score": 0.25,
+          "selected": true
+        },
+        {
+          "raw": "Fios selados #cabelosaudavel",
+          "normalized": "Fios 🧡 selados",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Tratamento essencial #pHbalanceado",
+          "normalized": "Tratamento 🧡 essencial",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "pH recuperado #amend",
+          "normalized": "pH 🧡 recuperado\n#amend",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        }
+      ],
+      "selected_caption": "Equilíbrio do 🧡 PH\n#acidificante",
+      "policy_valid": true,
+      "provider_requests": 1,
+      "feedback_rounds": [],
+      "provider_attempts": [
+        {
+          "policy_round": 1,
+          "attempt": 1,
+          "status": "SUCCESS",
+          "http_status": 200
+        }
+      ],
+      "persisted_and_valid_after_database_reopen": true,
+      "persisted_candidate_count": 4
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-3.1-flash-lite",
+      "content_id": "-1003788989075_297",
+      "product_name": "Chinelo feminino NO STRASS Verao 2026",
+      "context": {
+        "productName": "Chinelo feminino NO STRASS Verao 2026"
+      },
+      "status": "SUCCESS",
+      "item_id_in_clone": "provider-validation_evidence-gemini-297",
+      "suggestions": [
+        {
+          "raw": "Conforto casual #verao2026",
+          "normalized": "Conforto 🧡 casual",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Chinelo leve #estilolivre",
+          "normalized": "Chinelo 🧡 leve",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Passeio descomplicado #lifestyle",
+          "normalized": "Passeio 🧡 descomplicado",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Chinelo delicado #verao",
+          "normalized": "Chinelo 🧡 delicado\n#verao",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": true,
+          "rejection_reason": null,
+          "score": 0.0,
+          "selected": true
+        }
+      ],
+      "selected_caption": "Chinelo 🧡 delicado\n#verao",
+      "policy_valid": true,
+      "provider_requests": 1,
+      "feedback_rounds": [],
+      "provider_attempts": [
+        {
+          "policy_round": 1,
+          "attempt": 1,
+          "status": "SUCCESS",
+          "http_status": 200
+        }
+      ],
+      "persisted_and_valid_after_database_reopen": true,
+      "persisted_candidate_count": 4
+    }
+  ]
+}

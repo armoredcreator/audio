@@ -28,6 +28,7 @@ class _Response:
 def test_ollama_provider_returns_structured_caption_candidates(monkeypatch):
     monkeypatch.setenv("ARMORED_IA_OLLAMA_URL", "http://localhost:11434/")
     monkeypatch.setenv("ARMORED_IA_OLLAMA_MODEL", "qwen2.5:1.5b")
+    monkeypatch.delenv("ARMORED_IA_OLLAMA_TEMPERATURE", raising=False)
     calls = []
 
     def requester(url, **kwargs):
@@ -43,6 +44,7 @@ def test_ollama_provider_returns_structured_caption_candidates(monkeypatch):
     assert calls[0][0] == "http://localhost:11434/api/generate"
     assert calls[0][1]["json"]["model"] == "qwen2.5:1.5b"
     assert calls[0][1]["json"]["stream"] is False
+    assert calls[0][1]["json"]["options"]["temperature"] == 0.2
     assert calls[0][1]["json"]["format"]["properties"]["captions"]["minItems"] == 2
     assert calls[0][1]["json"]["format"]["properties"]["captions"]["maxItems"] == 2
 
@@ -61,6 +63,9 @@ def test_ollama_provider_rejects_malformed_response():
 def test_caption_generator_provider_is_configurable(monkeypatch):
     from ArmoredIA.caption.generator import CaptionGenerator
 
+    monkeypatch.delenv("ARMORED_IA_PROVIDER", raising=False)
+    assert isinstance(CaptionGenerator().provider, OllamaProvider)
+
     monkeypatch.setenv("ARMORED_IA_PROVIDER", "gemini")
     assert isinstance(CaptionGenerator().provider, GeminiProvider)
 
@@ -70,6 +75,103 @@ def test_caption_generator_provider_is_configurable(monkeypatch):
     monkeypatch.setenv("ARMORED_IA_PROVIDER", "unknown")
     with pytest.raises(AIProviderError, match="ARMORED_IA_PROVIDER inválido"):
         CaptionGenerator()
+
+
+def test_ollama_generator_defaults_to_one_grounded_candidate(monkeypatch):
+    from ArmoredIA.caption.generator import CaptionGenerator
+
+    monkeypatch.setenv("ARMORED_IA_PROVIDER", "ollama")
+    monkeypatch.setenv("ARMORED_IA_MAX_CANDIDATES", "10")
+    monkeypatch.delenv("ARMORED_IA_OLLAMA_MAX_CANDIDATES", raising=False)
+    calls = []
+    response_body = json.dumps({"captions": [
+        {"text": "Chinelo casual", "hashtags": ["#chinelo"]}
+    ]})
+
+    def requester(_url, *, json, timeout):
+        calls.append(json)
+        return _Response({"response": response_body})
+
+    generator = CaptionGenerator(provider=OllamaProvider(requester=requester))
+    result = generator.generate_with_evidence({
+        "productName": "Chinelo feminino com detalhe em strass",
+        "category": "calçados",
+        "usage": "uso casual",
+    })
+    assert result.caption == "Chinelo 🧡 casual\n#chinelo"
+    captions_schema = calls[0]["format"]["properties"]["captions"]
+    assert captions_schema["minItems"] == 1
+    assert "Gere EXATAMENTE 1 opções distintas" in calls[0]["prompt"]
+    text_pattern = captions_schema["items"]["properties"]["text"]["pattern"]
+    hashtag_pattern = captions_schema["items"]["properties"]["hashtags"]["items"]["pattern"]
+    import re
+    assert re.fullmatch(text_pattern, "Chinelo charmoso.")
+    assert not re.fullmatch(text_pattern, "Chinelo charmoso para o dia a dia.")
+    assert re.fullmatch(hashtag_pattern, "#chinelo")
+    assert not re.fullmatch(hashtag_pattern, "#viral")
+
+
+def test_ollama_format_retry_is_bounded_and_explains_the_repair(monkeypatch):
+    from ArmoredIA.caption.generator import CaptionGenerator
+
+    monkeypatch.setenv("ARMORED_IA_OLLAMA_FORMAT_RETRIES", "1")
+    monkeypatch.setenv("ARMORED_IA_OLLAMA_MAX_ATTEMPTS", "1")
+    calls = []
+    responses = iter([
+        _Response({"response": "not-json"}),
+        _Response({"response": json.dumps({"captions": [
+            {"text": "Sala bonita", "hashtags": ["#sala"]}
+        ]})}),
+    ])
+
+    def requester(_url, *, json, timeout):
+        calls.append(json)
+        return next(responses)
+
+    generator = CaptionGenerator(provider=OllamaProvider(requester=requester))
+    result = generator.generate_with_evidence({"productName": "Produto para casa", "description": "sala"})
+    assert result.caption == "Sala 🧡 bonita\n#sala"
+    assert len(calls) == 2
+    assert "CORREÇÃO DE FORMATO" in calls[1]["prompt"]
+
+
+def test_ollama_policy_feedback_excludes_rejected_title_phrase_on_retry(monkeypatch):
+    from ArmoredIA.caption.generator import CaptionGenerator
+
+    monkeypatch.setenv("ARMORED_IA_POLICY_RETRIES", "1")
+    monkeypatch.setenv("ARMORED_IA_OLLAMA_MAX_CANDIDATES", "1")
+    calls = []
+    bodies = iter([
+        {"response": json.dumps({"captions": [
+            {"text": "Alça fina", "hashtags": ["#alca"]}
+        ]})},
+        {"response": json.dumps({"captions": [
+            {"text": "Menina bonita", "hashtags": ["#menina"]}
+        ]})},
+    ])
+
+    def requester(_url, *, json, timeout):
+        calls.append(json)
+        return _Response(next(bodies))
+
+    generator = CaptionGenerator(provider=OllamaProvider(requester=requester))
+    result = generator.generate_with_evidence({
+        "productName": "Blusinha regata alça fina infantil menina algodão Malwee Kids",
+        "category": "infantil",
+    })
+    assert result.caption == "Menina 🧡 bonita\n#menina"
+    assert len(calls) == 2
+    assert "alca, fina" in calls[1]["prompt"] or "fina, alca" in calls[1]["prompt"]
+    text_pattern = calls[1]["format"]["properties"]["captions"]["items"]["properties"]["text"]["pattern"]
+    assert "alca" not in text_pattern.casefold()
+    assert "fina" not in text_pattern.casefold()
+
+
+def test_structured_model_fields_keep_hashtags_without_inventing_content():
+    result = OllamaProvider._extract_candidates({"response": json.dumps({"captions": [
+        {"text": "Cantinho sereno", "hashtags": ["#decor", "#casa"]}
+    ]})}, 1)
+    assert result == ["Cantinho sereno\n#decor #casa"]
 
 
 
@@ -130,7 +232,7 @@ def test_ollama_provider_passes_corrupted_unicode_to_shared_policy(monkeypatch):
 
 
 
-def test_ollama_default_model_preserves_existing_qwen3_8b(monkeypatch):
+def test_ollama_default_model_uses_validated_local_qwen(monkeypatch):
     monkeypatch.delenv("ARMORED_IA_OLLAMA_MODEL", raising=False)
     monkeypatch.setenv("ARMORED_IA_MAX_ATTEMPTS", "1")
     calls = []
@@ -142,4 +244,17 @@ def test_ollama_default_model_preserves_existing_qwen3_8b(monkeypatch):
         })})
 
     OllamaProvider(requester=requester).generate_candidates("caption", {}, 1)
-    assert calls == ["qwen3:8b"]
+    assert calls == ["qwen3:4b"]
+
+
+def test_ollama_forwards_explicit_thinking_mode(monkeypatch):
+    monkeypatch.setenv("ARMORED_IA_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("ARMORED_IA_OLLAMA_THINK", "false")
+    calls = []
+
+    def requester(_url, **kwargs):
+        calls.append(kwargs["json"])
+        return _Response({"response": json.dumps({"captions": ["Mesa organizada #casa"]})})
+
+    OllamaProvider(requester=requester).generate_candidates("caption", {}, 1)
+    assert calls[0]["think"] is False

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import logging
-import hashlib
 from collections import Counter
 from typing import Any
 
 from armored_core.models import State
 from armored_core.services import IngestMessage
+from armored_core.integrity import sha256_file
 
 log = logging.getLogger(__name__)
 
@@ -42,11 +42,7 @@ class ArmoredStock:
 
     @staticmethod
     def _sha256(path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
+        return sha256_file(path)
 
     async def materialize_item(
         self,
@@ -63,6 +59,11 @@ class ArmoredStock:
         """
         coordinator = self.coordinator
         source = coordinator.source
+        quarantine = getattr(coordinator, "publication_quarantine", None)
+        if quarantine is not None and quarantine.contains(str(item.content_id)):
+            raise RuntimeError(
+                f"ArmoredStock blocked by publication quarantine: {item.content_id}"
+            )
         if item.state != State.RECEIVED or not str(item.affiliate_url or "").strip():
             raise RuntimeError(
                 f"ArmoredStock recusou item sem aprovação Vision: "
@@ -117,7 +118,17 @@ class ArmoredStock:
             coordinator.db.repair_original_path(item.content_id, canonical_original)
             item = coordinator.db.get(item.content_id)
 
-        if item.original_path.is_file():
+        if item.original_path.exists():
+            if not item.original_path.is_file() or item.original_path.stat().st_size <= 0:
+                raise RuntimeError(f"existing-original-is-not-a-nonempty-file:{item.content_id}")
+            actual_digest = self._sha256(item.original_path)
+            expected_digest = str(getattr(item, "original_sha256", "") or "").strip().lower()
+            if expected_digest and actual_digest.lower() != expected_digest:
+                raise RuntimeError(f"original-immutable-hash-mismatch:{item.content_id}")
+            if not expected_digest:
+                finalize = getattr(coordinator.db, "finalize_original_path", None)
+                if callable(finalize):
+                    finalize(item.content_id, item.original_path, actual_digest)
             return "existing"
 
         source_materializer = getattr(source, "materialize_candidate_async", None) if source is not None else None
@@ -180,7 +191,9 @@ class ArmoredStock:
             log.error("[ARMOREDSTOCK] Falha item=%s: %s", item.content_id, exc)
             raise
 
-    async def run(self) -> dict[str, Any]:
+    async def run(
+        self, *, content_ids: tuple[str, ...] | list[str] | None = None
+    ) -> dict[str, Any]:
         """Compatibility entry point: materialize eligible originals sequentially."""
         coordinator = self.coordinator
         source = coordinator.source
@@ -191,9 +204,24 @@ class ArmoredStock:
                 "ArmoredStock exige exatamente três fontes configuradas em credentials/project.env"
             )
 
-        pending_vision = coordinator.db.pending_vision_candidates()
-        interrupted_approved = coordinator.db.vision_approved_interrupted_items()
-        invalid_recovery = coordinator.db.pre_download_recovery_items()
+        allowed = None if content_ids is None else {str(value) for value in content_ids}
+        quarantine = getattr(coordinator, "publication_quarantine", None)
+        is_quarantined = quarantine.contains if quarantine is not None else lambda _item_id: False
+        pending_vision = [
+            item for item in coordinator.db.pending_vision_candidates()
+            if allowed is None or str(item.content_id) in allowed
+            if not is_quarantined(str(getattr(item, "content_id", "")))
+        ]
+        interrupted_approved = [
+            item for item in coordinator.db.vision_approved_interrupted_items()
+            if allowed is None or str(item.content_id) in allowed
+            if not is_quarantined(str(getattr(item, "content_id", "")))
+        ]
+        invalid_recovery = [
+            item for item in coordinator.db.pre_download_recovery_items()
+            if allowed is None or str(item.content_id) in allowed
+            if not is_quarantined(str(getattr(item, "content_id", "")))
+        ]
         if pending_vision or interrupted_approved or invalid_recovery:
             raise RuntimeError(
                 "ArmoredStock bloqueado: Vision ainda tem candidatos sem decisão "
@@ -208,6 +236,9 @@ class ArmoredStock:
         downloaded = 0
         skipped_existing_original = 0
         candidates = self._ordered(coordinator.db.pending_vision_approved_items())
+        candidates = [item for item in candidates if not is_quarantined(str(item.content_id))]
+        if allowed is not None:
+            candidates = [item for item in candidates if str(item.content_id) in allowed]
 
         for item in candidates:
             if item.state != State.RECEIVED or not str(item.affiliate_url or "").strip():
@@ -235,7 +266,9 @@ class ArmoredStock:
         remaining = sum(
             1
             for candidate in coordinator.db.pending_vision_approved_items()
-            if candidate.state == State.RECEIVED
+            if (allowed is None or str(candidate.content_id) in allowed)
+            and not is_quarantined(str(candidate.content_id))
+            and candidate.state == State.RECEIVED
             and str(candidate.affiliate_url or "").strip()
             and not candidate.original_path.is_file()
         )

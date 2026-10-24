@@ -38,3 +38,13 @@ def test_studio_has_no_importable_rvc_entry_point():
 
     assert not hasattr(unified, "converter_voz")
     assert not hasattr(unified, "rvc")
+
+
+def test_shared_runtime_declares_exact_python_patch_before_installation():
+    repo_root = Path(__file__).resolve().parents[2]
+    assert (repo_root / ".python-version").read_text().strip() == "3.11.9"
+    setup = (repo_root / "ArmoredSpeech" / "setup_runtime.ps1").read_text(encoding="utf-8")
+    assert "$LauncherVersion -ne '3.11.9'" in setup
+    assert "$Version -ne '3.11.9'" in setup
+    assert setup.index("$LauncherVersion -ne '3.11.9'") < setup.index("& py -3.11 -m venv")
+    assert setup.index("$Version -ne '3.11.9'") < setup.index("-m pip install")
