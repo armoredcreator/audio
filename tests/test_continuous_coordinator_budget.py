@@ -121,7 +121,7 @@ class _Vision:
         return VisionResult(
             f"Product {item.telegram_message_id}",
             f"https://affiliate.invalid/{item.telegram_message_id}",
-            ia_context={"productName": f"Product {item.telegram_message_id}"},
+            ia_context={"productName": f"Product {item.telegram_message_id}", "category": "casa"},
         )
 
 
@@ -131,7 +131,7 @@ class _IA:
 
         class Provider:
             def generate_candidates(self, _task, _context, _limit):
-                return ["Belo item 🧡 #casa"]
+                return ["Casa charmosa #casa"]
 
         return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
 
@@ -278,7 +278,7 @@ def test_continuous_start_drains_publishing_v5_before_live_without_rerender(tmp_
     )
     db.set_vision(
         item_id, "Known product", "https://affiliate.invalid/known",
-        ia_context={"productName": "Known product"},
+        ia_context={"productName": "Known product", "category": "casa"},
     )
     item = db.get(item_id)
     output = storage.result(

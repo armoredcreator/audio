@@ -31,8 +31,8 @@ def _approved(db: Database, storage: Storage, message_id: str, *, state=State.RE
         item_id,
         "Produto de exemplo",
         f"https://s.shopee.com.br/affiliate-{message_id}",
-        publication_caption="Detalhe 🧡 especial\n#casa",
-        ia_context={"shopId": "10", "itemId": message_id, "productName": "Produto de exemplo"},
+        publication_caption="Casa 🧡 charmosa\n#casa",
+        ia_context={"shopId": "10", "itemId": message_id, "productName": "Produto de exemplo", "category": "casa"},
     )
     if state != State.RECEIVED:
         db.transition(item_id, state, "fixture-prior-interruption")

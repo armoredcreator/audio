@@ -18,7 +18,7 @@ def fixture(tmp_path, ia=None):
     source = tmp_path / "source.mp4"
     source.write_bytes(b"original")
     item_id = SyncService(db, storage).ingest(source, "100", source_id="source-test")
-    db.set_vision(item_id, "Product", "https://affiliate.invalid/product", ia_context={"productName": "Product", "shopId": "10", "itemId": "20"})
+    db.set_vision(item_id, "Product", "https://affiliate.invalid/product", ia_context={"productName": "Product", "category": "casa", "shopId": "10", "itemId": "20"})
     coordinator = Coordinator(db, storage, ForbiddenExternal(), ForbiddenExternal(), ForbiddenExternal(), ia=ia)
     return coordinator, db, item_id
 
@@ -28,11 +28,11 @@ def test_inflight_ia_recovery_does_not_skip_caption_before_speech(tmp_path, monk
     class IA:
         def generate_caption(self, context):
             events.append("ia")
-            return "Detalhe especial 🧡 #casa"
+            return "Casa charmosa 🧡 #casa"
     coordinator, db, item_id = fixture(tmp_path, IA())
     db.transition(item_id, State.IA, "interrupted-after-entering-ia")
     def speech(ids):
-        assert db.get(item_id).publication_caption == "Detalhe especial 🧡 #casa"
+        assert db.get(item_id).publication_caption == "Casa 🧡 charmosa\n#casa"
         assert db.get(item_id).state is State.SPEECH
         events.append("speech")
     monkeypatch.setattr(coordinator, "_run_speech_studio_batch", speech)

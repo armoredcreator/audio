@@ -20,7 +20,7 @@ class IACapturesContext:
 
     def generate_caption(self, context):
         self.contexts.append(context)
-        return "Ajuste confortável 🧡 diário\n#conforto"
+        return "Tênis casual #tenis"
 
 
 def test_legacy_approved_item_recovers_minimal_ia_context_without_vision(tmp_path, monkeypatch):
@@ -48,7 +48,7 @@ def test_legacy_approved_item_recovers_minimal_ia_context_without_vision(tmp_pat
         assert current.state is State.SPEECH
         assert current.ia_context == {"productName": "Tênis Feminino Casual Camurça Detalhe Lateral"}
         assert ia.contexts == [current.ia_context]
-        assert current.publication_caption == "Ajuste confortável 🧡 diário\n#conforto"
+        assert current.publication_caption == "Tênis 🧡 casual\n#tenis"
         assert original.read_bytes() == original_sha
         assert db.publication(item_id) is None
         trace = storage.logs / "pipeline_trace.jsonl"

@@ -238,6 +238,8 @@ class Database:
             batch_id TEXT NOT NULL,
             candidate_index INTEGER NOT NULL,
             caption TEXT NOT NULL,
+            raw_caption TEXT NOT NULL DEFAULT '',
+            normalization_corrections_json TEXT NOT NULL DEFAULT '[]',
             policy_valid INTEGER NOT NULL,
             rejection_reason TEXT,
             score REAL NOT NULL DEFAULT 0,
@@ -252,6 +254,10 @@ class Database:
             model TEXT,
             status TEXT NOT NULL,
             error_type TEXT,
+            provider_requests INTEGER NOT NULL DEFAULT 1,
+            policy_retries INTEGER NOT NULL DEFAULT 0,
+            feedback_json TEXT NOT NULL DEFAULT '[]',
+            provider_attempts_json TEXT NOT NULL DEFAULT '[]',
             started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             finished_at TEXT
         );
@@ -261,7 +267,21 @@ class Database:
             status TEXT NOT NULL CHECK(status IN ('STARTED','SUCCEEDED','BLOCKED')),
             reason TEXT,
             previous_caption TEXT,
+            manual_retry_authorized INTEGER NOT NULL DEFAULT 0,
+            automatic_retry_authorized INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS caption_recovery_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content_id TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL DEFAULT 0,
+            event_type TEXT NOT NULL,
+            actor TEXT,
+            provider TEXT,
+            model TEXT,
+            reason TEXT,
+            evidence_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_caption_candidates_content
             ON caption_candidates(content_id, created_at);
@@ -307,6 +327,20 @@ class Database:
                 ("destination_chat_id", "ALTER TABLE publications ADD COLUMN destination_chat_id TEXT"),
                 ("destination_topic_id", "ALTER TABLE publications ADD COLUMN destination_topic_id INTEGER"),
                 ("verified_at", "ALTER TABLE publications ADD COLUMN verified_at TEXT"),
+            ],
+            "caption_candidates": [
+                ("raw_caption", "ALTER TABLE caption_candidates ADD COLUMN raw_caption TEXT NOT NULL DEFAULT ''"),
+                ("normalization_corrections_json", "ALTER TABLE caption_candidates ADD COLUMN normalization_corrections_json TEXT NOT NULL DEFAULT '[]'"),
+            ],
+            "ia_generation_attempts": [
+                ("provider_requests", "ALTER TABLE ia_generation_attempts ADD COLUMN provider_requests INTEGER NOT NULL DEFAULT 1"),
+                ("policy_retries", "ALTER TABLE ia_generation_attempts ADD COLUMN policy_retries INTEGER NOT NULL DEFAULT 0"),
+                ("feedback_json", "ALTER TABLE ia_generation_attempts ADD COLUMN feedback_json TEXT NOT NULL DEFAULT '[]'"),
+                ("provider_attempts_json", "ALTER TABLE ia_generation_attempts ADD COLUMN provider_attempts_json TEXT NOT NULL DEFAULT '[]'"),
+            ],
+            "caption_recovery": [
+                ("manual_retry_authorized", "ALTER TABLE caption_recovery ADD COLUMN manual_retry_authorized INTEGER NOT NULL DEFAULT 0"),
+                ("automatic_retry_authorized", "ALTER TABLE caption_recovery ADD COLUMN automatic_retry_authorized INTEGER NOT NULL DEFAULT 0"),
             ],
         }
         for table, columns in migrations.items():
@@ -1399,6 +1433,28 @@ class Database:
         )
         self.conn.commit()
 
+    def record_ia_generation_evidence(
+        self,
+        attempt_id: int,
+        *,
+        provider_requests: int,
+        policy_retries: int,
+        feedback: list[list[str]] | tuple[tuple[str, ...], ...] = (),
+        provider_attempts: list[dict] | tuple[dict, ...] = (),
+    ) -> None:
+        self.conn.execute(
+            "UPDATE ia_generation_attempts SET provider_requests=?,policy_retries=?,"
+            "feedback_json=?,provider_attempts_json=? WHERE attempt_id=?",
+            (
+                max(0, int(provider_requests)),
+                max(0, int(policy_retries)),
+                json.dumps(feedback, ensure_ascii=False, default=str),
+                json.dumps(provider_attempts, ensure_ascii=False, default=str),
+                int(attempt_id),
+            ),
+        )
+        self.conn.commit()
+
     @contextmanager
     def ia_generation_attempt(self, item_id: str, *, provider: str, model: str | None):
         """Record configured identity before I/O; interrupted runs stay STARTED."""
@@ -1435,14 +1491,19 @@ class Database:
         """Persist every caption candidate and its local Policy/ranking decision."""
         self.conn.executemany(
             "INSERT OR REPLACE INTO caption_candidates "
-            "(content_id,batch_id,candidate_index,caption,policy_valid,rejection_reason,score,selected) "
-            "VALUES (?,?,?,?,?,?,?,?)",
+            "(content_id,batch_id,candidate_index,caption,raw_caption,normalization_corrections_json,"
+            "policy_valid,rejection_reason,score,selected) VALUES (?,?,?,?,?,?,?,?,?,?)",
             [
                 (
                     str(item_id),
                     str(batch_id),
                     int(evaluation.index),
                     str(evaluation.caption),
+                    str(getattr(evaluation, "raw_caption", "") or ""),
+                    json.dumps(
+                        list(getattr(evaluation, "normalization_corrections", ()) or ()),
+                        ensure_ascii=False,
+                    ),
                     1 if evaluation.policy_valid else 0,
                     evaluation.rejection_reason,
                     float(evaluation.score),
@@ -1468,10 +1529,85 @@ class Database:
 
     def caption_recovery_blocked(self, item_id: str) -> bool:
         row = self.conn.execute(
-            "SELECT 1 FROM caption_recovery WHERE content_id=? AND status='BLOCKED'",
+            "SELECT 1 FROM caption_recovery WHERE content_id=? AND status='BLOCKED' "
+            "AND manual_retry_authorized=0 AND automatic_retry_authorized=0",
             (str(item_id),),
         ).fetchone()
         return row is not None
+
+    def _caption_recovery_event(
+        self,
+        item_id: str,
+        *,
+        attempt_number: int = 0,
+        event_type: str,
+        actor: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        reason: str | None = None,
+        evidence: dict | None = None,
+    ) -> None:
+        self.conn.execute(
+            "INSERT INTO caption_recovery_events "
+            "(content_id,attempt_number,event_type,actor,provider,model,reason,evidence_json) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (
+                str(item_id), int(attempt_number), str(event_type), actor, provider, model,
+                reason, json.dumps(evidence or {}, ensure_ascii=False, default=str),
+            ),
+        )
+
+    def reopen_caption_recovery(
+        self,
+        item_id: str,
+        *,
+        actor: str,
+        reason: str,
+        evidence: dict | None = None,
+    ) -> None:
+        """Explicitly authorize one new caption recovery attempt without erasing history."""
+        actor, reason = str(actor or "").strip(), str(reason or "").strip()
+        if not actor or not reason:
+            raise ValueError("caption-recovery-reopen-requires-actor-and-reason")
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = self.conn.execute(
+                "SELECT attempts,status,manual_retry_authorized,automatic_retry_authorized FROM caption_recovery "
+                "WHERE content_id=?",
+                (str(item_id),),
+            ).fetchone()
+            if row is None or str(row["status"]) != "BLOCKED":
+                raise RuntimeError("caption-recovery-can-only-reopen-blocked-items")
+            if int(row["manual_retry_authorized"] or 0) or int(row["automatic_retry_authorized"] or 0):
+                raise RuntimeError("caption-recovery-retry-already-authorized")
+            publication = self.conn.execute(
+                "SELECT verification_status,confirmed,published_message_id FROM publications "
+                "WHERE content_id=?",
+                (str(item_id),),
+            ).fetchone()
+            if publication is not None and (
+                str(publication["verification_status"] or "").upper() != "ABSENT_CONFIRMED"
+                or bool(publication["confirmed"])
+                or bool(str(publication["published_message_id"] or "").strip())
+            ):
+                raise RuntimeError("caption-recovery-reopen-blocked-by-publication-receipt")
+            self.conn.execute(
+                "UPDATE caption_recovery SET manual_retry_authorized=1,automatic_retry_authorized=0,updated_at=CURRENT_TIMESTAMP "
+                "WHERE content_id=?",
+                (str(item_id),),
+            )
+            self._caption_recovery_event(
+                item_id,
+                attempt_number=int(row["attempts"] or 0) + 1,
+                event_type="MANUAL_REOPENED",
+                actor=actor,
+                reason=reason,
+                evidence=evidence,
+            )
+            self.conn.commit()
+        except BaseException:
+            self.conn.rollback()
+            raise
 
     def claim_caption_recovery(self, item_id: str, *, previous_caption: str | None = None) -> str:
         """Claim the single durable IA recovery call for a missing/invalid caption."""
@@ -1479,18 +1615,45 @@ class Database:
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             row = self.conn.execute(
-                "SELECT attempts,status FROM caption_recovery WHERE content_id=?",
+                "SELECT attempts,status,manual_retry_authorized,automatic_retry_authorized FROM caption_recovery WHERE content_id=?",
                 (content_id,),
             ).fetchone()
             if row is not None:
                 status = str(row["status"])
-                if status in {"SUCCEEDED", "BLOCKED"}:
+                if status == "SUCCEEDED":
                     self.conn.commit()
                     return status
+                manual = bool(int(row["manual_retry_authorized"] or 0))
+                automatic = bool(int(row["automatic_retry_authorized"] or 0))
+                if status == "BLOCKED" and not (manual or automatic):
+                    self.conn.commit()
+                    return "BLOCKED"
+                if status == "BLOCKED":
+                    next_attempt = int(row["attempts"] or 0) + 1
+                    self.conn.execute(
+                        "UPDATE caption_recovery SET attempts=?,status='STARTED',reason=NULL,"
+                        "manual_retry_authorized=0,automatic_retry_authorized=0,updated_at=CURRENT_TIMESTAMP WHERE content_id=?",
+                        (next_attempt, content_id),
+                    )
+                    self._caption_recovery_event(
+                        content_id,
+                        attempt_number=next_attempt,
+                        event_type="RETRY_CLAIMED" if manual else "AUTOMATIC_RETRY_CLAIMED",
+                        actor="explicit-operator-authorization" if manual else "bounded-transient-provider-retry",
+                    )
+                    self.conn.commit()
+                    return "STARTED"
+                next_attempt = int(row["attempts"] or 0)
                 self.conn.execute(
                     "UPDATE caption_recovery SET status='BLOCKED',reason=?,updated_at=CURRENT_TIMESTAMP "
                     "WHERE content_id=?",
                     ("caption-recovery-interrupted; operator-review-required", content_id),
+                )
+                self._caption_recovery_event(
+                    content_id,
+                    attempt_number=next_attempt,
+                    event_type="BLOCKED",
+                    reason="caption-recovery-interrupted; operator-review-required",
                 )
                 self.conn.commit()
                 return "BLOCKED"
@@ -1499,22 +1662,86 @@ class Database:
                 "VALUES(?,1,'STARTED',NULL,?)",
                 (content_id, previous_caption),
             )
+            self._caption_recovery_event(
+                content_id,
+                attempt_number=1,
+                event_type="CLAIMED",
+                reason="caption-recovery-started",
+            )
             self.conn.commit()
             return "STARTED"
         except BaseException:
             self.conn.rollback()
             raise
 
-    def finish_caption_recovery(self, item_id: str, *, status: str, reason: str | None = None) -> None:
+    def finish_caption_recovery(
+        self,
+        item_id: str,
+        *,
+        status: str,
+        reason: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        evidence: dict | None = None,
+        automatic_retry_authorized: bool = False,
+    ) -> None:
         if status not in {"SUCCEEDED", "BLOCKED"}:
             raise ValueError("invalid-caption-recovery-terminal-status")
-        self.conn.execute(
-            "INSERT INTO caption_recovery(content_id,attempts,status,reason) VALUES(?,0,?,?) "
-            "ON CONFLICT(content_id) DO UPDATE SET status=excluded.status,reason=excluded.reason,"
-            "updated_at=CURRENT_TIMESTAMP",
-            (str(item_id), status, reason),
-        )
-        self.conn.commit()
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            self.conn.execute(
+                "INSERT INTO caption_recovery(content_id,attempts,status,reason,automatic_retry_authorized) "
+                "VALUES(?,0,?,?,?) "
+                "ON CONFLICT(content_id) DO UPDATE SET status=excluded.status,reason=excluded.reason,"
+                "manual_retry_authorized=0,automatic_retry_authorized=?,updated_at=CURRENT_TIMESTAMP",
+                (
+                    str(item_id), status, reason,
+                    int(bool(automatic_retry_authorized)),
+                    int(bool(automatic_retry_authorized)),
+                ),
+            )
+            row = self.conn.execute(
+                "SELECT attempts FROM caption_recovery WHERE content_id=?", (str(item_id),)
+            ).fetchone()
+            if automatic_retry_authorized:
+                self._caption_recovery_event(
+                    item_id,
+                    attempt_number=int(row["attempts"] or 0) + 1 if row else 1,
+                    event_type="AUTOMATIC_RETRY_AUTHORIZED",
+                    actor="bounded-transient-provider-retry",
+                    provider=provider,
+                    model=model,
+                    reason=reason,
+                    evidence=evidence,
+                )
+            self._caption_recovery_event(
+                item_id,
+                attempt_number=int(row["attempts"] or 0) if row else 0,
+                event_type=status,
+                provider=provider,
+                model=model,
+                reason=reason,
+                evidence=evidence,
+            )
+            self.conn.commit()
+        except BaseException:
+            self.conn.rollback()
+            raise
+
+    def caption_recovery_events(self, item_id: str):
+        return self.conn.execute(
+            "SELECT * FROM caption_recovery_events WHERE content_id=? ORDER BY event_id",
+            (str(item_id),),
+        ).fetchall()
+
+    def automatic_caption_retry_claim_count(self, item_id: str) -> int:
+        """Count consumed automatic retries from the append-only recovery ledger."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM caption_recovery_events "
+            "WHERE content_id=? AND event_type='AUTOMATIC_RETRY_CLAIMED'",
+            (str(item_id),),
+        ).fetchone()
+        return int(row[0] or 0)
 
     def caption_candidates(self, item_id: str, batch_id: str | None = None):
         if batch_id is None:

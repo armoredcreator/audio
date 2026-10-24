@@ -10,7 +10,7 @@ from armored_core.storage import Storage
 
 class Vision:
     def identify(self, item):
-        return VisionResult("produto-final", "https://example.invalid/a")
+        return VisionResult("produto-final", "https://example.invalid/a", ia_context={"productName": "produto-final", "category": "casa"})
 
 class Studio:
     def __init__(self, storage):
@@ -43,7 +43,7 @@ class CaptionIA:
 
         class Provider:
             def generate_candidates(self, _task, _context, _limit):
-                return ["Cantinho charmoso 🧡 #casa"]
+                return ["Casa charmosa 🧡 #casa"]
 
         return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
 
@@ -111,7 +111,7 @@ class PipelineTests(unittest.TestCase):
 
                 class Provider:
                     def generate_candidates(self, _task, _context, _limit):
-                        return ["Olha esse charme 🧡\n#casa"]
+                        return ["Casa charmosa 🧡\n#casa"]
 
                 return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
 
@@ -130,7 +130,7 @@ class PipelineTests(unittest.TestCase):
                 return VisionResult(
                     "produto-final",
                     "https://example.invalid/a",
-                    ia_context={"productName": "produto-final"},
+                    ia_context={"productName": "produto-final", "category": "casa"},
                 )
 
         try:
@@ -145,7 +145,7 @@ class PipelineTests(unittest.TestCase):
             p.run(self.item)
             row = self.db.get(self.item)
             self.assertEqual(row.state, State.PUBLISHED)
-            self.assertEqual(row.publication_caption, "Olha esse 🧡 charme\n#casa")
+            self.assertEqual(row.publication_caption, "Casa 🧡 charmosa\n#casa")
             self.assertEqual(ia.calls, 1)
         finally:
             if old_enabled is None:

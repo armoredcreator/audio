@@ -21,15 +21,49 @@ falha.
   `ia_generation_attempts` e `caption_recovery`. A legenda é persistida antes
   de qualquer chamada ao Hub.
 - Provedores IA mantêm suas retentativas limitadas e backoff configurados. Se a
-  geração ou a Policy falhar, o item fica `PUBLISHING` com recuperação `BLOCKED`;
-  o Coordinator e Recovery o deixam fora de novas tentativas automáticas.
-  Revisão e desbloqueio são explícitos.
+  geração ou a Policy falhar, o item fica com recuperação `BLOCKED`. Conteúdo,
+  contexto insuficiente, autenticação e falhas permanentes não repetem
+  automaticamente. Falhas transitórias de transporte podem receber uma
+  retomada durável, limitada por `ARMORED_IA_AUTO_TRANSIENT_RETRIES` (0–2;
+  padrão 1), somente sem recibo externo incerto. A autorização e seu consumo
+  ficam no ledger. Falhas permanentes exigem revisão explícita.
 - Recibos `SENT_UNVERIFIED`, `UNKNOWN` e outros sem ausência comprovada são
   preservados e colocados em quarentena; não alteramos conteúdo nem tentamos
   novo envio. Uma ausência verificada é registrada como `ABSENT_CONFIRMED`, sem
   apagar o recibo anterior.
 - Hub em dry-run valida legenda, link, integridade e destino e mantém o item em
   `PUBLISHING`, sem inserir recibo de envio.
+
+## Ajuste da Policy e evidência recente
+
+A geração agora segue criação IA, normalização apenas de forma, validação
+estrita da Policy compartilhada, seleção e persistência. O normalizador pode
+centralizar/inserir 🧡, remover emojis excedentes, normalizar espaços e deduplicar
+ou remover hashtags sem suporte; ele não cria palavras, características ou
+hashtags. Uma nova rodada da IA recebe os motivos específicos e as candidatas
+rejeitadas, com limite configurável de 0–2 rodadas. O Hub aplica a mesma Policy.
+
+As evidências históricas abaixo registram Gemini quando ele estava selecionado;
+isso não o torna requisito nem fallback. O padrão atual é Ollama local, e Gemini
+só é usado quando `ARMORED_IA_PROVIDER=gemini` for configurado explicitamente.
+Para o item 295, uma execução anterior com Gemini produziu
+`Visual moderno 🧡 casual\n#tenis`, aprovada pela Policy e persistida após
+reabrir o banco. Para o item 297, candidatas reais do Ollama foram normalizadas;
+`Estilo 🧡 verão\n#verão` foi validada e persistida na cópia. Para o item 296,
+duas rodadas reais do Gemini produziram opções, mas nenhuma passou: os motivos
+registrados foram termo técnico `pH`, atributos sem suporte no contexto Vision
+persistido e ausência de hashtag contextual válida. O item ficou `BLOCKED`,
+preservado; não foi inventada uma legenda. Confira as candidatas completas e
+evidências após reabertura em
+[`caption-provider-validation-20261023-v5.json`](evidence/caption-provider-validation-20261023-v5.json).
+
+Uma verificação adicional usou o provedor selecionado pela configuração padrão
+(`OllamaProvider`, `gemma3:1b`) através do `CaptionGenerator` real. Com contexto
+de calçado aprovado, a inferência local retornou
+`Chinelo 🧡 charmoso\n#Chinelo #detalhe`; a Policy aprovou em uma chamada do
+provedor. A evidência registra HTTP 200, uma requisição, nenhuma chamada Shopee
+ou Telegram e nenhuma escrita no banco operacional:
+[`ollama-caption-provider-real-20261023-v2.json`](evidence/ollama-caption-provider-real-20261023-v2.json).
 
 ## Evidência integrada do item 295
 
@@ -49,9 +83,10 @@ Evidência detalhada do clone: [`docs/evidence/item295-caption-recovery-20261023
 
 ## Regressão
 
-Suíte completa: **592 aprovados, 3 ignorados, 0 falhas**. Os fixtures de
-pipeline foram ajustados para produzir evidência pela mesma Policy compartilhada;
-nenhum teste foi removido ou ignorado para obter esse resultado.
+Regressão completa desta atualização: **617 aprovados, 3 ignorados, 0 falhas**.
+Os fixtures incompatíveis foram atualizados para fornecer contexto Vision e
+legendas válidas pela mesma Policy compartilhada; nenhum teste foi removido ou
+ignorado para obter aprovação.
 
 ## Retomada operacional
 

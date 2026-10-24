@@ -74,7 +74,7 @@ class _Vision:
         if str(item.telegram_message_id) == "100":
             return VisionResult(
                 "New approved product", "https://affiliate.invalid/9-10",
-                ia_context={"productName": "New approved product", "shopId": "9", "itemId": "10"},
+                ia_context={"productName": "New approved product", "category": "casa", "shopId": "9", "itemId": "10"},
             )
         raise VisionUnresolvedError("no supported Shopee link")
 
@@ -87,7 +87,7 @@ class _IA:
         self.events.append("ia")
         class Provider:
             def generate_candidates(self, _task, _context, _limit):
-                return ["Belo produto 🧡 #casa"]
+                return ["Casa charmosa 🧡 #casa"]
 
         return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
 
@@ -168,7 +168,7 @@ def test_real_coordinator_limits_persisted_and_new_work_and_resumes_without_dupl
     )
     db.set_vision(
         old_id, "Approved product", "https://affiliate.invalid/7-8",
-        ia_context={"productName": "Approved product", "shopId": "7", "itemId": "8"},
+        ia_context={"productName": "Approved product", "category": "casa", "shopId": "7", "itemId": "8"},
     )
     db.close()
 
@@ -191,7 +191,7 @@ def test_real_coordinator_limits_persisted_and_new_work_and_resumes_without_dupl
     # One generated caption for the fresh item and one bounded repair for the
     # already-approved historical item whose caption was missing.
     assert events.count("ia") == 2
-    assert coordinator.db.get(old_id).publication_caption == "Belo 🧡 produto\n#casa"
+    assert coordinator.db.get(old_id).publication_caption == "Casa 🧡 charmosa\n#casa"
     assert all(f"{stage}:100" in events for stage in ("speech", "studio", "hub"))
     assert all(f"{stage}:1" in events for stage in ("speech", "studio", "hub"))
     assert len([event for event in events if event.startswith("speech:")]) == 2
@@ -247,7 +247,7 @@ def test_dry_run_holds_at_hub_without_receipt_and_resumes_same_render(tmp_path: 
     )
     db.set_vision(
         item_id, "Approved product", "https://affiliate.invalid/7-8",
-        ia_context={"productName": "Approved product", "shopId": "7", "itemId": "8"},
+        ia_context={"productName": "Approved product", "category": "casa", "shopId": "7", "itemId": "8"},
     )
     events = []
     source = _BoundedSource([], db=db)

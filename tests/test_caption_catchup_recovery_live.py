@@ -86,7 +86,7 @@ class VisionStage:
         return VisionResult(
             f"product-{item.item_id}",
             f"https://example.invalid/affiliate-{item.item_id}",
-            ia_context={"productName": f"Product {item.item_id}"},
+            ia_context={"productName": f"Product {item.item_id}", "category": "casa"},
         )
 
 
@@ -104,7 +104,7 @@ class FailingFirstIA:
 
         class Provider:
             def generate_candidates(self, _task, _context, _limit):
-                return [f"Olha esse charme 🧡\n#item{item_id}"]
+                return ["Casa charmosa 🧡\n#casa"]
 
         return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
 
@@ -118,7 +118,7 @@ class ValidCaptionIA:
 
         class Provider:
             def generate_candidates(self, _task, _context, _limit):
-                return ["Olha esse charme 🧡\n#casa"]
+                return ["Casa charmosa 🧡\n#casa"]
 
         return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
 
@@ -226,7 +226,7 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
                     return VisionResult(
                         f"product-{item.item_id}",
                         f"https://example.invalid/affiliate-{item.item_id}",
-                        ia_context={"productName": f"Product {item.item_id}"},
+                        ia_context={"productName": f"Product {item.item_id}", "category": "casa"},
                     )
 
             publisher = DeterministicPublisher()
@@ -268,7 +268,7 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
             finally:
                 coordinator.close()
 
-    def test_ia_failure_recovery_does_not_rerun_vision_and_reenters_live(self):
+    def test_permanent_caption_failure_is_blocked_and_holds_source_cursor(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             source_file = root / "input.mp4"
@@ -296,19 +296,14 @@ class CaptionBatchRecoveryCatchUpTests(unittest.TestCase):
 
                 item_100 = coordinator.db.get("100")
                 item_101 = coordinator.db.get("101")
-                self.assertEqual(item_100.state, State.PUBLISHED)
-                self.assertTrue(item_100.cleanup_completed)
+                self.assertEqual(item_100.state, State.RECOVERY)
+                self.assertEqual(ia.calls["100"], 1)
                 self.assertEqual(item_101.state, State.PUBLISHED)
-                self.assertTrue(item_101.cleanup_completed)
-                self.assertEqual(ia.calls["100"], 2)
                 self.assertEqual(ia.calls["101"], 1)
-                self.assertEqual(publisher.published, ["101", "100"])
-                self.assertEqual(source.reset_count, 1)
-                self.assertTrue(source.historical_complete)
-                self.assertEqual(source.commits, [{7: 100}, {7: 101}])
-
-                asyncio.run(coordinator._run_forever_async(max_cycles=1, poll_seconds=0))
-                self.assertTrue(source.live_called)
+                self.assertEqual(publisher.published, ["101"])
+                self.assertFalse(source.historical_complete)
+                self.assertEqual(source.commits, [])
+                self.assertFalse(source.live_called)
             finally:
                 coordinator.close()
 

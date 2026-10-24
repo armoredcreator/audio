@@ -33,7 +33,11 @@ def prepared(tmp_path, monkeypatch):
     original = tmp_path / "source.mp4"
     original.write_bytes(b"canonical original")
     item_id = SyncService(db, storage).ingest(original, "10", source_id="source-a")
-    db.set_vision(item_id, "Example", "https://affiliate.invalid/item", publication_caption="Replay 🧡 visual\n#casa")
+    db.set_vision(
+        item_id, "Luminária de mesa elegante", "https://affiliate.invalid/item",
+        publication_caption="Luminária 🧡 elegante\n#luminaria",
+        ia_context={"productName": "Luminária de mesa elegante", "category": "iluminacao"},
+    )
     canonical = db.get(item_id)
     render = canonical.workspace / "canonical-render.mp4"
     render.write_bytes(b"historical render")
@@ -69,7 +73,7 @@ def prepare_run(hub, item_id, replay):
         idempotency_key=f"armoredcreator:reexecution:{EXECUTION_ID}:v1:{item_id}",
         destination_chat_id=CHAT_ID,
         destination_topic_id=TOPIC_ID,
-        caption="Replay 🧡 visual\n#casa",
+        caption="Luminária 🧡 elegante\n#luminaria",
     )
 
 
@@ -156,7 +160,7 @@ def test_prepare_rejects_hash_conflict_and_noncanonical_item(prepared):
             idempotency_key=f"armoredcreator:reexecution:{EXECUTION_ID}:v1:{item_id}",
             destination_chat_id=CHAT_ID,
             destination_topic_id=TOPIC_ID,
-            caption="Replay 🧡 visual\n#casa",
+        caption="Luminária 🧡 elegante\n#luminaria",
         )
 
 

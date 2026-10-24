@@ -26,7 +26,11 @@ def prepared(tmp_path, monkeypatch):
     item_id = SyncService(db, storage).ingest(source, "101", source_id="synthetic-source")
     # Hub now requires an already-canonical ArmoredIA caption. Keep the
     # orange heart centered between the two main words.
-    db.set_vision(item_id, "Example", "https://affiliate.invalid/example", publication_caption="Detalhe 🧡 especial\n#casa")
+    db.set_vision(
+        item_id, "Example", "https://affiliate.invalid/example",
+        publication_caption="Casa 🧡 charmosa\n#casa",
+        ia_context={"productName": "Example", "category": "casa"},
+    )
     output = db.get(item_id).workspace / "result.mp4"
     output.write_bytes(b"synthetic render")
     db.set_result(item_id, output)

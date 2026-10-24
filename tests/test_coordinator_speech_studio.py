@@ -19,7 +19,7 @@ class _Vision:
         return VisionResult(
             "Produto de teste",
             "https://affiliate.invalid/approved",
-            ia_context={"productName": "Produto de teste", "shopId": "700", "itemId": "800"},
+            ia_context={"productName": "Produto de teste", "category": "casa", "shopId": "700", "itemId": "800"},
         )
 
 
@@ -33,7 +33,7 @@ class _IA:
 
         class Provider:
             def generate_candidates(self, _task, _context, _limit):
-                return ["Cantinho charmoso 🧡 #casa"]
+                return ["Casa charmosa 🧡 #casa"]
 
         return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
 
@@ -93,7 +93,7 @@ def _fixture(tmp_path: Path, events):
         item_id,
         "Produto de teste",
         "https://affiliate.invalid/approved",
-        ia_context={"productName": "Produto de teste", "shopId": "700", "itemId": "800"},
+        ia_context={"productName": "Produto de teste", "category": "casa", "shopId": "700", "itemId": "800"},
     )
     coordinator = Coordinator(
         db,
@@ -159,7 +159,7 @@ def test_coordinator_routes_normal_execution_through_speech_v5_before_studio_and
     current = db.get(item_id)
     assert current.state is State.PUBLISHED
     assert current.cleanup_completed is True
-    assert current.publication_caption == "Cantinho 🧡 charmoso\n#casa"
+    assert current.publication_caption == "Casa 🧡 charmosa\n#casa"
     assert events.index("ia") < events.index("speech-analyze") < events.index("speech-prepare")
     assert events.index("speech-prepare") < events.index("studio") < events.index("hub")
     assert db.last_state_event(item_id)["new_state"] == State.PUBLISHED.value
@@ -264,6 +264,7 @@ def test_catch_up_completes_ia_for_entire_batch_before_speech_studio_and_hub(
             f"https://affiliate.invalid/item-{100 + index}",
             ia_context={
                 "productName": f"Produto {index}",
+                "category": "casa",
                 "shopId": "700",
                 "itemId": str(800 + index),
             },
@@ -297,7 +298,7 @@ def test_catch_up_completes_ia_for_entire_batch_before_speech_studio_and_hub(
 
             class Provider:
                 def generate_candidates(self, _task, _context, _limit):
-                    return ["Cantinho charmoso 🧡 #casa"]
+                    return ["Casa charmosa 🧡 #casa"]
 
             return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
 

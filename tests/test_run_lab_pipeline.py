@@ -26,6 +26,7 @@ class FakeVision:
             affiliate_urls=("https://affiliate.invalid/product",),
             ia_context={
                 "productName": "Produto fixture",
+                "category": "casa",
                 "shopId": "700",
                 "itemId": "800",
             },
@@ -34,7 +35,7 @@ class FakeVision:
 
 class FakeIA:
     def generate_caption(self, _context):
-        return "Produto demonstrativo 🧡 #casa"
+        return "Casa charmosa 🧡 #casa"
 
 
 class FakeSpeechProcessor:
@@ -184,7 +185,7 @@ def test_approved_reexecution_skips_vision_and_is_idempotent_after_success(tmp_p
             "affiliate_name": "Fixture approved product",
             "affiliate_url": "https://affiliate.invalid/approved-12019",
             "affiliate_urls": ["https://affiliate.invalid/approved-12019"],
-            "ia_context": {"shopId": "120", "itemId": "190"},
+            "ia_context": {"productName": "Fixture approved product", "category": "casa", "shopId": "120", "itemId": "190"},
         },
     }
     manifest = _manifest(tmp_path, [row])
@@ -279,7 +280,7 @@ def test_approved_reexecution_resumes_only_an_ai_failure_without_repeating_sync_
             "affiliate_name": "Fixture approved product",
             "affiliate_url": "https://affiliate.invalid/approved-12019",
             "affiliate_urls": ["https://affiliate.invalid/approved-12019"],
-            "ia_context": {"shopId": "120", "itemId": "190"},
+            "ia_context": {"productName": "Fixture approved product", "category": "casa", "shopId": "120", "itemId": "190"},
         },
     }
     manifest = _manifest(tmp_path, [row])
@@ -299,7 +300,7 @@ def test_approved_reexecution_resumes_only_an_ai_failure_without_repeating_sync_
             self.calls += 1
             if self.calls == 1:
                 from ArmoredIA.providers.base import AIProviderError
-                raise AIProviderError("temporary local generation failure")
+                raise AIProviderError("temporary local generation failure", category="TRANSIENT_UNAVAILABLE")
             return super().generate_caption(context)
 
     class VisionMustNotRun:

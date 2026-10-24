@@ -118,7 +118,7 @@ class CandidateSource(TelegramSource):
 
 class Vision:
     def identify(self, item):
-        return VisionResult("affiliate", "https://example.invalid/affiliate")
+        return VisionResult("affiliate", "https://example.invalid/affiliate", ia_context={"productName": "affiliate", "category": "casa"})
 
 
 class FailOnceVision:
@@ -129,7 +129,7 @@ class FailOnceVision:
         if not self.failed:
             self.failed = True
             raise RuntimeError("simulated-live-crash")
-        return VisionResult("affiliate", "https://example.invalid/affiliate")
+        return VisionResult("affiliate", "https://example.invalid/affiliate", ia_context={"productName": "affiliate", "category": "casa"})
 
 
 class Studio:
@@ -149,7 +149,7 @@ def _caption_ia():
 
             class Provider:
                 def generate_candidates(self, _task, _context, _limit):
-                    return ["Cantinho charmoso 🧡 #casa"]
+                    return ["Casa charmosa 🧡 #casa"]
 
             return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
 
@@ -936,7 +936,7 @@ class SyncLifecycleTests(unittest.TestCase):
 
             class InterruptingVision:
                 def identify(self, item):
-                    return VisionResult("affiliate", "https://example.invalid/affiliate")
+                    return VisionResult("affiliate", "https://example.invalid/affiliate", ia_context={"productName": "affiliate", "category": "casa"})
 
             class InterruptingStudio:
                 def process(self, item):

@@ -20,7 +20,8 @@ class CompactionError(RuntimeError):
 
 
 _HISTORY_TABLES = {
-    "state_events", "caption_candidates", "reconciliation_changes",
+    "state_events", "caption_candidates", "caption_recovery_events",
+    "caption_recovery", "ia_generation_attempts", "reconciliation_changes",
     "reconciliation_runs", "reconciliation_meta", "reconciliation_archived_items",
     "reconciliation_compaction_runs",
 }
@@ -149,7 +150,8 @@ def inspect_compaction(database: Path, *, allow_existing_archive: bool = True) -
             else:
                 candidates.append(item_id)
         preserved_tables = [table for table in (
-            "publications", "state_events", "caption_candidates", "reconciliation_changes",
+            "publications", "state_events", "caption_candidates", "caption_recovery_events",
+            "caption_recovery", "ia_generation_attempts", "reconciliation_changes",
             "sync_state", "sync_topics", "sync_source_topics", "sync_sources",
         ) if table in tables]
         return {
@@ -234,7 +236,10 @@ def compact_duplicates(database: Path, copy_root: Path) -> dict[str, Any]:
     try:
         archived = check.execute("SELECT COUNT(*) FROM reconciliation_archived_items WHERE run_id=?", (run_id,)).fetchone()[0]
         unresolved = []
-        for table in ("state_events", "caption_candidates", "reconciliation_changes"):
+        for table in (
+            "state_events", "caption_candidates", "caption_recovery_events",
+            "caption_recovery", "ia_generation_attempts", "reconciliation_changes",
+        ):
             if table in _table_names(check) and "content_id" in _columns(check, table):
                 unresolved.append({"table": table, "count": check.execute(
                     f'''SELECT COUNT(*) FROM "{table}" h

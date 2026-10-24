@@ -992,7 +992,13 @@ class Coordinator:
                 if ia_failed or len(speech_ids) != len(batch_ids):
                     checkpoint_blocked = True
                     self._last_catch_up_completed_count = 0
-                    break
+                    self.log.warning(
+                        "[COORDINATOR][CATCH-UP][IA] batch has blocked caption item(s); "
+                        "safe independent items continue, source checkpoint remains held",
+                    )
+
+                if not speech_ids:
+                    continue
 
                 try:
                     self._run_speech_studio_batch(speech_ids)
@@ -1051,9 +1057,25 @@ class Coordinator:
                                     "hub-deferred-without-durable-v5-result:"
                                     f"{batch_item_id}"
                                 )
+                            if (
+                                self.db.caption_recovery_blocked(batch_item_id)
+                                or not self.pipeline._caption_is_policy_valid(
+                                    current, current.publication_caption,
+                                )
+                            ):
+                                checkpoint_blocked = True
+                                self._last_catch_up_completed_count = 0
+                                self.log.warning(
+                                    "[COORDINATOR][CATCH-UP][CAPTION] item=%s has no "
+                                    "Policy-valid persisted caption; it remains blocked and "
+                                    "the checkpoint is held",
+                                    batch_item_id,
+                                )
+                                continue
                             self.log.info(
                                 "[COORDINATOR][CATCH-UP][HUB] item=%s remains "
-                                "PUBLISHING; send deferred and batch is resumable",
+                                "PUBLISHING with valid caption and durable v5 render; "
+                                "prepared, send deferred, batch is resumable",
                                 batch_item_id,
                             )
                             continue

@@ -210,6 +210,8 @@ class ArmoredHub:
         if self.db is None:
             raise RuntimeError("ArmoredHub exige Database para publicação idempotente")
         self._assert_not_quarantined(item)
+        if self.db.caption_recovery_blocked(item.content_id):
+            raise RuntimeError("Hub refuses an item with durably blocked ArmoredIA caption")
         current = self.db.get(item.content_id)
         if current != item:
             raise RuntimeError("Hub received a stale item; reload SQLite before publication")

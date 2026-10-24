@@ -28,6 +28,7 @@ class _Response:
 def test_ollama_provider_returns_structured_caption_candidates(monkeypatch):
     monkeypatch.setenv("ARMORED_IA_OLLAMA_URL", "http://localhost:11434/")
     monkeypatch.setenv("ARMORED_IA_OLLAMA_MODEL", "qwen2.5:1.5b")
+    monkeypatch.delenv("ARMORED_IA_OLLAMA_TEMPERATURE", raising=False)
     calls = []
 
     def requester(url, **kwargs):
@@ -43,6 +44,7 @@ def test_ollama_provider_returns_structured_caption_candidates(monkeypatch):
     assert calls[0][0] == "http://localhost:11434/api/generate"
     assert calls[0][1]["json"]["model"] == "qwen2.5:1.5b"
     assert calls[0][1]["json"]["stream"] is False
+    assert calls[0][1]["json"]["options"]["temperature"] == 0.2
     assert calls[0][1]["json"]["format"]["properties"]["captions"]["minItems"] == 2
     assert calls[0][1]["json"]["format"]["properties"]["captions"]["maxItems"] == 2
 
@@ -73,6 +75,39 @@ def test_caption_generator_provider_is_configurable(monkeypatch):
     monkeypatch.setenv("ARMORED_IA_PROVIDER", "unknown")
     with pytest.raises(AIProviderError, match="ARMORED_IA_PROVIDER inválido"):
         CaptionGenerator()
+
+
+def test_ollama_generator_defaults_to_one_grounded_candidate(monkeypatch):
+    from ArmoredIA.caption.generator import CaptionGenerator
+
+    monkeypatch.setenv("ARMORED_IA_PROVIDER", "ollama")
+    monkeypatch.delenv("ARMORED_IA_MAX_CANDIDATES", raising=False)
+    calls = []
+    response_body = json.dumps({"captions": [
+        {"text": "Chinelo casual", "hashtags": ["#chinelo"]}
+    ]})
+
+    def requester(_url, *, json, timeout):
+        calls.append(json)
+        return _Response({"response": response_body})
+
+    generator = CaptionGenerator(provider=OllamaProvider(requester=requester))
+    result = generator.generate_with_evidence({
+        "productName": "Chinelo feminino com detalhe em strass",
+        "category": "calçados",
+        "usage": "uso casual",
+    })
+    assert result.caption == "Chinelo 🧡 casual\n#chinelo"
+    captions_schema = calls[0]["format"]["properties"]["captions"]
+    assert captions_schema["minItems"] == 1
+    assert "Gere EXATAMENTE 1 opções distintas" in calls[0]["prompt"]
+    text_pattern = captions_schema["items"]["properties"]["text"]["pattern"]
+    hashtag_pattern = captions_schema["items"]["properties"]["hashtags"]["items"]["pattern"]
+    import re
+    assert re.fullmatch(text_pattern, "Chinelo charmoso.")
+    assert not re.fullmatch(text_pattern, "Chinelo charmoso para o dia a dia.")
+    assert re.fullmatch(hashtag_pattern, "#chinelo")
+    assert not re.fullmatch(hashtag_pattern, "#viral")
 
 
 def test_structured_model_fields_keep_hashtags_without_inventing_content():

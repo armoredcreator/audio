@@ -1,0 +1,455 @@
+{
+  "run_id": "caption-provider-validation-20261023-v4",
+  "created_at": "2026-10-23T23:09:38.415542+00:00",
+  "mode": "real Gemini; historical Vision context read-only; default 10 candidates and one bounded feedback round; isolated SQLite evidence persisted and reopened; no Shopee, Telegram, or media processing",
+  "results": [
+    {
+      "provider": "gemini",
+      "model": "gemini-3.1-flash-lite",
+      "content_id": "-1003788989075_295",
+      "product_name": "Tênis Feminino Casual Camurça Detalhe Lateral Listra Dupla Moderno Break GiGiL",
+      "context": {
+        "productName": "Tênis Feminino Casual Camurça Detalhe Lateral Listra Dupla Moderno Break GiGiL"
+      },
+      "status": "BLOCKED",
+      "error_type": "AIProviderError",
+      "error_category": "TRANSIENT_UNAVAILABLE",
+      "error": "Gemini indisponível após 1 tentativa(s): TRANSIENT_UNAVAILABLE",
+      "provider_requests": 2,
+      "feedback_rounds": [
+        [
+          "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "texto principal contém termo sem suporte no contexto Vision",
+          "Use hashtags únicas e relacionadas ao contexto persistido do produto."
+        ]
+      ],
+      "provider_attempts": [
+        {
+          "policy_round": 1,
+          "attempt": 1,
+          "status": "SUCCESS",
+          "http_status": 200
+        },
+        {
+          "policy_round": 2,
+          "attempt": 1,
+          "status": "TRANSIENT_UNAVAILABLE",
+          "http_status": null
+        }
+      ],
+      "suggestions": [],
+      "item_id_in_clone": "gemini-validation_gemini-v4-295",
+      "persisted_after_reopen": false,
+      "recovery_status_after_reopen": "BLOCKED",
+      "recovery_event_count_after_reopen": 1
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-3.1-flash-lite",
+      "content_id": "-1003788989075_296",
+      "product_name": "Amend Essencial Acidificante Máscara Equilíbrio do PH - 250g",
+      "context": {
+        "productName": "Amend Essencial Acidificante Máscara Equilíbrio do PH - 250g"
+      },
+      "status": "BLOCKED",
+      "error_type": "CaptionGenerationError",
+      "error_category": null,
+      "error": "Nenhuma das 5 candidata(s) passou pela Policy: 1: a legenda precisa ter 1 ou 2 hashtags distintas; 2: a legenda precisa ter 1 ou 2 hashtags distintas; 3: texto principal contém termo sem suporte no contexto Vision; 4: a legenda precisa ter 1 ou 2 hashtags distintas; 5: texto principal contém termo sem suporte no contexto Vision",
+      "provider_requests": 2,
+      "feedback_rounds": [
+        [
+          "texto principal contém termo sem suporte no contexto Vision"
+        ]
+      ],
+      "provider_attempts": [
+        {
+          "attempt": 1,
+          "status": "SUCCESS",
+          "http_status": 200
+        }
+      ],
+      "suggestions": [
+        {
+          "raw": "Equilíbrio capilar natural #acidificante #amend",
+          "normalized": "Equilíbrio capilar 🧡 natural\n#acidificante #amend",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Sela fios intensamente #acidificante #cabelos",
+          "normalized": "Sela fios 🧡 intensamente\n#acidificante",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Tratamento pós química #equilíbrio #cabelos",
+          "normalized": "Tratamento pós 🧡 química\n#equilíbrio",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Fios macios sempre #acidificante #tratamento",
+          "normalized": "Fios macios 🧡 sempre\n#acidificante",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Brilho aos fios #acidificante #cabelosaudavel",
+          "normalized": "Brilho aos 🧡 fios\n#acidificante",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "pH em dia #equilíbrio #cabelos",
+          "normalized": "pH em 🧡 dia\n#equilíbrio",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Selagem para fios #acidificante #cuidados",
+          "normalized": "Selagem para 🧡 fios\n#acidificante",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Equilibra fios danificados #tratamentocapilar",
+          "normalized": "Equilibra fios 🧡 danificados",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Equilíbrio ácido natural #cabelosaudavel",
+          "normalized": "Equilíbrio ácido 🧡 natural",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Tratamento para fios #acidificante",
+          "normalized": "Tratamento para 🧡 fios\n#acidificante",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Fios equilibrados diariamente #cuidadoessencial",
+          "normalized": "Fios equilibrados 🧡 diariamente",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Reparação ácida capilar #amend",
+          "normalized": "Reparação ácida 🧡 capilar\n#amend",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        }
+      ],
+      "item_id_in_clone": "gemini-validation_gemini-v4-296",
+      "persisted_after_reopen": false,
+      "recovery_status_after_reopen": "BLOCKED",
+      "recovery_event_count_after_reopen": 1
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-3.1-flash-lite",
+      "content_id": "-1003788989075_297",
+      "product_name": "Chinelo feminino NO STRASS Verao 2026",
+      "context": {
+        "productName": "Chinelo feminino NO STRASS Verao 2026"
+      },
+      "status": "BLOCKED",
+      "error_type": "CaptionGenerationError",
+      "error_category": null,
+      "error": "Nenhuma das 7 candidata(s) passou pela Policy: 1: a legenda precisa ter 1 ou 2 hashtags distintas; 2: a legenda precisa ter 1 ou 2 hashtags distintas; 3: texto principal contém termo sem suporte no contexto Vision; 4: texto principal contém termo sem suporte no contexto Vision; 5: a legenda precisa ter 1 ou 2 hashtags distintas; 6: a legenda precisa ter 1 ou 2 hashtags distintas; 7: a legenda precisa ter 1 ou 2 hashtags distintas",
+      "provider_requests": 2,
+      "feedback_rounds": [
+        [
+          "texto principal contém termo sem suporte no contexto Vision",
+          "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "Use hashtags únicas e relacionadas ao contexto persistido do produto."
+        ]
+      ],
+      "provider_attempts": [
+        {
+          "attempt": 1,
+          "status": "SUCCESS",
+          "http_status": 200
+        }
+      ],
+      "suggestions": [
+        {
+          "raw": "Conforto para verão #chinelo #verao",
+          "normalized": "Conforto para 🧡 verão\n#chinelo #verao",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Estilo leve cotidiano #sandalia #lifestyle",
+          "normalized": "Estilo leve 🧡 cotidiano",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Visual casual despojado #chinelo #conforto",
+          "normalized": "Visual casual 🧡 despojado\n#chinelo",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Passeio com frescor #verao #moda",
+          "normalized": "Passeio com 🧡 frescor\n#verao #moda",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Essencial para calor #chinelo #estilo",
+          "normalized": "Essencial para 🧡 calor\n#chinelo",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Aposta do verão #calcadofeminino #verao",
+          "normalized": "Aposta do 🧡 verão\n#verao",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Conforto no dia #chinelo #lifestyle",
+          "normalized": "Conforto no 🧡 dia\n#chinelo",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Leveza para pés #verao #conforto",
+          "normalized": "Leveza para 🧡 pés\n#verao",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Despojado para sol #chinelo #verao",
+          "normalized": "Despojado para 🧡 sol\n#chinelo #verao",
+          "corrections": [
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Visual praiano relax #sandalia #estilo",
+          "normalized": "Visual praiano 🧡 relax",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Chinelo para verão #verao2026 #chinelofeminino",
+          "normalized": "Chinelo para 🧡 verão",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Estilo para sol #estiloverao #calcados",
+          "normalized": "Estilo para 🧡 sol",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Conforto para praia #modapraia #verao",
+          "normalized": "Conforto para 🧡 praia\n#verao",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Passeio casual leve #casualstyle #chinelo",
+          "normalized": "Passeio casual 🧡 leve\n#chinelo",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "texto principal contém termo sem suporte no contexto Vision",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Look leve solar #lookverao #modafeminina",
+          "normalized": "Look leve 🧡 solar",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Chinelo feminino casual #conforto #veraobrasil",
+          "normalized": "Chinelo feminino 🧡 casual",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        },
+        {
+          "raw": "Design solar leve #designverao #calcado",
+          "normalized": "Design solar 🧡 leve",
+          "corrections": [
+            "unrelated_hashtag_removed",
+            "orange_heart_inserted"
+          ],
+          "policy_valid": false,
+          "rejection_reason": "a legenda precisa ter 1 ou 2 hashtags distintas",
+          "score": 0.0,
+          "selected": false
+        }
+      ],
+      "item_id_in_clone": "gemini-validation_gemini-v4-297",
+      "persisted_after_reopen": false,
+      "recovery_status_after_reopen": "BLOCKED",
+      "recovery_event_count_after_reopen": 1
+    }
+  ]
+}

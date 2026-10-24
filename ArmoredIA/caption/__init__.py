@@ -1,5 +1,13 @@
 """Caption task implementation."""
 from .generator import CaptionGenerationError, CaptionGenerator
-from .policy import CaptionPolicyError, validate_caption
+from .policy import (
+    CaptionNormalization,
+    CaptionPolicyError,
+    normalize_caption,
+    validate_caption,
+)
 
-__all__ = ["CaptionGenerationError", "CaptionGenerator", "CaptionPolicyError", "validate_caption"]
+__all__ = [
+    "CaptionGenerationError", "CaptionGenerator", "CaptionNormalization",
+    "CaptionPolicyError", "normalize_caption", "validate_caption",
+]

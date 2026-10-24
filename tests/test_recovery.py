@@ -13,7 +13,7 @@ from armored_core.storage import Storage
 
 class Vision:
     def identify(self, item):
-        return VisionResult("recover-final", "https://example.invalid/a")
+        return VisionResult("recover-final", "https://example.invalid/a", ia_context={"productName": "recover-final", "category": "casa"})
 
 
 class Studio:
@@ -45,7 +45,7 @@ class VisionWaitThenResolve:
         if self.calls == 1:
             from armored_core.services import VisionUnresolvedError
             raise VisionUnresolvedError("simulated unresolved vision")
-        return VisionResult("recover-final", "https://example.invalid/a")
+        return VisionResult("recover-final", "https://example.invalid/a", ia_context={"productName": "recover-final", "category": "casa"})
 
 
 class Publisher:
@@ -71,7 +71,7 @@ class CaptionIA:
 
         class Provider:
             def generate_candidates(self, _task, _context, _limit):
-                return ["Olha esse charme 🧡\n#casa"]
+                return ["Casa charmosa 🧡\n#casa"]
 
         return CaptionGenerator(provider=Provider()).generate_with_evidence(context)
 
@@ -146,7 +146,8 @@ class RecoveryTests(unittest.TestCase):
             def __init__(self):
                 self.calls = 0
                 self.context = {
-                    "product_name": "Produto teste",
+                    "productName": "Produto teste",
+                    "category": "casa",
                     "affiliate_links": ["https://shopee.com.br/item"],
                     "source": "vision-v1",
                 }
@@ -166,13 +167,14 @@ class RecoveryTests(unittest.TestCase):
             def generate_caption(self, product_context):
                 self.calls += 1
                 if self.calls == 1:
-                    raise RuntimeError("simulated-ia-crash")
+                    from ArmoredIA.providers.base import AIProviderError
+                    raise AIProviderError("simulated-provider-timeout", category="TRANSIENT_UNAVAILABLE")
                 self.context_seen = dict(product_context)
                 from ArmoredIA.caption.generator import CaptionGenerator
 
                 class Provider:
                     def generate_candidates(self, _task, _context, _limit):
-                        return ["Olha esse charme 🧡\n#casa"]
+                        return ["Casa charmosa 🧡\n#casa"]
 
                 return CaptionGenerator(provider=Provider()).generate_with_evidence(product_context)
 
@@ -223,7 +225,7 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(vision.calls, 1)
             self.assertEqual(ia.calls, 2)
             self.assertEqual(ia.context_seen, vision.context)
-            self.assertEqual(recovered.publication_caption, "Olha esse 🧡 charme\n#casa")
+            self.assertEqual(recovered.publication_caption, "Casa 🧡 charmosa\n#casa")
             self.assertEqual(publisher.count, 1)
         finally:
             if previous_ia is None:

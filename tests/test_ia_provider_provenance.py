@@ -38,9 +38,9 @@ def test_selected_provider_is_persisted_without_automatic_switch(tmp_path, monke
     source = tmp_path / "source.mp4"
     source.write_bytes(b"synthetic original")
     item_id = SyncService(db, storage).ingest(source, "1", source_id="synthetic")
-    db.set_vision(item_id, "Example", "https://affiliate.invalid/example", ia_context={"productName": "Abajur de mesa", "shopId": "10", "itemId": "20"})
+    db.set_vision(item_id, "Example", "https://affiliate.invalid/example", ia_context={"productName": "Abajur de mesa", "category": "iluminacao", "shopId": "10", "itemId": "20"})
     ia = ArmoredIA()
-    raw = json.dumps({"captions": ["Luz serena #casa"]})
+    raw = json.dumps({"captions": ["Abajur elegante #abajur"]})
     body = {"response": raw} if provider == "ollama" else {"candidates": [{"content": {"parts": [{"text": raw}]}}]}
     calls = []
     def request(*args, **kwargs):
@@ -56,7 +56,7 @@ def test_selected_provider_is_persisted_without_automatic_switch(tmp_path, monke
         else:
             coordinator.pipeline.run(item_id, stop_after_ia=True)
             assert db.get(item_id).state is State.SPEECH
-            assert db.get(item_id).publication_caption == "Luz 🧡 serena\n#casa"
+            assert db.get(item_id).publication_caption == "Abajur 🧡 elegante\n#abajur"
         receipt = db.conn.execute("SELECT * FROM ia_generation_attempts WHERE content_id=?", (item_id,)).fetchone()
         assert receipt["provider"] == provider
         assert receipt["model"] == f"synthetic-{provider}-model"

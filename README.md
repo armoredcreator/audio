@@ -22,6 +22,10 @@ configurável por `ARMORED_IA_OLLAMA_MODEL`. Gemini é opcional e só é selecio
 explicitamente. O adaptador não baixa modelos nem inventa legendas/hashtags:
 campos gerados pelo modelo passam pela política comum. Consulte `.env.example`.
 
+O contrato completo separa geração criativa, normalização apenas de formato,
+Policy contextual estrita, persistência de candidatas e recuperação auditável de
+legendas `BLOCKED`: [Contrato de legendas ArmoredIA](docs/ARMOREDIA_CAPTION_CONTRACT.md).
+
 O Hub está incluído no pacote e na composição do Coordinator. Validações usam
 transporte simulado e banco isolado; `ARMORED_HUB_DRY_RUN=1` bloqueia envio e
 verificação externa antes de qualquer alteração de publicação. A aprovação

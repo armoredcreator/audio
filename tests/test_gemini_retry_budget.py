@@ -207,7 +207,7 @@ def test_503_failure_then_restart_preserves_vision_original_and_state(tmp_path, 
     source = tmp_path / "source.mp4"
     source.write_bytes(b"preserved historical original")
     item_id = SyncService(db, storage).ingest(source, "100", source_id="source-test")
-    db.set_vision(item_id, "Product", "https://affiliate.invalid/product", ia_context={"productName": "Product", "shopId": "10", "itemId": "20"})
+    db.set_vision(item_id, "Canto decorativo", "https://affiliate.invalid/product", ia_context={"productName": "Canto decorativo", "category": "casa", "shopId": "10", "itemId": "20"})
     original_path = db.get(item_id).original_path
     client, _, calls = provider([Response(503), Response(503), Response()])
     service = ArmoredIA(CaptionGenerator(provider=client))

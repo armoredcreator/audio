@@ -7,6 +7,14 @@ def context_text(product: dict[str, Any]) -> str:
     """Render the same persisted Vision context for every caption provider."""
     fields = (
         ("Nome interno", "productName"),
+        ("Categoria", "category"),
+        ("Nome da categoria", "categoryName"),
+        ("Categoria do produto", "productCategory"),
+        ("Tipo de produto", "productType"),
+        ("Uso", "usage"),
+        ("Caso de uso", "useCase"),
+        ("Estilo", "style"),
+        ("Aparência", "appearance"),
         ("ID do item", "itemId"),
         ("ID da loja", "shopId"),
         ("Loja", "shopName"),
