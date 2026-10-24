@@ -65,6 +65,13 @@ provedor. A evidência registra HTTP 200, uma requisição, nenhuma chamada Shop
 ou Telegram e nenhuma escrita no banco operacional:
 [`ollama-caption-provider-real-20261023-v2.json`](evidence/ollama-caption-provider-real-20261023-v2.json).
 
+Depois de ajustar o perfil Ollama na instalação operacional, a mesma rota
+selecionou o provedor local por padrão e produziu
+`Chinelos 🧡 charmosos\n#calçados`. Policy aprovada, uma requisição HTTP 200,
+90 segundos de timeout máximo, sem Shopee, Telegram ou banco operacional. O
+registro da inferência real está em
+[`ollama-caption-provider-real-20261023-v3.json`](evidence/ollama-caption-provider-real-20261023-v3.json).
+
 ## Evidência integrada do item 295
 
 A reprodução foi feita em clone consistente do SQLite, dos ledgers de orçamento

@@ -133,6 +133,10 @@ Chamadas reais do Ollama no fluxo ArmoredIA, com produto de calçados, geraram
 ajustar a recuperação de substantivos de categoria, `Chinelo 🧡 charmoso\n#Chinelo #detalhe`. Ambas foram aprovadas pela mesma Policy; veja
 [`ollama-caption-provider-real-20261023-v1.json`](evidence/ollama-caption-provider-real-20261023-v1.json)
 e [`ollama-caption-provider-real-20261023-v2.json`](evidence/ollama-caption-provider-real-20261023-v2.json).
+Na instalação operacional, o perfil local limitado também gerou
+`Chinelos 🧡 charmosos\n#calçados` em uma requisição HTTP 200, com Policy
+aprovada; ver
+[`ollama-caption-provider-real-20261023-v3.json`](evidence/ollama-caption-provider-real-20261023-v3.json).
 
 ## Regressão
 
